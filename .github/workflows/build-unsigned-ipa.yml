@@ -1,0 +1,50 @@
+# 复刻版 App 壳：macOS runner 编译未签名 IPA（用户自己签名安装）。
+# 要求：把 wallive-clone/ 目录内容作为仓库根推送（本文件位于仓库根 .github/workflows/ 下）。
+# 产物：WalliveClone-unsigned-ipa（未签名 IPA），不含任何证书/签名步骤。
+
+name: 编译未签名 IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve package dependencies
+        run: >
+          xcodebuild -resolvePackageDependencies
+          -project WalliveClone.xcodeproj
+          -scheme WalliveClone
+
+      - name: Archive (unsigned)
+        run: >
+          xcodebuild archive
+          -project WalliveClone.xcodeproj
+          -scheme WalliveClone
+          -configuration Release
+          -destination "generic/platform=iOS"
+          -archivePath build/WalliveClone.xcarchive
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="build/WalliveClone.xcarchive/Products/Applications/WalliveClone.app"
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload WalliveClone-unsigned.ipa
+          ls -l WalliveClone-unsigned.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WalliveClone-unsigned-ipa
+          path: WalliveClone-unsigned.ipa
