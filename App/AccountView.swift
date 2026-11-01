@@ -102,16 +102,12 @@ final class AccountStore: ObservableObject {
 }
 
 /// 登入页：登入表单 + 去注册、去找回密码的入口；已登入就显示账号页。
-/// store 不传就自己新建一个（目录页右上角弹出的登入用这个）；
-/// onSkip 不为空时登入页底部多一个“先逛逛”按钮（开场 Hello 动画后进登入页用这个，
-/// 不想登入也能先进目录，之后右上角人头按钮还能再登入）。
+/// store 不传就自己新建一个（目录页右上角弹出的登入用这个）。
 struct AccountView: View {
     @StateObject private var store: AccountStore
-    var onSkip: (() -> Void)?
 
-    init(store: AccountStore? = nil, onSkip: (() -> Void)? = nil) {
+    init(store: AccountStore? = nil) {
         _store = StateObject(wrappedValue: store ?? AccountStore())
-        self.onSkip = onSkip
     }
 
     @State private var page = "login" // login、register、forgot
@@ -125,7 +121,7 @@ struct AccountView: View {
             } else if page == "forgot" {
                 ForgotPage(store: store, onDone: { page = "login" })
             } else {
-                LoginPage(store: store, onRegister: { page = "register" }, onForgot: { page = "forgot" }, onSkip: onSkip)
+                LoginPage(store: store, onRegister: { page = "register" }, onForgot: { page = "forgot" })
             }
         }
     }
@@ -157,7 +153,6 @@ private struct LoginPage: View {
     @ObservedObject var store: AccountStore
     let onRegister: () -> Void
     let onForgot: () -> Void
-    var onSkip: (() -> Void)?
     @State private var username = ""
     @State private var password = ""
     @State private var error = ""
@@ -190,10 +185,6 @@ private struct LoginPage: View {
                 Button("忘记密码", action: onForgot)
             }
             .font(.subheadline)
-            if let onSkip {
-                Button("先逛逛，去目录", action: onSkip)
-                    .font(.subheadline)
-            }
             Spacer()
         }
         .padding()

@@ -1,15 +1,13 @@
 // HelloView.swift
-// 进软件时的 Hello 开场：直接播一段 2 秒的液态金属 Hello 动画——
-// 黑底、字母一笔一笔写出来、最后亮光扫过、带倒影。
-// 口号也留着，压在视频下边：上边一行蓝紫粉渐变，下边一行白字。
-// 视频本身无声，播完停在最后一帧；主界面 2 秒计时到点就渐退进登入页。
-// 注意：hello_splash.mp4 必须打进包里（Resources），不然这里找不到文件就只剩黑底。
+// 进软件时的 Hello 开场：按用户给的 Hello 预览图重做，不用视频了——
+// 深蓝紫渐变底 + 左上蓝光、右下粉光，铺满全屏；白字 Hello 从左边一路跳跃进场，
+// 落到中间后口号淡入；2 秒计时到点，主界面渐退进登入页（计时在 WalliveCloneApp 里）。
+// 注意：旧 hello_splash.mp4 还在包里，但这里已经不再引用它。
 
 import SwiftUI
-import AVKit
 
 struct HelloView: View {
-    @State private var player: AVPlayer?
+    @State private var hopTrigger = false
     @State private var sloganOpacity = 0.0
 
     private var sloganGradient: LinearGradient {
@@ -18,16 +16,56 @@ struct HelloView: View {
             startPoint: .leading, endPoint: .trailing)
     }
 
+    /// 跳跃的起点和落点：x 从屏幕外左边到中间，y 原地弹跳。
+    private struct HopValues {
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+    }
+
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            if let player {
-                VideoPlayer(player: player)
-                    .ignoresSafeArea()
-                    .disabled(true)  // 纯开场，不让点按暂停或快进
-            }
-            VStack {
+            // 铺满全屏的底：深蓝紫渐变 + 两团光晕（左上蓝、右下粉），对齐预览图。
+            LinearGradient(
+                colors: [Color(red: 0.08, green: 0.08, blue: 0.28),
+                         Color(red: 0.04, green: 0.04, blue: 0.16)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            Circle()
+                .fill(.blue.opacity(0.45))
+                .frame(width: 300, height: 300)
+                .blur(radius: 80)
+                .offset(x: -140, y: -320)
+            Circle()
+                .fill(.pink.opacity(0.4))
+                .frame(width: 300, height: 300)
+                .blur(radius: 80)
+                .offset(x: 150, y: 330)
+
+            VStack(spacing: 10) {
                 Spacer()
+                // Hello：从左边跳跃进场，1.4 秒落到中间；弹跳幅度递减。
+                Text("Hello")
+                    .font(.system(size: 88, weight: .bold))
+                    .foregroundStyle(.white)
+                    .keyframeAnimator(
+                        initialValue: HopValues(x: -UIScreen.main.bounds.width, y: 0),
+                        trigger: hopTrigger
+                    ) { content, values in
+                        content.offset(x: values.x, y: values.y)
+                    } keyframes: { _ in
+                        KeyframeTrack(\.x) {
+                            LinearKeyframe(0, duration: 1.4)
+                        }
+                        KeyframeTrack(\.y) {
+                            LinearKeyframe(-45, duration: 0.25)
+                            LinearKeyframe(0, duration: 0.25)
+                            LinearKeyframe(-30, duration: 0.25)
+                            LinearKeyframe(0, duration: 0.25)
+                            LinearKeyframe(-15, duration: 0.2)
+                            LinearKeyframe(0, duration: 0.2)
+                        }
+                    }
                 VStack(spacing: 6) {
                     Text("换一张壁纸，换一个心情")
                         .font(.title3).bold()
@@ -37,23 +75,15 @@ struct HelloView: View {
                         .foregroundStyle(.white.opacity(0.85))
                 }
                 .opacity(sloganOpacity)
-                .padding(.bottom, 60)
+                Spacer()
             }
         }
         .onAppear {
-            if let player {
-                player.seek(to: .zero)
-                player.play()
-            } else if let url = Bundle.main.url(forResource: "hello_splash", withExtension: "mp4") {
-                let p = AVPlayer(url: url)
-                p.isMuted = true
-                player = p
-                p.play()
-            }
-            withAnimation(.easeIn(duration: 0.5).delay(0.2)) {
+            hopTrigger = true
+            // Hello 落稳后再把口号淡入，2 秒内全部就位。
+            withAnimation(.easeIn(duration: 0.5).delay(1.2)) {
                 sloganOpacity = 1
             }
         }
-        .onDisappear { player?.pause() }
     }
 }

@@ -36,7 +36,7 @@ func ALGetGrappaToken(
     _ errLen: Int
 ) -> Int32
 
-/// 进软件流程：Hello 动画 → 渐退进登入页 → 登入成功（或点“先逛逛”）进主界面。
+/// 进软件流程：Hello 动画 → 渐退进登入页 → 登入成功进主界面。
 /// 已经登入过的账号，Hello 动画后直接进主界面，不用再登一次。
 private enum AppPhase {
     case hello, login, main
@@ -54,10 +54,8 @@ struct ContentView: View {
                 HelloView()
                     .transition(.opacity)
             case .login:
-                AccountView(store: accountStore, onSkip: {
-                    withAnimation(.easeOut(duration: 0.5)) { phase = .main }
-                })
-                .transition(.opacity)
+                AccountView(store: accountStore)
+                    .transition(.opacity)
             case .main:
                 mainTabs
             }
