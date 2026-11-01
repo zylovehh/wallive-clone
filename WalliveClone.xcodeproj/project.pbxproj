@@ -11,11 +11,9 @@
 		A320D192DE85C0C3EA4D2903 /* DepthPackageBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */; };
 		4E227252B81A64479F50A105 /* DescriptorInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */; };
 		0F91BA109ED3FA4B2FE7DC81 /* PairingRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC511E83CEB38057E9CA3926 /* PairingRecord.swift */; };
-		61CD60609E5D8B3CEB42F824 /* RemoteLockdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0325971D25D31B4D9589162D /* RemoteLockdown.swift */; };
-		2168E0CCF58AFD8ED4AB6FD1 /* AFCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60E5339535D532F309088AD /* AFCClient.swift */; };
-		E4E104E861F037E2AABDBFD5 /* PrivilegedLockdownTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA3FCF100D8A22714DC5E7B5 /* PrivilegedLockdownTransport.swift */; };
 		588235E43E482EB0C3887157 /* InstallFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E324ECC4D9BFB661AE821F /* InstallFlow.swift */; };
-		6A8D7BB70FD9B6C012274199 /* PairingGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56D76860ECC24F164D0D42E4 /* PairingGenerator.swift */; };
+		550C21811E28FDCF06E8D44B /* PairingHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88AC4C6CCC40717A72347C20 /* PairingHost.swift */; };
+		3C5881C891881997D237242E /* AirliftInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14BC8196EC54F9A391895DC0 /* AirliftInstaller.swift */; };
 		0187124ABD71E268BE8663AB /* WalliveCloneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16CFF4E34647677797905E55 /* WalliveCloneApp.swift */; };
 		8787D4E77F19C9E7BD1CB378 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC724A8EB4EEBF6008B70BA /* AppState.swift */; };
 		1357A96F84DE067BCC05FE4C /* ZipFoundationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */; };
@@ -25,6 +23,7 @@
 		1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C44A1B8A95D048B3D37C24E /* DepthView.swift */; };
 		B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A82EE90697C6FAF71DBD84 /* StatusView.swift */; };
 		C0D8DA074519B3F4EDF8D89F /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 7F7BCEDF25FC7D01E7F3D874 /* ZIPFoundation */; };
+		395BCA10C02D42832AA0EADD /* AirliftFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6F983E7BF84EB2BA24D0BDB /* AirliftFFI.xcframework */; };
 		18F0D5041E2555AAFB7B960F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */; };
 		7082C5256C4E8E719CEAF18A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C478DEF0042547301BBD6EBE /* Assets.xcassets */; };
 		/* End PBXBuildFile section */
@@ -35,11 +34,10 @@
 		F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthPackageBuilder.swift; sourceTree = "<group>"; };
 		38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DescriptorInstaller.swift; sourceTree = "<group>"; };
 		FC511E83CEB38057E9CA3926 /* PairingRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingRecord.swift; sourceTree = "<group>"; };
-		0325971D25D31B4D9589162D /* RemoteLockdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLockdown.swift; sourceTree = "<group>"; };
-		F60E5339535D532F309088AD /* AFCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AFCClient.swift; sourceTree = "<group>"; };
-		DA3FCF100D8A22714DC5E7B5 /* PrivilegedLockdownTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivilegedLockdownTransport.swift; sourceTree = "<group>"; };
 		13E324ECC4D9BFB661AE821F /* InstallFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallFlow.swift; sourceTree = "<group>"; };
-		56D76860ECC24F164D0D42E4 /* PairingGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingGenerator.swift; sourceTree = "<group>"; };
+		88AC4C6CCC40717A72347C20 /* PairingHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingHost.swift; sourceTree = "<group>"; };
+		14BC8196EC54F9A391895DC0 /* AirliftInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirliftInstaller.swift; sourceTree = "<group>"; };
+		A6F983E7BF84EB2BA24D0BDB /* AirliftFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = AirliftFFI.xcframework; sourceTree = "<group>"; };
 		16CFF4E34647677797905E55 /* WalliveCloneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalliveCloneApp.swift; sourceTree = "<group>"; };
 		CCC724A8EB4EEBF6008B70BA /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipFoundationAdapter.swift; sourceTree = "<group>"; };
@@ -55,12 +53,12 @@
 		/* End PBXFileReference section */
 
 		/* Begin PBXFrameworksBuildPhase section */
-		34602A770E3E6AC26FBA4D06 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (C0D8DA074519B3F4EDF8D89F /* ZIPFoundation in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		34602A770E3E6AC26FBA4D06 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (C0D8DA074519B3F4EDF8D89F /* ZIPFoundation in Frameworks */, 395BCA10C02D42832AA0EADD /* AirliftFFI.xcframework in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
 		/* End PBXFrameworksBuildPhase section */
 
 		/* Begin PBXGroup section */
 		0BE22E29474101102732C952 /* App */ = {isa = PBXGroup; children = (16CFF4E34647677797905E55 /* WalliveCloneApp.swift */, CCC724A8EB4EEBF6008B70BA /* AppState.swift */, A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */, 7E3E2F760B036448CAC3B548 /* DocumentPickers.swift */, 510B7B6AA04D24B03E5470FF /* ImportView.swift */, 351C98ABB7F9B4CB42AC6B4C /* InstallView.swift */, 6C44A1B8A95D048B3D37C24E /* DepthView.swift */, 35A82EE90697C6FAF71DBD84 /* StatusView.swift */,); path = App; sourceTree = "<group>"; };
-		A45C494344EA780B34B0A189 = {isa = PBXGroup; children = (494FDD9B834CB34FD4775839 /* Wallive1Crypto.swift */, DF30B926648DEC9EB413A5BA /* TendiesPackage.swift */, F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */, 38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */, FC511E83CEB38057E9CA3926 /* PairingRecord.swift */, 0325971D25D31B4D9589162D /* RemoteLockdown.swift */, F60E5339535D532F309088AD /* AFCClient.swift */, DA3FCF100D8A22714DC5E7B5 /* PrivilegedLockdownTransport.swift */, 13E324ECC4D9BFB661AE821F /* InstallFlow.swift */, 56D76860ECC24F164D0D42E4 /* PairingGenerator.swift */, 0BE22E29474101102732C952 /* App */, 3AACD762DC22D4FFC888F92C /* Info.plist */, 60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */, C478DEF0042547301BBD6EBE /* Assets.xcassets */, 2F0DD196A61CB4F095765836 /* Products */,); sourceTree = "<group>"; };
+		A45C494344EA780B34B0A189 = {isa = PBXGroup; children = (494FDD9B834CB34FD4775839 /* Wallive1Crypto.swift */, DF30B926648DEC9EB413A5BA /* TendiesPackage.swift */, F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */, 38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */, FC511E83CEB38057E9CA3926 /* PairingRecord.swift */, 13E324ECC4D9BFB661AE821F /* InstallFlow.swift */, 88AC4C6CCC40717A72347C20 /* PairingHost.swift */, 14BC8196EC54F9A391895DC0 /* AirliftInstaller.swift */, A6F983E7BF84EB2BA24D0BDB /* AirliftFFI.xcframework */, 0BE22E29474101102732C952 /* App */, 3AACD762DC22D4FFC888F92C /* Info.plist */, 60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */, C478DEF0042547301BBD6EBE /* Assets.xcassets */, 2F0DD196A61CB4F095765836 /* Products */,); sourceTree = "<group>"; };
 		2F0DD196A61CB4F095765836 /* Products */ = {isa = PBXGroup; children = (FC73962D2D93E9B10292E62D /* WalliveClone.app */,); name = Products; sourceTree = "<group>"; };
 		/* End PBXGroup section */
 
@@ -77,14 +75,14 @@
 		/* End PBXResourcesBuildPhase section */
 
 		/* Begin PBXSourcesBuildPhase section */
-		0E0A521F6FCE65D35667A616 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0901DC9B66BDE7C3E8A595A4 /* Wallive1Crypto.swift in Sources */, 8F336A1139E4798D960538A7 /* TendiesPackage.swift in Sources */, A320D192DE85C0C3EA4D2903 /* DepthPackageBuilder.swift in Sources */, 4E227252B81A64479F50A105 /* DescriptorInstaller.swift in Sources */, 0F91BA109ED3FA4B2FE7DC81 /* PairingRecord.swift in Sources */, 61CD60609E5D8B3CEB42F824 /* RemoteLockdown.swift in Sources */, 2168E0CCF58AFD8ED4AB6FD1 /* AFCClient.swift in Sources */, E4E104E861F037E2AABDBFD5 /* PrivilegedLockdownTransport.swift in Sources */, 588235E43E482EB0C3887157 /* InstallFlow.swift in Sources */, 6A8D7BB70FD9B6C012274199 /* PairingGenerator.swift in Sources */, 0187124ABD71E268BE8663AB /* WalliveCloneApp.swift in Sources */, 8787D4E77F19C9E7BD1CB378 /* AppState.swift in Sources */, 1357A96F84DE067BCC05FE4C /* ZipFoundationAdapter.swift in Sources */, 58429215C0C531593123C710 /* DocumentPickers.swift in Sources */, BC3A20D39EFD09DF0E022440 /* ImportView.swift in Sources */, 629F008421E013DE23FA7D49 /* InstallView.swift in Sources */, 1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */, B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		0E0A521F6FCE65D35667A616 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0901DC9B66BDE7C3E8A595A4 /* Wallive1Crypto.swift in Sources */, 8F336A1139E4798D960538A7 /* TendiesPackage.swift in Sources */, A320D192DE85C0C3EA4D2903 /* DepthPackageBuilder.swift in Sources */, 4E227252B81A64479F50A105 /* DescriptorInstaller.swift in Sources */, 0F91BA109ED3FA4B2FE7DC81 /* PairingRecord.swift in Sources */, 588235E43E482EB0C3887157 /* InstallFlow.swift in Sources */, 550C21811E28FDCF06E8D44B /* PairingHost.swift in Sources */, 3C5881C891881997D237242E /* AirliftInstaller.swift in Sources */, 0187124ABD71E268BE8663AB /* WalliveCloneApp.swift in Sources */, 8787D4E77F19C9E7BD1CB378 /* AppState.swift in Sources */, 1357A96F84DE067BCC05FE4C /* ZipFoundationAdapter.swift in Sources */, 58429215C0C531593123C710 /* DocumentPickers.swift in Sources */, BC3A20D39EFD09DF0E022440 /* ImportView.swift in Sources */, 629F008421E013DE23FA7D49 /* InstallView.swift in Sources */, 1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */, B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 		/* End PBXSourcesBuildPhase section */
 
 		/* Begin XCBuildConfiguration section */
 		969595A508627F35A110362C /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; }; name = Debug; };
 		4C95F91A6D5CD87BB5DB8FDD /* Release */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; }; name = Release; };
-		A3FD2624D90AA76C1E18FB70 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.walliveclone; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug; };
-		CB4CAEBFF1A865FD02635BC0 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.walliveclone; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release; };
+		A3FD2624D90AA76C1E18FB70 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGNING_ALLOWED = NO; FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)"; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; OTHER_LDFLAGS = "-lc++"; PRODUCT_BUNDLE_IDENTIFIER = com.example.walliveclone; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug; };
+		CB4CAEBFF1A865FD02635BC0 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGNING_ALLOWED = NO; FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)"; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; OTHER_LDFLAGS = "-lc++"; PRODUCT_BUNDLE_IDENTIFIER = com.example.walliveclone; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release; };
 		/* End XCBuildConfiguration section */
 
 		/* Begin XCConfigurationList section */
