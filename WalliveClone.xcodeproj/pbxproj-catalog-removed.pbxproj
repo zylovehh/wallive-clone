@@ -1,0 +1,100 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+		/* Begin PBXBuildFile section */
+		0901DC9B66BDE7C3E8A595A4 /* Wallive1Crypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494FDD9B834CB34FD4775839 /* Wallive1Crypto.swift */; };
+		8F336A1139E4798D960538A7 /* TendiesPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF30B926648DEC9EB413A5BA /* TendiesPackage.swift */; };
+		A320D192DE85C0C3EA4D2903 /* DepthPackageBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */; };
+		4E227252B81A64479F50A105 /* DescriptorInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */; };
+		0F91BA109ED3FA4B2FE7DC81 /* PairingRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC511E83CEB38057E9CA3926 /* PairingRecord.swift */; };
+		61CD60609E5D8B3CEB42F824 /* RemoteLockdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0325971D25D31B4D9589162D /* RemoteLockdown.swift */; };
+		2168E0CCF58AFD8ED4AB6FD1 /* AFCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60E5339535D532F309088AD /* AFCClient.swift */; };
+		E4E104E861F037E2AABDBFD5 /* PrivilegedLockdownTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA3FCF100D8A22714DC5E7B5 /* PrivilegedLockdownTransport.swift */; };
+		588235E43E482EB0C3887157 /* InstallFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E324ECC4D9BFB661AE821F /* InstallFlow.swift */; };
+		0187124ABD71E268BE8663AB /* WalliveCloneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16CFF4E34647677797905E55 /* WalliveCloneApp.swift */; };
+		8787D4E77F19C9E7BD1CB378 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC724A8EB4EEBF6008B70BA /* AppState.swift */; };
+		1357A96F84DE067BCC05FE4C /* ZipFoundationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */; };
+		58429215C0C531593123C710 /* DocumentPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3E2F760B036448CAC3B548 /* DocumentPickers.swift */; };
+		BC3A20D39EFD09DF0E022440 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 510B7B6AA04D24B03E5470FF /* ImportView.swift */; };
+		629F008421E013DE23FA7D49 /* InstallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 351C98ABB7F9B4CB42AC6B4C /* InstallView.swift */; };
+		1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C44A1B8A95D048B3D37C24E /* DepthView.swift */; };
+		B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A82EE90697C6FAF71DBD84 /* StatusView.swift */; };
+		C0D8DA074519B3F4EDF8D89F /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 7F7BCEDF25FC7D01E7F3D874 /* ZIPFoundation */; };
+		18F0D5041E2555AAFB7B960F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */; };
+		/* End PBXBuildFile section */
+
+		/* Begin PBXFileReference section */
+		494FDD9B834CB34FD4775839 /* Wallive1Crypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wallive1Crypto.swift; sourceTree = "<group>"; };
+		DF30B926648DEC9EB413A5BA /* TendiesPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TendiesPackage.swift; sourceTree = "<group>"; };
+		F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthPackageBuilder.swift; sourceTree = "<group>"; };
+		38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DescriptorInstaller.swift; sourceTree = "<group>"; };
+		FC511E83CEB38057E9CA3926 /* PairingRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingRecord.swift; sourceTree = "<group>"; };
+		0325971D25D31B4D9589162D /* RemoteLockdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLockdown.swift; sourceTree = "<group>"; };
+		F60E5339535D532F309088AD /* AFCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AFCClient.swift; sourceTree = "<group>"; };
+		DA3FCF100D8A22714DC5E7B5 /* PrivilegedLockdownTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivilegedLockdownTransport.swift; sourceTree = "<group>"; };
+		13E324ECC4D9BFB661AE821F /* InstallFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallFlow.swift; sourceTree = "<group>"; };
+		16CFF4E34647677797905E55 /* WalliveCloneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalliveCloneApp.swift; sourceTree = "<group>"; };
+		CCC724A8EB4EEBF6008B70BA /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipFoundationAdapter.swift; sourceTree = "<group>"; };
+		7E3E2F760B036448CAC3B548 /* DocumentPickers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPickers.swift; sourceTree = "<group>"; };
+		510B7B6AA04D24B03E5470FF /* ImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportView.swift; sourceTree = "<group>"; };
+		351C98ABB7F9B4CB42AC6B4C /* InstallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallView.swift; sourceTree = "<group>"; };
+		6C44A1B8A95D048B3D37C24E /* DepthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthView.swift; sourceTree = "<group>"; };
+		35A82EE90697C6FAF71DBD84 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
+		3AACD762DC22D4FFC888F92C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FC73962D2D93E9B10292E62D /* WalliveClone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WalliveClone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		/* End PBXFileReference section */
+
+		/* Begin PBXFrameworksBuildPhase section */
+		34602A770E3E6AC26FBA4D06 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (C0D8DA074519B3F4EDF8D89F /* ZIPFoundation in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		/* End PBXFrameworksBuildPhase section */
+
+		/* Begin PBXGroup section */
+		0BE22E29474101102732C952 /* App */ = {isa = PBXGroup; children = (16CFF4E34647677797905E55 /* WalliveCloneApp.swift */, CCC724A8EB4EEBF6008B70BA /* AppState.swift */, A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */, 7E3E2F760B036448CAC3B548 /* DocumentPickers.swift */, 510B7B6AA04D24B03E5470FF /* ImportView.swift */, 351C98ABB7F9B4CB42AC6B4C /* InstallView.swift */, 6C44A1B8A95D048B3D37C24E /* DepthView.swift */, 35A82EE90697C6FAF71DBD84 /* StatusView.swift */,); path = App; sourceTree = "<group>"; };
+		A45C494344EA780B34B0A189 = {isa = PBXGroup; children = (494FDD9B834CB34FD4775839 /* Wallive1Crypto.swift */, DF30B926648DEC9EB413A5BA /* TendiesPackage.swift */, F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */, 38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */, FC511E83CEB38057E9CA3926 /* PairingRecord.swift */, 0325971D25D31B4D9589162D /* RemoteLockdown.swift */, F60E5339535D532F309088AD /* AFCClient.swift */, DA3FCF100D8A22714DC5E7B5 /* PrivilegedLockdownTransport.swift */, 13E324ECC4D9BFB661AE821F /* InstallFlow.swift */, 0BE22E29474101102732C952 /* App */, 3AACD762DC22D4FFC888F92C /* Info.plist */, 60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */, 2F0DD196A61CB4F095765836 /* Products */,); sourceTree = "<group>"; };
+		2F0DD196A61CB4F095765836 /* Products */ = {isa = PBXGroup; children = (FC73962D2D93E9B10292E62D /* WalliveClone.app */,); name = Products; sourceTree = "<group>"; };
+		/* End PBXGroup section */
+
+		/* Begin PBXNativeTarget section */
+		EF1DE9FEFC202DD29ABA2675 /* WalliveClone */ = {isa = PBXNativeTarget; buildConfigurationList = DD7B903BF5B76A92FBB9FF44 /* Build configuration list for PBXNativeTarget "WalliveClone" */; buildPhases = (0E0A521F6FCE65D35667A616 /* Sources */, 34602A770E3E6AC26FBA4D06 /* Frameworks */, 6EE38498534294A6FC4105B7 /* Resources */,); buildRules = (); dependencies = (); name = WalliveClone; productName = WalliveClone; productReference = FC73962D2D93E9B10292E62D /* WalliveClone.app */; productType = "com.apple.product-type.application"; };
+		/* End PBXNativeTarget section */
+
+		/* Begin PBXProject section */
+		BA3FFAF126EBB4AB34DF9226 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1600; TargetAttributes = {EF1DE9FEFC202DD29ABA2675 = {CreatedOnToolsVersion = 16.0; }; }; }; buildConfigurationList = F9FBB92E94E3EF23FA14607F /* Build configuration list for PBXProject "WalliveClone" */; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = A45C494344EA780B34B0A189; packageReferences = (47CD4D831A9EF0F392D17BA1 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,); projectDirPath = ""; projectRoot = ""; targets = (EF1DE9FEFC202DD29ABA2675 /* WalliveClone */,); };
+		/* End PBXProject section */
+
+		/* Begin PBXResourcesBuildPhase section */
+		6EE38498534294A6FC4105B7 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (18F0D5041E2555AAFB7B960F /* LaunchScreen.storyboard in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+		/* End PBXResourcesBuildPhase section */
+
+		/* Begin PBXSourcesBuildPhase section */
+		0E0A521F6FCE65D35667A616 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0901DC9B66BDE7C3E8A595A4 /* Wallive1Crypto.swift in Sources */, 8F336A1139E4798D960538A7 /* TendiesPackage.swift in Sources */, A320D192DE85C0C3EA4D2903 /* DepthPackageBuilder.swift in Sources */, 4E227252B81A64479F50A105 /* DescriptorInstaller.swift in Sources */, 0F91BA109ED3FA4B2FE7DC81 /* PairingRecord.swift in Sources */, 61CD60609E5D8B3CEB42F824 /* RemoteLockdown.swift in Sources */, 2168E0CCF58AFD8ED4AB6FD1 /* AFCClient.swift in Sources */, E4E104E861F037E2AABDBFD5 /* PrivilegedLockdownTransport.swift in Sources */, 588235E43E482EB0C3887157 /* InstallFlow.swift in Sources */, 0187124ABD71E268BE8663AB /* WalliveCloneApp.swift in Sources */, 8787D4E77F19C9E7BD1CB378 /* AppState.swift in Sources */, 1357A96F84DE067BCC05FE4C /* ZipFoundationAdapter.swift in Sources */, 58429215C0C531593123C710 /* DocumentPickers.swift in Sources */, BC3A20D39EFD09DF0E022440 /* ImportView.swift in Sources */, 629F008421E013DE23FA7D49 /* InstallView.swift in Sources */, 1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */, B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		/* End PBXSourcesBuildPhase section */
+
+		/* Begin XCBuildConfiguration section */
+		969595A508627F35A110362C /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; }; name = Debug; };
+		4C95F91A6D5CD87BB5DB8FDD /* Release */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; }; name = Release; };
+		A3FD2624D90AA76C1E18FB70 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.walliveclone; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug; };
+		CB4CAEBFF1A865FD02635BC0 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.walliveclone; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release; };
+		/* End XCBuildConfiguration section */
+
+		/* Begin XCConfigurationList section */
+		F9FBB92E94E3EF23FA14607F /* Build configuration list for PBXProject "WalliveClone" */ = {isa = XCConfigurationList; buildConfigurations = (969595A508627F35A110362C /* Debug */, 4C95F91A6D5CD87BB5DB8FDD /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		DD7B903BF5B76A92FBB9FF44 /* Build configuration list for PBXNativeTarget "WalliveClone" */ = {isa = XCConfigurationList; buildConfigurations = (A3FD2624D90AA76C1E18FB70 /* Debug */, CB4CAEBFF1A865FD02635BC0 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		/* End XCConfigurationList section */
+
+		/* Begin XCRemoteSwiftPackageReference section */
+		47CD4D831A9EF0F392D17BA1 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/weichsel/ZIPFoundation"; requirement = {kind = upToNextMajorVersion; minimumVersion = 0.9.0; }; };
+		/* End XCRemoteSwiftPackageReference section */
+
+		/* Begin XCSwiftPackageProductDependency section */
+		7F7BCEDF25FC7D01E7F3D874 /* ZIPFoundation */ = {isa = XCSwiftPackageProductDependency; package = 47CD4D831A9EF0F392D17BA1 /* XCRemoteSwiftPackageReference "ZIPFoundation" */; productName = ZIPFoundation; };
+		/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = BA3FFAF126EBB4AB34DF9226 /* Project object */;
+}
