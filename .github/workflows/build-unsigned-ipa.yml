@@ -19,7 +19,7 @@ jobs:
         run: xcodebuild -version
 
       - name: Unpack rust-core
-        run: unzip -o rust-core.zip
+        run: unzip -o rust-core.zip && ls rust-core
 
       - name: Build AirliftFFI (device only)
         run: bash build-airlift.sh
