@@ -18,6 +18,12 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Unpack rust-core
+        run: unzip -o rust-core.zip
+
+      - name: Build AirliftFFI (device only)
+        run: bash build-airlift.sh
+
       - name: Resolve package dependencies
         run: >
           xcodebuild -resolvePackageDependencies
