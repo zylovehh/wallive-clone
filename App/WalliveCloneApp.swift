@@ -36,10 +36,48 @@ func ALGetGrappaToken(
     _ errLen: Int
 ) -> Int32
 
+/// 进软件流程：Hello 动画 → 渐退进登入页 → 登入成功（或点“先逛逛”）进主界面。
+/// 已经登入过的账号，Hello 动画后直接进主界面，不用再登一次。
+private enum AppPhase {
+    case hello, login, main
+}
+
 struct ContentView: View {
     @EnvironmentObject private var state: AppState
+    @StateObject private var accountStore = AccountStore()
+    @State private var phase: AppPhase = .hello
 
     var body: some View {
+        ZStack {
+            switch phase {
+            case .hello:
+                HelloView()
+                    .transition(.opacity)
+            case .login:
+                AccountView(store: accountStore, onSkip: {
+                    withAnimation(.easeOut(duration: 0.5)) { phase = .main }
+                })
+                .transition(.opacity)
+            case .main:
+                mainTabs
+            }
+        }
+        .task {
+            // Hello 动画 2 秒，播完渐退：已登入直接进主界面，没登入进登入页。
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            withAnimation(.easeOut(duration: 0.5)) {
+                phase = accountStore.currentUser != nil ? .main : .login
+            }
+        }
+        .onChange(of: accountStore.currentUser) { _, newUser in
+            // 登入页里登入成功，自动进主界面。
+            if newUser != nil, phase == .login {
+                withAnimation(.easeOut(duration: 0.5)) { phase = .main }
+            }
+        }
+    }
+
+    private var mainTabs: some View {
         TabView(selection: $state.selectedTab) {
             CatalogView()
                 .tabItem { Label("目录", systemImage: "square.grid.2x2") }

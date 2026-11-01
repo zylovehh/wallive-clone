@@ -12,6 +12,8 @@ struct InstallView: View {
     @State private var result = ""
     @State private var installLog = ""
     @State private var forceRefresh = true
+    @State private var clearing = false
+    @State private var clearResult = ""
 
     var body: some View {
         NavigationStack {
@@ -36,6 +38,25 @@ struct InstallView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(state.packageData == nil || !state.pairingLoaded || installing)
+                Divider()
+                Text("清除已安装").font(.headline)
+                Text("两步走：先在锁屏长按进图库、上滑删掉那张锁屏，再点下面这个按钮重索引，图库才会刷新掉。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("清除已安装（重索引）") {
+                    Task {
+                        clearing = true
+                        clearResult = ""
+                        defer { clearing = false }
+                        if await state.clearInstalledRecords(host: host) {
+                            clearResult = "已重索引：去锁屏图库看看那张还在不在，还在就把包名告诉我。"
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(!state.pairingLoaded || clearing)
+                if clearing { ProgressView("正在重索引…") }
+                if !clearResult.isEmpty { Text(clearResult).font(.caption) }
                 if installing { ProgressView("正在安装…") }
                 if !result.isEmpty { Text(result).font(.caption) }
                 if !state.statusMessage.isEmpty {

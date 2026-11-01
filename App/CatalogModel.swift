@@ -5,7 +5,12 @@
 
 import Foundation
 
-/// 目录里的一张壁纸：标题、标签、缩略图、预览视频、壁纸包地址。
+/// 目录里的一张壁纸：标题、标签、缩略图、预览视频、壁纸包地址，
+/// 再加管理员置顶（pinned）和下载数（downloads）。
+/// 排序规则（见 fetch）：置顶先排，置顶里按目录表顺序；不置顶的按下载数从多到少；
+/// 下载数相同按目录表顺序。新上传的壁纸管理员置顶后就排最上边。
+/// 下载数目前是目录表里的数字，由管理员改；App 里点下载不会自动加总，
+/// 因为没有服务器记账，以后接了服务器再改成自动计数。
 struct CatalogItem: Identifiable, Decodable, Equatable {
     let id: String
     let title: String
@@ -13,12 +18,27 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
     let thumbnailURL: String
     let previewURL: String
     let packageURL: String
+    let pinned: Bool
+    let downloads: Int
 
     enum CodingKeys: String, CodingKey {
-        case id, title, tags
+        case id, title, tags, pinned, downloads
         case thumbnailURL = "thumbnail"
         case previewURL = "preview"
         case packageURL = "package"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        tags = try c.decode([String].self, forKey: .tags)
+        thumbnailURL = try c.decode(String.self, forKey: .thumbnailURL)
+        previewURL = try c.decode(String.self, forKey: .previewURL)
+        packageURL = try c.decode(String.self, forKey: .packageURL)
+        // 老目录表没有这两个字段时默认不置顶、下载数 0，不让旧表解码失败。
+        pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+        downloads = try c.decodeIfPresent(Int.self, forKey: .downloads) ?? 0
     }
 }
 
@@ -101,7 +121,17 @@ final class CatalogStore: ObservableObject {
                 throw CatalogError.notFound
             }
             let doc = try JSONDecoder().decode(CatalogDocument.self, from: data)
-            items = doc.items
+            // 排序：置顶在前（置顶内保持目录表顺序），其余按下载数从多到少，
+            // 下载数相同保持目录表顺序（Swift sorted 是稳定排序，序号小的在前）。
+            items = doc.items.enumerated().sorted { a, b in
+                if a.element.pinned != b.element.pinned {
+                    return a.element.pinned
+                }
+                if a.element.downloads != b.element.downloads {
+                    return a.element.downloads > b.element.downloads
+                }
+                return a.offset < b.offset
+            }.map { $0.element }
             errorMessage = ""
         } catch {
             items = []
@@ -169,3 +199,4 @@ final class CatalogStore: ObservableObject {
         return (cleaned.isEmpty ? "wallpaper" : cleaned) + ".tendies"
     }
 }
+

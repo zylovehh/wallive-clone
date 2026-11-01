@@ -93,6 +93,23 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 清除已安装（重索引）：配对通就重写 PosterBoard 偏好，让系统图库刷新。
+    /// 不删描述符文件夹（见 AirliftInstaller.clearInstalledRecords 注释）。
+    func clearInstalledRecords(host: String) async -> Bool {
+        guard hasPairingFile else {
+            statusMessage = "还没导入配对记录，清除前先在状态页导入。"
+            return false
+        }
+        do {
+            _ = try await AirliftInstaller.clearInstalledRecords(
+                pairingPath: pairingFileURL.path, targetHost: host)
+            return true
+        } catch {
+            statusMessage = "清除失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
     /// 检查回环 VPN 连通：TCP 连 host:port，3 秒超时（串行队列守 continuation）。
     func checkVPN(host: String, port: UInt16) async -> Bool {
         guard port != 0, let endpointPort = NWEndpoint.Port(rawValue: port) else {

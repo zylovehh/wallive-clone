@@ -24,8 +24,8 @@ struct ImportView: View {
                         Text(info.floatingHasClownfishPrefix ? "漂浮层已有 Clownfish 前缀" : "漂浮层无 Clownfish 前缀")
                     }
                     HStack {
-                        Button("制作深景包") { state.selectedTab = 3 }
-                        Button("去安装") { state.selectedTab = 2 }
+                        Button("制作深景包") { state.selectedTab = 2 }
+                        Button("去安装") { state.selectedTab = 1 }
                     }.buttonStyle(.bordered)
                 } else {
                     Text("还没选包。WALLIVE1 加密包会自动解密后再检查。")

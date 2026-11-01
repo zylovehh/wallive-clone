@@ -13,6 +13,7 @@ struct CatalogView: View {
     @State private var query = ""
     @State private var selectedCategory = "全部"
     @State private var previewItem: CatalogItem?
+    @State private var showingAccount = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
@@ -46,7 +47,7 @@ struct CatalogView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
+            VStack(spacing: 8) {
                 Picker("目录", selection: $segment) {
                     Text("发现").tag(0)
                     Text("我的").tag(1)
@@ -60,7 +61,21 @@ struct CatalogView: View {
                     myView
                 }
             }
-            .navigationTitle("目录")
+            // 顶部不留大黑边：不用系统大标题，改用一行小标题，整个目录往上贴。
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("目录").font(.headline)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showingAccount = true } label: {
+                        Image(systemName: "person.circle")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingAccount) {
+                AccountView()
+            }
             .task { await store.fetch() }
             .sheet(item: $previewItem) { item in
                 PreviewPlayerView(item: item)
@@ -71,7 +86,7 @@ struct CatalogView: View {
     // MARK: - 发现页
 
     private var discoverView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜索标题或标签", text: $query)
@@ -189,7 +204,10 @@ struct CatalogView: View {
 
 // MARK: - 卡片
 
-/// 一张壁纸卡片：缩略图 + 左上角播放键 + 标题 + 标签 + 下载按钮。
+/// 一张壁纸卡片，对齐原版“交互壁纸”页样式：
+/// 全幅图进圆角手机框（9:19.5，缩略图本身就是全幅图，不再是黑底抠图或带时钟的锁屏截图），
+/// 标题、标签、下载条都压在图内底部，左上播放键、右上收藏心。
+/// 卡片高度只由图片比例定，两列卡片上下对齐，不再一高一低。
 private struct CatalogCard: View {
     let item: CatalogItem
     let downloaded: Bool
@@ -197,23 +215,39 @@ private struct CatalogCard: View {
     let onPreview: () -> Void
     let onDownload: () async -> Void
 
+    @State private var favorited = false
+
+    private var favoriteKey: String { "favorite-\(item.id)" }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topLeading) {
-                if let url = URL(string: item.thumbnailURL) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable().scaledToFill()
-                        default:
-                            placeholder
-                        }
+        ZStack {
+            if let url = URL(string: item.thumbnailURL) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        placeholder
                     }
-                } else {
-                    placeholder
                 }
-                // 预览视频地址能用才显示播放键，点一下播动态预览。
-                if URL(string: item.previewURL) != nil {
+            } else {
+                placeholder
+            }
+        }
+        .aspectRatio(9 / 19.5, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(alignment: .bottom) {
+            // 底部渐变罩，让压在图上的白字在亮图上也看得清。
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.65)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 150)
+        }
+        .overlay(alignment: .top) {
+            HStack {
+                // 没给视频的静态壁纸不显示播放键（静态预览图就是缩略图本身）。
+                if !item.previewURL.isEmpty, URL(string: item.previewURL) != nil {
                     Button(action: onPreview) {
                         Image(systemName: "play.fill")
                             .foregroundStyle(.white)
@@ -221,36 +255,87 @@ private struct CatalogCard: View {
                             .background(.black.opacity(0.45))
                             .clipShape(Circle())
                     }
-                    .padding(8)
+                }
+                Spacer()
+                Button {
+                    favorited.toggle()
+                    UserDefaults.standard.set(favorited, forKey: favoriteKey)
+                } label: {
+                    Image(systemName: favorited ? "heart.fill" : "heart")
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .background(.black.opacity(0.45))
+                        .clipShape(Circle())
                 }
             }
-            .aspectRatio(9 / 16, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            Text(item.title)
-                .font(.subheadline)
-                .lineLimit(2)
-            Text(item.tags.map { "#\($0)" }.joined(separator: " "))
-                .font(.caption).foregroundStyle(.secondary)
-
-            Button {
-                Task { await onDownload() }
-            } label: {
-                if downloading {
-                    ProgressView()
-                } else {
-                    Label(downloaded ? "已下载" : "下载", systemImage: "arrow.down")
+            .padding(8)
+        }
+        .overlay(alignment: .bottomLeading) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(item.title)
+                        .font(.subheadline).bold()
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if item.pinned {
+                        Text("置顶")
+                            .font(.caption2).bold()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(.red)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
                 }
+                Text(item.tags.map { "#\($0)" }.joined(separator: " ")
+                    + (item.downloads > 0 ? " · 下载 \(item.downloads) 次" : ""))
+                    .font(.caption).foregroundStyle(.white.opacity(0.85))
+                // 下载条：液态玻璃，压在预览图下方（图内底部），样式对齐原版图二。
+                Button {
+                    Task { await onDownload() }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if downloading {
+                            ProgressView().tint(.white)
+                        } else {
+                            Label(downloaded ? "已下载" : "下载", systemImage: "arrow.down")
+                                .foregroundStyle(.white)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 10)
+                    .modifier(LiquidGlassBar())
+                }
+                .disabled(downloading)
             }
-            .buttonStyle(.bordered)
-            .disabled(downloading)
+            .padding(10)
+        }
+        .onAppear {
+            favorited = UserDefaults.standard.bool(forKey: favoriteKey)
         }
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 12)
+        RoundedRectangle(cornerRadius: 16)
             .fill(.quaternary)
             .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+    }
+}
+
+/// 液态玻璃条：iOS 26+ 用系统液态玻璃，低版本回退到半透明黑条，
+/// 视觉上仍是同一条玻璃下载条，不会因系统版本编译不过或显示断层。
+private struct LiquidGlassBar: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(
+                .regular.tint(.black.opacity(0.25)),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+        } else {
+            content
+                .background(.black.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
     }
 }
 
@@ -278,3 +363,4 @@ private struct PreviewPlayerView: View {
         }
     }
 }
+

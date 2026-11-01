@@ -35,7 +35,7 @@ struct DepthView: View {
                             Button("设为当前包并去安装") {
                                 if let data = depthData {
                                     state.setPackage(data)
-                                    state.selectedTab = 2
+                                    state.selectedTab = 1
                                 }
                             }
                         }.buttonStyle(.bordered)
