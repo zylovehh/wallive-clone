@@ -23,11 +23,14 @@
 		1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C44A1B8A95D048B3D37C24E /* DepthView.swift */; };
 		B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A82EE90697C6FAF71DBD84 /* StatusView.swift */; };
 		F0BE33E2A7F68D44FF7C0B35 /* CatalogModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB9856FF383D49B67DA81B8 /* CatalogModel.swift */; };
-		7DA41BFCE948DFA4EDB5DC28 /* CatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFE6CA4472743E8CCA0820FB /* CatalogView.swift */; };
+		7DA41BFCE948DFA4EDB5DC28 /* CatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFE6CA4472743E8CCA0820FB /* CatalogView.swift */; }; 		
+50A4D54CAA6C4EF896D6DBD3 /* HelloView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F67CB5FDC8F0422A9C5C37A5 /* HelloView.swift */; }; 		
+AB4787FD7C4442BDAE37C8A6 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A5EE96E9C2467AAD02B077 /* AccountView.swift */; };
 		C0D8DA074519B3F4EDF8D89F /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 7F7BCEDF25FC7D01E7F3D874 /* ZIPFoundation */; };
 		395BCA10C02D42832AA0EADD /* AirliftFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6F983E7BF84EB2BA24D0BDB /* AirliftFFI.xcframework */; };
 		18F0D5041E2555AAFB7B960F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */; };
-		7082C5256C4E8E719CEAF18A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C478DEF0042547301BBD6EBE /* Assets.xcassets */; };
+		7082C5256C4E8E719CEAF18A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C478DEF0042547301BBD6EBE /* Assets.xcassets */; }; 		
+DD534E402EF74B30B8D23846 /* hello_splash.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = E1CF1A7242D449D2BD0B3AAE /* hello_splash.mp4 */; };
 			A3139B03BB274F80D57D317A /* GrappaHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = CD3FCC1762B991195F6CBF00 /* GrappaHelper.m */; };
 	/* End PBXBuildFile section */
 
@@ -50,7 +53,10 @@
 		6C44A1B8A95D048B3D37C24E /* DepthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthView.swift; sourceTree = "<group>"; };
 		35A82EE90697C6FAF71DBD84 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
 		BFB9856FF383D49B67DA81B8 /* CatalogModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogModel.swift; sourceTree = "<group>"; };
-		CFE6CA4472743E8CCA0820FB /* CatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogView.swift; sourceTree = "<group>"; };
+		CFE6CA4472743E8CCA0820FB /* CatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogView.swift; sourceTree = "<group>"; }; 		
+F67CB5FDC8F0422A9C5C37A5 /* HelloView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelloView.swift; sourceTree = "<group>"; }; 		
+E8A5EE96E9C2467AAD02B077 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; }; 		
+E1CF1A7242D449D2BD0B3AAE /* hello_splash.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file.mp4; path = hello_splash.mp4; sourceTree = "<group>"; };
 		3AACD762DC22D4FFC888F92C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		FC73962D2D93E9B10292E62D /* WalliveClone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WalliveClone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -64,7 +70,7 @@
 		/* End PBXFrameworksBuildPhase section */
 
 		/* Begin PBXGroup section */
-		0BE22E29474101102732C952 /* App */ = {isa = PBXGroup; children = (16CFF4E34647677797905E55 /* WalliveCloneApp.swift */, CCC724A8EB4EEBF6008B70BA /* AppState.swift */, A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */, 7E3E2F760B036448CAC3B548 /* DocumentPickers.swift */, 510B7B6AA04D24B03E5470FF /* ImportView.swift */, 351C98ABB7F9B4CB42AC6B4C /* InstallView.swift */, 6C44A1B8A95D048B3D37C24E /* DepthView.swift */, 35A82EE90697C6FAF71DBD84 /* StatusView.swift */, BFB9856FF383D49B67DA81B8 /* CatalogModel.swift */, CFE6CA4472743E8CCA0820FB /* CatalogView.swift */,); path = App; sourceTree = "<group>"; };
+		0BE22E29474101102732C952 /* App */ = {isa = PBXGroup; children = (16CFF4E34647677797905E55 /* WalliveCloneApp.swift */, CCC724A8EB4EEBF6008B70BA /* AppState.swift */, A60E66B468F6311F8BFD20C6 /* ZipFoundationAdapter.swift */, 7E3E2F760B036448CAC3B548 /* DocumentPickers.swift */, 510B7B6AA04D24B03E5470FF /* ImportView.swift */, 351C98ABB7F9B4CB42AC6B4C /* InstallView.swift */, 6C44A1B8A95D048B3D37C24E /* DepthView.swift */, 35A82EE90697C6FAF71DBD84 /* StatusView.swift */, BFB9856FF383D49B67DA81B8 /* CatalogModel.swift */, CFE6CA4472743E8CCA0820FB /* CatalogView.swift */, F67CB5FDC8F0422A9C5C37A5 /* HelloView.swift */, E8A5EE96E9C2467AAD02B077 /* AccountView.swift */, E1CF1A7242D449D2BD0B3AAE /* hello_splash.mp4 */,); path = App; sourceTree = "<group>"; };
 		A45C494344EA780B34B0A189 = {isa = PBXGroup; children = (494FDD9B834CB34FD4775839 /* Wallive1Crypto.swift */, DF30B926648DEC9EB413A5BA /* TendiesPackage.swift */, F7F660FD81556AA9004E90CE /* DepthPackageBuilder.swift */, 38DAAB7A51D23DD6739CB6C5 /* DescriptorInstaller.swift */, FC511E83CEB38057E9CA3926 /* PairingRecord.swift */, 13E324ECC4D9BFB661AE821F /* InstallFlow.swift */, 88AC4C6CCC40717A72347C20 /* PairingHost.swift */, 14BC8196EC54F9A391895DC0 /* AirliftInstaller.swift */, CD3FCC1762B991195F6CBF00 /* GrappaHelper.m */, C007E8DE5FACDC98C9B33C8E /* GrappaHelper.h */, A6F983E7BF84EB2BA24D0BDB /* AirliftFFI.xcframework */, 0BE22E29474101102732C952 /* App */, 3AACD762DC22D4FFC888F92C /* Info.plist */, 60F93DAA75A5516E6EC53015 /* LaunchScreen.storyboard */, C478DEF0042547301BBD6EBE /* Assets.xcassets */, 2F0DD196A61CB4F095765836 /* Products */,); sourceTree = "<group>"; };
 		2F0DD196A61CB4F095765836 /* Products */ = {isa = PBXGroup; children = (FC73962D2D93E9B10292E62D /* WalliveClone.app */,); name = Products; sourceTree = "<group>"; };
 		/* End PBXGroup section */
@@ -78,11 +84,11 @@
 		/* End PBXProject section */
 
 		/* Begin PBXResourcesBuildPhase section */
-		6EE38498534294A6FC4105B7 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (18F0D5041E2555AAFB7B960F /* LaunchScreen.storyboard in Resources */, 7082C5256C4E8E719CEAF18A /* Assets.xcassets in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+		6EE38498534294A6FC4105B7 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (18F0D5041E2555AAFB7B960F /* LaunchScreen.storyboard in Resources */, 7082C5256C4E8E719CEAF18A /* Assets.xcassets in Resources */, DD534E402EF74B30B8D23846 /* hello_splash.mp4 in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
 		/* End PBXResourcesBuildPhase section */
 
 		/* Begin PBXSourcesBuildPhase section */
-		0E0A521F6FCE65D35667A616 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0901DC9B66BDE7C3E8A595A4 /* Wallive1Crypto.swift in Sources */, 8F336A1139E4798D960538A7 /* TendiesPackage.swift in Sources */, A320D192DE85C0C3EA4D2903 /* DepthPackageBuilder.swift in Sources */, 4E227252B81A64479F50A105 /* DescriptorInstaller.swift in Sources */, 0F91BA109ED3FA4B2FE7DC81 /* PairingRecord.swift in Sources */, 588235E43E482EB0C3887157 /* InstallFlow.swift in Sources */, 550C21811E28FDCF06E8D44B /* PairingHost.swift in Sources */, 3C5881C891881997D237242E /* AirliftInstaller.swift in Sources */, A3139B03BB274F80D57D317A /* GrappaHelper.m in Sources */, 0187124ABD71E268BE8663AB /* WalliveCloneApp.swift in Sources */, 8787D4E77F19C9E7BD1CB378 /* AppState.swift in Sources */, 1357A96F84DE067BCC05FE4C /* ZipFoundationAdapter.swift in Sources */, 58429215C0C531593123C710 /* DocumentPickers.swift in Sources */, BC3A20D39EFD09DF0E022440 /* ImportView.swift in Sources */, 629F008421E013DE23FA7D49 /* InstallView.swift in Sources */, 1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */, B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */, F0BE33E2A7F68D44FF7C0B35 /* CatalogModel.swift in Sources */, 7DA41BFCE948DFA4EDB5DC28 /* CatalogView.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		0E0A521F6FCE65D35667A616 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0901DC9B66BDE7C3E8A595A4 /* Wallive1Crypto.swift in Sources */, 8F336A1139E4798D960538A7 /* TendiesPackage.swift in Sources */, A320D192DE85C0C3EA4D2903 /* DepthPackageBuilder.swift in Sources */, 4E227252B81A64479F50A105 /* DescriptorInstaller.swift in Sources */, 0F91BA109ED3FA4B2FE7DC81 /* PairingRecord.swift in Sources */, 588235E43E482EB0C3887157 /* InstallFlow.swift in Sources */, 550C21811E28FDCF06E8D44B /* PairingHost.swift in Sources */, 3C5881C891881997D237242E /* AirliftInstaller.swift in Sources */, A3139B03BB274F80D57D317A /* GrappaHelper.m in Sources */, 0187124ABD71E268BE8663AB /* WalliveCloneApp.swift in Sources */, 8787D4E77F19C9E7BD1CB378 /* AppState.swift in Sources */, 1357A96F84DE067BCC05FE4C /* ZipFoundationAdapter.swift in Sources */, 58429215C0C531593123C710 /* DocumentPickers.swift in Sources */, BC3A20D39EFD09DF0E022440 /* ImportView.swift in Sources */, 629F008421E013DE23FA7D49 /* InstallView.swift in Sources */, 1A468649ED07559BDCCFBE43 /* DepthView.swift in Sources */, B2F770A1D7E58ED38CA744F1 /* StatusView.swift in Sources */, F0BE33E2A7F68D44FF7C0B35 /* CatalogModel.swift in Sources */, 7DA41BFCE948DFA4EDB5DC28 /* CatalogView.swift in Sources */, 50A4D54CAA6C4EF896D6DBD3 /* HelloView.swift in Sources */, AB4787FD7C4442BDAE37C8A6 /* AccountView.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 		/* End PBXSourcesBuildPhase section */
 
 		/* Begin XCBuildConfiguration section */
