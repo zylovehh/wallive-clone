@@ -6,7 +6,6 @@ import SwiftUI
 struct InstallView: View {
     @EnvironmentObject private var state: AppState
     @State private var host = "10.7.0.1"
-    @State private var portText = "62078"
     @State private var installing = false
     @State private var result = ""
 
@@ -24,8 +23,6 @@ struct InstallView: View {
                     .onAppear { state.refreshPairingStatus() }
                 HStack {
                     TextField("管家地址", text: $host).textFieldStyle(.roundedBorder)
-                    TextField("端口", text: $portText).textFieldStyle(.roundedBorder)
-                        .keyboardType(.numberPad).frame(width: 90)
                 }
                 Button("安装到锁屏") {
                     Task { await runInstall() }
@@ -50,11 +47,10 @@ struct InstallView: View {
         installing = true
         result = ""
         defer { installing = false }
-        let port = UInt16(portText) ?? 62078
-        if let uuid = await state.install(host: host, port: port) {
-            result = "安装完成，描述符 UUID：\(uuid)。请到锁屏查看（系统记录格式待真机确认）。"
+        if let uuid = await state.install(host: host) {
+            result = "安装完成，描述符 UUID：\(uuid)。请到锁屏查看。"
         } else if state.statusMessage.isEmpty {
-            result = "安装未完成：请确认已选包、已导入配对记录、回环 VPN 已连接。"
+            result = "安装未完成：请确认已选包、已生成配对记录、回环 VPN 已连接。"
         }
     }
 }

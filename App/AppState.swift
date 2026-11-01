@@ -78,17 +78,17 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 安装当前包：配对 → 连 lockdownd → AFC 写盘 → 登记。返回描述符 UUID。
-    func install(host: String, port: UInt16) async -> String? {
+    /// 安装当前包：本地暂存 → 经配对隧道写盘。返回实际装上的描述符 UUID。
+    func install(host: String) async -> String? {
         guard let data = packageData, hasPairingFile else { return nil }
         do {
             let uuid = try await InstallFlow.install(
                 packageData: data, zip: zip,
-                pairingRecordFile: pairingFileURL, host: host, port: port)
+                pairingPath: pairingFileURL.path, targetHost: host)
             installHistory.append(uuid)
             return uuid
         } catch {
-            statusMessage = "安装失败：\(error.localizedDescription)\n详情：\(error)"
+            statusMessage = "安装失败：\(error.localizedDescription)"
             return nil
         }
     }

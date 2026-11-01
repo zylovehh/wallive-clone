@@ -6,6 +6,7 @@ import SwiftUI
 struct StatusView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.openURL) private var openURL
+    @ObservedObject private var pairingHost = PairingHost.shared
     @State private var showPairingPicker = false
     @State private var host = "10.7.0.1"
     @State private var portText = "62078"
@@ -40,7 +41,7 @@ struct StatusView: View {
                         openURL(url)
                     }
                 }.buttonStyle(.bordered)
-                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
+                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”，等界面出现 6 位 PIN 后，去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -49,7 +50,25 @@ struct StatusView: View {
                         Task { await generate() }
                     }.disabled(generating)
                     if generating { ProgressView() }
+                    if pairingHost.running {
+                        Button("取消") { pairingHost.softCancel() }
+                    }
                 }.buttonStyle(.bordered)
+                if let pin = pairingHost.pairingPIN {
+                    Text("配对 PIN：\(pin)")
+                        .font(.title2.bold())
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    Text("去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输入上面这串数字。")
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                if !pairingHost.pairingStatus.isEmpty && pairingHost.pairingStatus != "未开始" {
+                    Text(pairingHost.pairingStatus).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
                 if !generateResult.isEmpty {
                     Text(generateResult).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
@@ -94,7 +113,8 @@ struct StatusView: View {
     }
 
     /// 生成配对文件：先复用检查按钮的 VPN 连通逻辑，没连 VPN 就不配对；
-    /// 连通才跟本机配对，成功刷新状态，失败报真实原因。
+    /// 连通才启动本机配对主机，界面出现 6 位 PIN 后用户去设置里输 PIN，
+    /// 成功刷新状态，失败报真实原因。
     private func generate() async {
         guard !generating else { return }
         generating = true
@@ -106,10 +126,9 @@ struct StatusView: View {
             generateResult = "没连上回环 VPN：请先在设置里连上 LocalDevVPN，再点生成。"
             return
         }
+        generateResult = "正在启动本机配对…随后界面会出现 6 位 PIN。"
         do {
-            _ = try await PairingGenerator.generate(
-                host: host, port: port, targetURL: state.pairingFileURL,
-                progress: { text in Task { @MainActor in generateResult = text } })
+            _ = try await pairingHost.startAndWait()
             state.refreshPairingStatus()
             generateResult = "生成成功：配对文件已存好，可以去安装了。"
         } catch {
