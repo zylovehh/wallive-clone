@@ -289,7 +289,8 @@ private struct CatalogCard: View {
                 Text(item.tags.map { "#\($0)" }.joined(separator: " ")
                     + (item.downloads > 0 ? " · 下载 \(item.downloads) 次" : ""))
                     .font(.caption).foregroundStyle(.white.opacity(0.85))
-                // 下载条：液态玻璃，压在预览图下方（图内底部），样式对齐原版图二。
+                // 下载条：液态玻璃胶囊，压在预览图下方（图内底部），样式对齐用户给的参考图：
+                // 两头全圆的胶囊、更透的玻璃、圆体字、圆圈箭头图标。
                 Button {
                     Task { await onDownload() }
                 } label: {
@@ -298,8 +299,9 @@ private struct CatalogCard: View {
                         if downloading {
                             ProgressView().tint(.white)
                         } else {
-                            Label(downloaded ? "已下载" : "下载", systemImage: "arrow.down")
+                            Label(downloaded ? "已下载" : "下载", systemImage: "arrow.down.circle")
                                 .foregroundStyle(.white)
+                                .font(.subheadline.weight(.semibold))
                         }
                         Spacer()
                     }
@@ -309,6 +311,7 @@ private struct CatalogCard: View {
                 .disabled(downloading)
             }
             .padding(10)
+            .fontDesign(.rounded)
         }
         .onAppear {
             favorited = UserDefaults.standard.bool(forKey: favoriteKey)
@@ -324,17 +327,18 @@ private struct CatalogCard: View {
 
 /// 液态玻璃条：iOS 26+ 用系统液态玻璃，低版本回退到半透明黑条，
 /// 视觉上仍是同一条玻璃下载条，不会因系统版本编译不过或显示断层。
+/// 形状是两头全圆的胶囊，玻璃比之前更透。
 private struct LiquidGlassBar: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.glassEffect(
-                .regular.tint(.black.opacity(0.25)),
-                in: RoundedRectangle(cornerRadius: 12)
+                .regular.tint(.black.opacity(0.12)),
+                in: Capsule()
             )
         } else {
             content
-                .background(.black.opacity(0.45))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .background(.black.opacity(0.30))
+                .clipShape(Capsule())
         }
     }
 }
