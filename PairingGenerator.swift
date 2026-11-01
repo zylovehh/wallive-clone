@@ -78,15 +78,25 @@ public enum PairingGenerator {
         defer { channel.close() }
 
         // 3. Pair 交换（推断格式，待真机验证）：一发一收，30 秒总超时。
-        progress("正在发送配对请求…")
+        // 传输层原始报错要带上步骤名和系统错误域/代码，否则下一轮
+        // 还是只能看到一句英文，看不出死在哪一步。
+        progress("正在发送配对请求…（若手机弹出信任提示请点信任）")
         let request = try plistData([
             "Request": "Pair",
             "HostID": hostIdentifier,
             "HostPublicKey": hostPublicKey,
         ])
-        let responseData = try await withTimeout(seconds: 30) {
-            try await channel.send(FramedMessage.encode(request))
-            return try await receiveFramed(channel)
+        let responseData: Data
+        do {
+            responseData = try await withTimeout(seconds: 30) {
+                try await channel.send(FramedMessage.encode(request))
+                return try await receiveFramed(channel)
+            }
+        } catch let e as Error {
+            throw e
+        } catch {
+            let ns = error as NSError
+            throw Error.connectionFailed("发配对请求/等回包时连接断了（\(ns.domain) \(ns.code)）；可能原因：手机弹出的信任提示没点，或手机不认这套握手格式")
         }
         let response = try plistDict(responseData)
         if let rejected = response["Error"] as? String {
