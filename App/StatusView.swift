@@ -42,13 +42,19 @@ struct StatusView: View {
                 }.buttonStyle(.bordered)
                 Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
                     .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                 HStack {
                     Button("生成配对文件") {
                         Task { await generate() }
                     }.disabled(generating)
                     if generating { ProgressView() }
                 }.buttonStyle(.bordered)
-                if !generateResult.isEmpty { Text(generateResult).font(.caption) }
+                if !generateResult.isEmpty {
+                    Text(generateResult).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
 
                 Text("已安装（本机记录）").font(.headline)
                 if state.installHistory.isEmpty {
@@ -61,6 +67,8 @@ struct StatusView: View {
 
                 Text("说明：本 App 不含广告、不含会员与解锁逻辑；配对记录文件只存在 App 沙盒内，不会发给任何人。")
                     .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                 Spacer()
             }
             .padding()
