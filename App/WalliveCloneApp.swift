@@ -8,6 +8,12 @@ import SwiftUI
 struct WalliveCloneApp: App {
     @StateObject private var state = AppState()
 
+    init() {
+        // 留住 Grappa 令牌函数：安装时 Rust 层靠 dlsym 找这个符号，
+        // 没有它，图书同步拿不到令牌，手机会回同步失败。
+        _ = ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -15,6 +21,20 @@ struct WalliveCloneApp: App {
         }
     }
 }
+
+// Grappa 令牌函数在 GrappaHelper.m 里实现（随包编译进程序）；
+// 这里只声明签名，让编译器留住这个符号，Rust 层才能靠 dlsym 找到它。
+@_silgen_name("ALGetGrappaToken")
+func ALGetGrappaToken(
+    _ inVersion: UInt32,
+    _ inDeviceType: UInt32,
+    _ inProtocolVersion: UInt32,
+    _ outBuf: UnsafeMutablePointer<UInt8>?,
+    _ maxLen: Int,
+    _ outLen: UnsafeMutablePointer<Int>?,
+    _ errBuf: UnsafeMutablePointer<CChar>?,
+    _ errLen: Int
+) -> Int32
 
 struct ContentView: View {
     @EnvironmentObject private var state: AppState
