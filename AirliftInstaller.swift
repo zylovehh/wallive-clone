@@ -69,14 +69,17 @@ public enum AirliftInstaller {
         stagedDirectory: URL,
         descriptorUUID: String,
         pairingPath: String,
-        targetHost: String = "10.7.0.1"
+        targetHost: String = "10.7.0.1",
+        forceRefresh: Bool = true
     ) async throws -> String {
         InstallLog.shared.clear()
+        // 0. 装前先检查（只读不写）：配对不通就直接报错，不写盘。
+        // checkPairing 只设目标主机并找容器，不写任何文件。
+        let container = try await checkPairing(pairingPath: pairingPath, targetHost: targetHost)
         // 1. 设目标主机（AirCard 里也是忽略返回值，只当提示）。
         targetHost.withCString { _ = al_set_target_host($0) }
 
-        // 2. 找 PosterBoard 容器路径。
-        let container = try await findPosterBoardContainer(pairingPath: pairingPath)
+        // 2. 容器已在第 0 步检查时找到，直接用，不再找第二遍。
         let majorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
         // AirCard 的版本映射：iOS 16 及以下用 59，其余用 61（目标机是 27，走 61）。
         let structVersion = (majorVersion <= 16) ? 59 : 61
@@ -132,11 +135,35 @@ public enum AirliftInstaller {
         // 7. 写偏好，让 PosterBoard 重载描述符、重置文件保护。
         try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
 
-        // 8. 到此为止，直接返回，绝不要在这里重启设备。
+        // 8. 补齐兼容目录：现代扩展目录再写一次（与第 6 步同一映射）。
+        // 主目录已写好，这里只是补漏，失败不算错，不影响主目录。
+        if majorVersion >= 18 {
+            let supplementExt: String?
+            if ext == "com.apple.WallpaperKit.CollectionsPoster" {
+                supplementExt = "com.apple.Posters.CollectionsPosterApp"
+            } else if ext == "com.apple.MercuryPoster" {
+                supplementExt = "com.apple.Posters.MercuryPosterApp"
+            } else {
+                supplementExt = nil
+            }
+            if let supplementExt = supplementExt {
+                let supplementParent = "\(container)/Library/Application Support/PRBPosterExtensionDataStore/\(structVersion)/Extensions/\(supplementExt)/descriptors"
+                try? await injectFolder(
+                    folderURL: descriptorFolder, targetParentDir: supplementParent,
+                    destName: destUUID, pairingPath: pairingPath)
+            }
+        }
+
+        // 9. 强制刷新缓存：开关开着时，再写一次偏好，让系统立刻重新索引壁纸。
+        if forceRefresh {
+            try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
+        }
+
+        // 10. 到此为止，直接返回，绝不要在这里重启设备，更不要重启手机。
         // 教训（2026-11-01 实测）：原来这一步调 al_device_respring，
         // 它实际是向 diagnostics_relay 发 Restart，等于整机重启，
         // 会把安装在完成前打断——每次安装都白苹果重启、壁纸进不去。
-        // 官方安装流程里根本不调它，装完直接返回，由用户去锁屏设置里选新壁纸。
+        // 桌面重启（只重启桌面）是另外一步，不在这里做，也绝不能调整机重启。
         return destUUID
     }
 
