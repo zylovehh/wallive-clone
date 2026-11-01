@@ -167,6 +167,23 @@ public enum AirliftInstaller {
         return destUUID
     }
 
+    /// 清除已安装（重索引）：先确认配对通，再重写 PosterBoard 偏好两次，
+    /// 让系统立刻重新索引壁纸图库。
+    /// 使用方法（必须配合系统删除）：先在锁屏长按进图库、上滑删掉那张锁屏，
+    /// 再点这个按钮重索引，图库里那条才会刷新掉。
+    /// 注意：这个按钮不直接删 PosterBoard 描述符文件夹——当前特权通道里
+    /// 没有经过验证的删除路径，乱删可能动到系统自带壁纸，所以不伪装成
+    /// “已删描述符”。如果删完锁屏、重索引后图库里还出现，再把那张包发来查。
+    public static func clearInstalledRecords(
+        pairingPath: String,
+        targetHost: String = "10.7.0.1"
+    ) async throws -> String {
+        let container = try await checkPairing(pairingPath: pairingPath, targetHost: targetHost)
+        try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
+        try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
+        return container
+    }
+
     /// 检查配对是否真的能用：设目标主机后，用配对文件找 PosterBoard 容器。
     /// 只读不写，通就返回容器路径，不通就抛 FFI 原文（状态页“检查配对状态”用）。
     public static func checkPairing(
