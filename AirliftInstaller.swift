@@ -2,8 +2,8 @@
 // 真安装通道：走 AirliftFFI 的配对隧道写文件，替换掉原来手写的
 // lockdownd/AFC 实现（那套握手已被证伪，真机上连不上）。
 // 注意：airlift.h 里没有通用的 lockdownd/AFC 接口，真正的通道就是
-// 这里用的这几个 FFI：找 PosterBoard 容器、注入描述符目录、写偏好、
-// 发 respring。流程照 AirCard-iOS 开源项目（MIT）的 TendiesEngine 移植。
+// 这里用的这几个 FFI：找 PosterBoard 容器、注入描述符目录、写偏好。
+// 流程照 AirCard-iOS 开源项目（MIT）的 TendiesEngine 移植。
 //
 // 步骤：
 //   1. 设目标主机（回环 VPN 的设备 IP，如 10.7.0.1）；
@@ -11,7 +11,7 @@
 //   3. 把暂存的描述符目录注入容器里的扩展数据存储
 //      （…/PRBPosterExtensionDataStore/<版本>/Extensions/<扩展>/descriptors/<新 UUID>）；
 //   4. 写 PosterBoard 偏好（让系统重载描述符、重置文件保护）；
-//   5. 尽力发一次 respring（失败不算安装失败）。
+//   5. 返回描述符 UUID，安装完成（不要在这里重启设备，见第 8 步注释）。
 // 标识处理照 AirCard 的规矩：如果包里有建议元数据（suggestionMetadata），
 // 标识保持原样不动（乱改会让系统查不到）；否则生成新 UUID 并同步改掉
 // 描述符里的数字标识，避免重复安装撞标识。
@@ -132,9 +132,11 @@ public enum AirliftInstaller {
         // 7. 写偏好，让 PosterBoard 重载描述符、重置文件保护。
         try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
 
-        // 8. 尽力 respring（让新壁纸生效；失败不算安装失败）。
-        _ = await respring(pairingPath: pairingPath)
-
+        // 8. 到此为止，直接返回，绝不要在这里重启设备。
+        // 教训（2026-11-01 实测）：原来这一步调 al_device_respring，
+        // 它实际是向 diagnostics_relay 发 Restart，等于整机重启，
+        // 会把安装在完成前打断——每次安装都白苹果重启、壁纸进不去。
+        // 官方安装流程里根本不调它，装完直接返回，由用户去锁屏设置里选新壁纸。
         return destUUID
     }
 
@@ -206,19 +208,6 @@ public enum AirliftInstaller {
             if rc != 0 {
                 let detail = freeErrorString(&outError) ?? "写偏好失败"
                 throw Error.ffiFailed(step: "写 PosterBoard 偏好", detail: detail)
-            }
-        }
-    }
-
-    private static func respring(pairingPath: String) async -> Bool {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var outError: UnsafeMutablePointer<CChar>? = nil
-                let rc = pairingPath.withCString { pC in
-                    al_device_respring(pC, airliftLogCallback, nil, &outError)
-                }
-                if let p = outError { al_string_free(p) }
-                cont.resume(returning: rc == 0)
             }
         }
     }
