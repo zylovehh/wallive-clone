@@ -27,6 +27,18 @@ struct CatalogDocument: Decodable {
     let items: [CatalogItem]
 }
 
+/// 目录拉取/下载失败原因（带中文说明，免得 404 也报“格式不对”）。
+enum CatalogError: LocalizedError {
+    case notFound
+    case fileNotFound
+    var errorDescription: String? {
+        switch self {
+        case .notFound: return "目录表没找到（请检查目录地址）"
+        case .fileNotFound: return "壁纸文件没找到（可能还没上传）"
+        }
+    }
+}
+
 /// 已下载的一张壁纸：元数据 + 本地文件名（存在沙盒里，供“我的”页列出）。
 struct DownloadedItem: Identifiable, Codable, Equatable {
     let id: String
@@ -42,7 +54,7 @@ struct DownloadedItem: Identifiable, Codable, Equatable {
 final class CatalogStore: ObservableObject {
     /// 目录表地址（公开仓库 raw 地址，改仓库名或分支要同步改这里）。
     static let catalogURLString =
-        "https://raw.githubusercontent.com/zyl.../wallive-clone/main/catalog.json"
+        "https://raw.githubusercontent.com/zylovehh/wallive-clone/main/catalog.json"
 
     @Published private(set) var items: [CatalogItem] = []
     @Published private(set) var downloaded: [DownloadedItem] = []
@@ -84,7 +96,10 @@ final class CatalogStore: ObservableObject {
         loading = true
         defer { loading = false }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw CatalogError.notFound
+            }
             let doc = try JSONDecoder().decode(CatalogDocument.self, from: data)
             items = doc.items
             errorMessage = ""
@@ -102,7 +117,10 @@ final class CatalogStore: ObservableObject {
         downloadingIDs.insert(item.id)
         defer { downloadingIDs.remove(item.id) }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw CatalogError.fileNotFound
+            }
             try FileManager.default.createDirectory(
                 at: downloadedDirectory, withIntermediateDirectories: true)
             try data.write(to: localURL(for: item), options: .atomic)
