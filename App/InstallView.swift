@@ -8,6 +8,7 @@ struct InstallView: View {
     @State private var host = "10.7.0.1"
     @State private var installing = false
     @State private var result = ""
+    @State private var installLog = ""
 
     var body: some View {
         NavigationStack {
@@ -36,6 +37,16 @@ struct InstallView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
+                if !installLog.isEmpty {
+                    Text("安装日志（可长按复制）").font(.headline)
+                    ScrollView {
+                        Text(installLog)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 220)
+                }
                 Spacer()
             }
             .padding()
@@ -46,11 +57,13 @@ struct InstallView: View {
     private func runInstall() async {
         installing = true
         result = ""
+        installLog = ""
         defer { installing = false }
         if let uuid = await state.install(host: host) {
             result = "安装完成，描述符 UUID：\(uuid)。请到锁屏查看。"
         } else if state.statusMessage.isEmpty {
             result = "安装未完成：请确认已选包、已生成配对记录、回环 VPN 已连接。"
         }
+        installLog = InstallLog.shared.tail(60)
     }
 }

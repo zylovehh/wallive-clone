@@ -14,6 +14,8 @@ struct StatusView: View {
     @State private var checking = false
     @State private var generating = false
     @State private var generateResult = ""
+    @State private var pairingCheckResult = ""
+    @State private var pairingChecking = false
 
     var body: some View {
         NavigationStack {
@@ -36,6 +38,17 @@ struct StatusView: View {
                     Button("导入配对记录文件") { showPairingPicker = true }
                     Button("删除") { state.removePairingFile() }
                 }.buttonStyle(.bordered)
+                HStack {
+                    Button("检查配对状态") {
+                        Task { await checkPairing() }
+                    }.disabled(pairingChecking)
+                    if pairingChecking { ProgressView() }
+                }.buttonStyle(.bordered)
+                if !pairingCheckResult.isEmpty {
+                    Text(pairingCheckResult).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
                 Button("下载 LocalDevVPN") {
                     if let url = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044") {
                         openURL(url)
@@ -133,6 +146,25 @@ struct StatusView: View {
             generateResult = "生成成功：配对文件已存好，可以去安装了。"
         } catch {
             generateResult = "生成失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 检查配对状态：用配对文件实打实连一次管家服务找容器，
+    /// 只读不写。通说明配对本身没问题，安装失败就不是配对的事。
+    private func checkPairing() async {
+        guard !pairingChecking else { return }
+        pairingChecking = true
+        defer { pairingChecking = false }
+        guard state.hasPairingFile else {
+            pairingCheckResult = "没有配对记录文件：先点“生成配对文件”或导入一个。"
+            return
+        }
+        do {
+            _ = try await AirliftInstaller.checkPairing(
+                pairingPath: state.pairingFileURL.path, targetHost: host)
+            pairingCheckResult = "配对有效：能连上管家服务并找到 PosterBoard 容器。"
+        } catch {
+            pairingCheckResult = "配对无效：\(error.localizedDescription)"
         }
     }
 }
