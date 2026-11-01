@@ -1,6 +1,6 @@
 // WalliveCloneApp.swift
 // 复刻版 App 壳：SwiftUI 入口（干净重写，无广告 SDK、无会员逻辑）。
-// 四个页签对应原版流程：导入 → 安装 → 深景 → 状态。
+// 五个页签：目录 → 导入 → 安装 → 深景 → 状态。
 
 import SwiftUI
 
@@ -21,18 +21,21 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $state.selectedTab) {
+            CatalogView()
+                .tabItem { Label("目录", systemImage: "square.grid.2x2") }
+                .tag(0)
             ImportView()
                 .tabItem { Label("导入", systemImage: "square.and.arrow.down") }
-                .tag(0)
+                .tag(1)
             InstallView()
                 .tabItem { Label("安装", systemImage: "arrow.down.to.line") }
-                .tag(1)
+                .tag(2)
             DepthView()
                 .tabItem { Label("深景", systemImage: "moon.stars") }
-                .tag(2)
+                .tag(3)
             StatusView()
                 .tabItem { Label("状态", systemImage: "info.circle") }
-                .tag(3)
+                .tag(4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
