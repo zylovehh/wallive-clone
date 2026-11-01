@@ -22,9 +22,9 @@ App 的“目录”页每次打开都会拉取仓库根目录的 `catalog.json`�
   "id": "four-seasons-tree",
   "title": "四季树",
   "tags": ["风景"],
-  "thumbnail": "https://raw.githubusercontent.com/zyl.../wallive-clone/main/wallpapers/four-seasons-tree-thumb.jpg",
-  "preview": "https://raw.githubusercontent.com/zyl.../wallive-clone/main/wallpapers/four-seasons-tree-preview.mp4",
-  "package": "https://raw.githubusercontent.com/zyl.../wallive-clone/main/wallpapers/four-seasons-tree.tendies"
+  "thumbnail": "https://raw.githubusercontent.com/zylovehh/wallive-clone/main/wallpapers/four-seasons-tree-thumb.jpg",
+  "preview": "https://raw.githubusercontent.com/zylovehh/wallive-clone/main/wallpapers/four-seasons-tree-preview.mp4",
+  "package": "https://raw.githubusercontent.com/zylovehh/wallive-clone/main/wallpapers/four-seasons-tree.tendies"
 }
 ```
 
@@ -34,7 +34,7 @@ App 的“目录”页每次打开都会拉取仓库根目录的 `catalog.json`�
 - `title`：卡片上显示的名字。
 - `tags`：标签数组，分类筛选和搜索都用它。
 - `thumbnail` / `preview` / `package`：上面三个文件的 raw 地址
-  （`https://raw.githubusercontent.com/zyl.../wallive-clone/main/wallpapers/文件名`）。
+  （`https://raw.githubusercontent.com/zylovehh/wallive-clone/main/wallpapers/文件名`）。
 
 ## 3. 换掉示例条目
 
