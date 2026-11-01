@@ -79,12 +79,12 @@ final class AppState: ObservableObject {
     }
 
     /// 安装当前包：本地暂存 → 经配对隧道写盘。返回实际装上的描述符 UUID。
-    func install(host: String) async -> String? {
+    func install(host: String, forceRefresh: Bool = true) async -> String? {
         guard let data = packageData, hasPairingFile else { return nil }
         do {
             let uuid = try await InstallFlow.install(
                 packageData: data, zip: zip,
-                pairingPath: pairingFileURL.path, targetHost: host)
+                pairingPath: pairingFileURL.path, targetHost: host, forceRefresh: forceRefresh)
             installHistory.append(uuid)
             return uuid
         } catch {
