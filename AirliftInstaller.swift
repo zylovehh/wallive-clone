@@ -20,6 +20,37 @@
 import Foundation
 import AirliftFFI
 
+/// 安装过程日志：FFI 回调写来的每一行（任意 Rust 线程调，用锁保护）。
+/// 装完在安装页显示，供定位卡在哪一步。
+final class InstallLog: @unchecked Sendable {
+    static let shared = InstallLog()
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func append(_ line: String) {
+        lock.withLock {
+            lines.append(line)
+            if lines.count > 400 { lines.removeFirst(lines.count - 400) }
+        }
+    }
+
+    func clear() {
+        lock.withLock { lines.removeAll() }
+    }
+
+    /// 最后 n 行（安装页显示用）。
+    func tail(_ n: Int) -> String {
+        lock.withLock { lines.suffix(n).joined(separator: "\n") }
+    }
+}
+
+/// FFI 日志回调：顶层函数，可直接当 C 函数指针传（不捕获任何变量）。
+func airliftLogCallback(_ ctx: UnsafeMutableRawPointer?, _ msg: UnsafePointer<CChar>?) {
+    if let msg {
+        InstallLog.shared.append(String(cString: msg))
+    }
+}
+
 /// 经配对隧道安装描述符：暂存目录 + 配对文件路径 → 实际装上的描述符 UUID。
 public enum AirliftInstaller {
 
@@ -40,6 +71,7 @@ public enum AirliftInstaller {
         pairingPath: String,
         targetHost: String = "10.7.0.1"
     ) async throws -> String {
+        InstallLog.shared.clear()
         // 1. 设目标主机（AirCard 里也是忽略返回值，只当提示）。
         targetHost.withCString { _ = al_set_target_host($0) }
 
@@ -106,6 +138,16 @@ public enum AirliftInstaller {
         return destUUID
     }
 
+    /// 检查配对是否真的能用：设目标主机后，用配对文件找 PosterBoard 容器。
+    /// 只读不写，通就返回容器路径，不通就抛 FFI 原文（状态页“检查配对状态”用）。
+    public static func checkPairing(
+        pairingPath: String,
+        targetHost: String = "10.7.0.1"
+    ) async throws -> String {
+        targetHost.withCString { _ = al_set_target_host($0) }
+        return try await findPosterBoardContainer(pairingPath: pairingPath)
+    }
+
     // MARK: - FFI 小包装（这些调用会阻塞，必须在后台线程跑）
 
     private static func findPosterBoardContainer(pairingPath: String) async throws -> String {
@@ -114,7 +156,7 @@ public enum AirliftInstaller {
             var outError: UnsafeMutablePointer<CChar>? = nil
             let rc = pairingPath.withCString { pairC in
                 "com.apple.PosterBoard".withCString { bundleC in
-                    al_find_app_container(pairC, bundleC, nil, nil, &outContainer, &outError)
+                    al_find_app_container(pairC, bundleC, airliftLogCallback, nil, &outContainer, &outError)
                 }
             }
             if rc == 0, let p = outContainer {
@@ -137,7 +179,7 @@ public enum AirliftInstaller {
                     targetParentDir.withCString { parentC in
                         destName.withCString { destC in
                             al_exploit_inject_folder(
-                                pairC, folderC, parentC, destC, nil, nil, &outError)
+                                pairC, folderC, parentC, destC, airliftLogCallback, nil, &outError)
                         }
                     }
                 }
@@ -157,7 +199,7 @@ public enum AirliftInstaller {
             let rc = pairingPath.withCString { pairC in
                 sourceDir.path.withCString { srcC in
                     targetDir.withCString { tgtC in
-                        al_exploit_write_dir(pairC, srcC, tgtC, nil, nil, &outError)
+                        al_exploit_write_dir(pairC, srcC, tgtC, airliftLogCallback, nil, &outError)
                     }
                 }
             }
@@ -173,7 +215,7 @@ public enum AirliftInstaller {
             DispatchQueue.global(qos: .userInitiated).async {
                 var outError: UnsafeMutablePointer<CChar>? = nil
                 let rc = pairingPath.withCString { pC in
-                    al_device_respring(pC, nil, nil, &outError)
+                    al_device_respring(pC, airliftLogCallback, nil, &outError)
                 }
                 if let p = outError { al_string_free(p) }
                 cont.resume(returning: rc == 0)
