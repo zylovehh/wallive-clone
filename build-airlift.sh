@@ -6,14 +6,26 @@
 # Runner 上没有那个路径，用默认 Xcode 即可。
 set -euo pipefail
 
+# 诊断输出：万一再静默失败，日志里能看到死在哪一步。
+set -x
+pwd
+ls
+
 # 跟 App 目标的最低系统版本保持一致（pbxproj 里是 17.0）。
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
 
 # 让非登录 shell 也能找到 cargo（CI 环境）。
 # shellcheck disable=SC1090
-source "$HOME/.cargo/env" 2>/dev/null || true
+if [ -f "${HOME:-}/.cargo/env" ]; then source "${HOME}/.cargo/env" || true; fi
+export PATH="${HOME:-}/.cargo/bin:$PATH"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# 解压步骤理应已经解出 rust-core/；万一没有，在这里补解一次并报错留痕。
+if [ ! -d "$ROOT/rust-core" ]; then
+  echo "rust-core 目录不存在，尝试现场解压"
+  ls "$ROOT"
+  unzip -o "$ROOT/rust-core.zip"
+fi
 cd "$ROOT/rust-core"
 
 echo "==> 安装真机目标（如果还没有）"
