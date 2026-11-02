@@ -1,6 +1,6 @@
 // VPNManager.swift
 // 内置回环 VPN 的主程序端：管隧道的保存、启动、停止和状态。
-// 扩展包名必须与工程里扩展目标的包名一致，改了包名这里要同步改。
+// 扩展包名跟着主程序包名走（主程序包名 + .WalliveTunnel），重签改了主程序包名也不用再改这里。
 
 import Foundation
 import Combine
@@ -9,7 +9,10 @@ import NetworkExtension
 /// 内置回环 VPN 的主程序端：状态页直接用这个对象显示和开关。
 @MainActor
 final class VPNManager: ObservableObject {
-    static let tunnelBundleID = "com.example.walliveclone.WalliveTunnel"
+    /// 扩展包名 = 主程序包名 + .WalliveTunnel，重签后自动跟上，不写死。
+    static var tunnelBundleID: String {
+        (Bundle.main.bundleIdentifier ?? "com.example.walliveclone") + ".WalliveTunnel"
+    }
     static let tunnelServerAddress = "10.7.0.1"
 
     @Published private(set) var status: NEVPNStatus = .invalid
