@@ -238,7 +238,16 @@ final class CatalogStore: ObservableObject {
         case http(Int)
         var errorDescription: String? {
             switch self {
-            case .http(let code): return "推到仓库失败（状态码 \(code)）"
+            case .http(let code):
+                let hint: String
+                switch code {
+                case 401: hint = "钥匙失效了，去管理员页重新保存一把"
+                case 403: hint = "这把钥匙没有写权限，检查授权范围"
+                case 409, 422: hint = "仓库刚有新改动没同步上，稍等几秒再操作一次"
+                case 404: hint = "仓库里没找到要写的文件"
+                default: hint = "网络或服务暂时不给力"
+                }
+                return "推到仓库失败：\(hint)（状态码 \(code)）"
             }
         }
     }
@@ -305,22 +314,32 @@ final class CatalogStore: ObservableObject {
     }
 
     /// 写（新建或覆盖）仓库里某个文件：内容先转 base64；已有文件要带上它的 sha 才能覆盖。
+    /// 连续操作（删除/置顶连着点）时接口偶尔报 409 版本冲突，自动等一拍重取再推，最多重试两次。
     private func githubPut(path: String, contentBase64: String, message: String, token: String) async throws {
-        var body: [String: Any] = ["message": message, "content": contentBase64]
-        if let sha = try await githubSHA(path: path, token: token) {
-            body["sha"] = sha
+        let baseBody: [String: Any] = ["message": message, "content": contentBase64]
+        var lastStatus = 0
+        for attempt in 0..<3 {
+            var body = baseBody
+            if let sha = try await githubSHA(path: path, token: token) {
+                body["sha"] = sha
+            }
+            let bodyData = try JSONSerialization.data(withJSONObject: body)
+            var request = URLRequest(url: githubContentsURL(path: path))
+            request.httpMethod = "PUT"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = bodyData
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            lastStatus = status
+            if status == 200 || status == 201 { return }
+            // 版本冲突就等一小拍重试；其他错直接抛。
+            guard (status == 409 || status == 422), attempt < 2 else { break }
+            try await Task.sleep(nanoseconds: 900_000_000)
         }
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        var request = URLRequest(url: githubContentsURL(path: path))
-        request.httpMethod = "PUT"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = bodyData
-        let (_, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 || status == 201 else { throw PushError.http(status) }
+        throw PushError.http(lastStatus)
     }
 
     /// id 转安全串：只留字母数字、下划线、横线，其余换成下划线（增加壁纸时用文件名当 id）。
