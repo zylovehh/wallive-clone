@@ -499,6 +499,8 @@ private struct AddWallpaperView: View {
     @State private var thumbItem: PhotosPickerItem?
     @State private var thumbImage: UIImage?
     @State private var thumbData: Data?
+    @State private var videoItem: PhotosPickerItem?
+    @State private var videoData: Data?
     @State private var showingTendiesPicker = false
     @State private var message = ""
     @State private var busy = false
@@ -525,12 +527,17 @@ private struct AddWallpaperView: View {
                         .resizable().scaledToFit().frame(height: 120)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+                PhotosPicker(selection: $videoItem, matching: .videos) {
+                    Text(videoData == nil ? "选预览视频" : "已选预览视频")
+                }
+                .buttonStyle(.bordered)
+                .disabled(busy)
                 if busy { ProgressView() }
                 if !message.isEmpty {
                     Text(message).font(.caption).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("新加的壁纸先不带预览视频，可下载安装。")
+                Text("预览视频可选，不选也能下载安装。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("增加到目录") { Task { await add() } }
                     .buttonStyle(.borderedProminent)
@@ -583,10 +590,16 @@ private struct AddWallpaperView: View {
                 thumbImage = image
                 thumbData = jpeg
             }
+            .task(id: videoItem?.itemIdentifier) {
+                guard let item = videoItem,
+                      let data = try? await item.loadTransferable(type: Data.self)
+                else { return }
+                videoData = data
+            }
         }
     }
 
-    /// 增加流程（顺序固定）：传包 → 传图 → 追加条目并推表。
+    /// 增加流程（顺序固定）：传包 → 传图 → 传视频（可选）→ 追加条目并推表。
     @MainActor
     private func add() async {
         guard let token = accountStore.loadToken() else {
@@ -609,10 +622,16 @@ private struct AddWallpaperView: View {
         do {
             try await store.uploadWallpaperFile(name: "\(id).tendies", data: packageData, token: token)
             try await store.uploadWallpaperFile(name: "\(id)-thumb.jpg", data: imageData, token: token)
+            var previewURL = ""
+            if let videoData {
+                let videoName = "\(id)-preview.\(Self.videoExtension(for: videoItem))"
+                try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token)
+                previewURL = CatalogStore.wallpapersRawBase + videoName
+            }
             let newItem = CatalogItem(
                 id: id, title: title.trimmingCharacters(in: .whitespaces), tags: finalTags,
                 thumbnailURL: CatalogStore.wallpapersRawBase + "\(id)-thumb.jpg",
-                previewURL: "",
+                previewURL: previewURL,
                 packageURL: CatalogStore.wallpapersRawBase + "\(id).tendies",
                 pinned: false, downloads: 0)
             try await store.pushCatalog(store.items + [newItem], token: token)
@@ -620,6 +639,14 @@ private struct AddWallpaperView: View {
         } catch {
             message = "没推上去：\(error.localizedDescription)"
         }
+    }
+
+    /// 预览视频扩展名：按所选视频的格式来，默认 mp4。
+    private static func videoExtension(for item: PhotosPickerItem?) -> String {
+        guard let item = item else { return "mp4" }
+        if item.supportedContentTypes.contains(.mpeg4Movie) { return "mp4" }
+        if item.supportedContentTypes.contains(.quickTimeMovie) { return "mov" }
+        return "mp4"
     }
 }
 
