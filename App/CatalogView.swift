@@ -674,23 +674,22 @@ private struct AddWallpaperView: View {
         } else {
             plain = packageData
         }
-        guard let entries = try? zip.listEntries(in: plain),
-              let info = try? TendiesPackage.inspect(plain, zip: zip)
-        else { return nil }
-        // 优先背景层目录下的图，其次任意 assets 图片。
+        guard let entries = try? zip.listEntries(in: plain) else { return nil }
+        // 资产图片里优先背景层，其次第一张。
         let images = entries.filter {
             $0.contains("/assets/") && [".jpeg", ".jpg", ".png"].contains(($0 as NSString).pathExtension.lowercased())
         }
-        guard let picked = images.first(where: { info.backgroundFile.map { $0.contains($0) } ?? false }) ?? images.first,
+        guard let picked = images.first(where: { $0.contains("Background") }) ?? images.first,
               let data = try? zip.readEntry(picked, in: plain),
               let image = UIImage(data: data)
         else { return nil }
         // 最长边压到 720，控制封面图体积。
         let maxSide: CGFloat = 720
-        let w = image.size.width, h = image.size.height
-        let ratio = min(maxSide / max(w, 1), maxSide / max(h, 1), 1)
-        let scaled = UIGraphicsImageRenderer(size: CGSize(width: w * ratio, height: h * ratio)).image { _ in
-            image.draw(in: CGRect(x: 0, y: 0, width: w * ratio, height: h * ratio))
+        let size = image.size
+        let longest = max(size.width, size.height)
+        let scale = min(1, maxSide / max(longest, 1))
+        let scaled = UIGraphicsImageRenderer(size: CGSize(width: size.width * scale, height: size.height * scale)).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale))
         }
         return scaled.jpegData(compressionQuality: 0.85)
     }
