@@ -1,13 +1,14 @@
 // HelloView.swift
-// 进软件时的 Hello 开场：按用户给的 Hello 预览图重做，不用视频了——
-// 深蓝紫渐变底 + 左上蓝光、右下粉光，铺满全屏；白字 Hello 从左边一路跳跃进场，
-// 落到中间后口号淡入；2 秒计时到点，主界面渐退进登入页（计时在 WalliveCloneApp 里）。
-// 注意：旧 hello_splash.mp4 还在包里，但这里已经不再引用它。
+// 进软件时的 Hello 开场：按用户给的视频重做——
+// 深蓝紫渐变底 + 左上蓝光、右下粉光，铺满全屏（背景不变）；
+// 口号不变（渐变口号 + 白字，压在 Hello 下边）；
+// Hello 改成小写 hello，白字先亮 → 每个字母亮起霓虹色、带光晕、微微转开散开 →
+// 再收回白字，整个动画 3 秒播完，主界面渐退进目录（计时在 WalliveCloneApp 里）。
 
 import SwiftUI
 
 struct HelloView: View {
-    @State private var hopTrigger = false
+    @State private var neon = false
     @State private var sloganOpacity = 0.0
 
     private var sloganGradient: LinearGradient {
@@ -16,15 +17,26 @@ struct HelloView: View {
             startPoint: .leading, endPoint: .trailing)
     }
 
-    /// 跳跃的起点和落点：x 从屏幕外左边到中间，y 原地弹跳。
-    private struct HopValues {
-        var x: CGFloat = 0
-        var y: CGFloat = 0
+    /// 每个字母的霓虹色、散开时的角度和位移（对齐视频里那股劲）。
+    private struct NeonLetter {
+        let char: String
+        let color: Color
+        let angle: Double
+        let dx: CGFloat
+        let dy: CGFloat
     }
+
+    private let letters: [NeonLetter] = [
+        NeonLetter(char: "h", color: .cyan, angle: -8, dx: 0, dy: -6),
+        NeonLetter(char: "e", color: .pink, angle: 6, dx: 0, dy: 4),
+        NeonLetter(char: "l", color: Color(red: 0.5, green: 0.8, blue: 1.0), angle: -4, dx: 0, dy: -2),
+        NeonLetter(char: "l", color: .yellow, angle: 10, dx: 0, dy: 6),
+        NeonLetter(char: "o", color: Color(red: 1.0, green: 0.3, blue: 0.7), angle: -6, dx: 0, dy: -4),
+    ]
 
     var body: some View {
         ZStack {
-            // 铺满全屏的底：深蓝紫渐变 + 两团光晕（左上蓝、右下粉），对齐预览图。
+            // 铺满全屏的底：深蓝紫渐变 + 两团光晕（左上蓝、右下粉），跟之前一样。
             LinearGradient(
                 colors: [Color(red: 0.08, green: 0.08, blue: 0.28),
                          Color(red: 0.04, green: 0.04, blue: 0.16)],
@@ -44,28 +56,18 @@ struct HelloView: View {
 
             VStack(spacing: 10) {
                 Spacer()
-                // Hello：从左边跳跃进场，1.4 秒落到中间；弹跳幅度递减。
-                Text("Hello")
-                    .font(.system(size: 88, weight: .bold))
-                    .foregroundStyle(.white)
-                    .keyframeAnimator(
-                        initialValue: HopValues(x: -UIScreen.main.bounds.width, y: 0),
-                        trigger: hopTrigger
-                    ) { content, values in
-                        content.offset(x: values.x, y: values.y)
-                    } keyframes: { _ in
-                        KeyframeTrack(\.x) {
-                            LinearKeyframe(0, duration: 1.4)
-                        }
-                        KeyframeTrack(\.y) {
-                            LinearKeyframe(-45, duration: 0.25)
-                            LinearKeyframe(0, duration: 0.25)
-                            LinearKeyframe(-30, duration: 0.25)
-                            LinearKeyframe(0, duration: 0.25)
-                            LinearKeyframe(-15, duration: 0.2)
-                            LinearKeyframe(0, duration: 0.2)
-                        }
+                // hello：白字 → 霓虹散开 → 收回白字。
+                HStack(spacing: 2) {
+                    ForEach(letters.indices, id: \.self) { idx in
+                        let letter = letters[idx]
+                        Text(letter.char)
+                            .font(.system(size: 88, weight: .bold))
+                            .foregroundStyle(neon ? letter.color : .white)
+                            .rotationEffect(.degrees(neon ? letter.angle : 0))
+                            .offset(x: neon ? letter.dx : 0, y: neon ? letter.dy : 0)
+                            .shadow(color: neon ? letter.color : .clear, radius: neon ? 18 : 0)
                     }
+                }
                 VStack(spacing: 6) {
                     Text("换一张壁纸，换一个心情")
                         .font(.title3).bold()
@@ -79,8 +81,13 @@ struct HelloView: View {
             }
         }
         .onAppear {
-            hopTrigger = true
-            // Hello 落稳后再把口号淡入，2 秒内全部就位。
+            // 0.5 秒后亮起霓虹散开，1.8 秒后收回白字，2.4 秒前回到干净白字。
+            withAnimation(.easeInOut(duration: 0.6).delay(0.5)) {
+                neon = true
+            }
+            withAnimation(.easeInOut(duration: 0.6).delay(1.8)) {
+                neon = false
+            }
             withAnimation(.easeIn(duration: 0.5).delay(1.2)) {
                 sloganOpacity = 1
             }

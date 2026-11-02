@@ -36,10 +36,10 @@ func ALGetGrappaToken(
     _ errLen: Int
 ) -> Int32
 
-/// 进软件流程：Hello 动画 → 渐退进登入页 → 登入成功进主界面。
-/// 已经登入过的账号，Hello 动画后直接进主界面，不用再登一次。
+/// 进软件流程：Hello 动画 → 直接进主界面（别人不用登入）。
+/// 登入入口在目录页右上角人头按钮，只给管理员（改置顶、增删）用。
 private enum AppPhase {
-    case hello, login, main
+    case hello, main
 }
 
 struct ContentView: View {
@@ -53,24 +53,15 @@ struct ContentView: View {
             case .hello:
                 HelloView()
                     .transition(.opacity)
-            case .login:
-                AccountView(store: accountStore)
-                    .transition(.opacity)
             case .main:
                 mainTabs
             }
         }
         .task {
-            // Hello 动画 2 秒，播完渐退：已登入直接进主界面，没登入进登入页。
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            // Hello 动画 3 秒，播完渐退直接进主界面（别人不用登入）。
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             withAnimation(.easeOut(duration: 0.5)) {
-                phase = accountStore.currentUser != nil ? .main : .login
-            }
-        }
-        .onChange(of: accountStore.currentUser) { _, newUser in
-            // 登入页里登入成功，自动进主界面。
-            if newUser != nil, phase == .login {
-                withAnimation(.easeOut(duration: 0.5)) { phase = .main }
+                phase = .main
             }
         }
     }
@@ -94,5 +85,6 @@ struct ContentView: View {
                 .tag(4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environmentObject(accountStore)
     }
 }

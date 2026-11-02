@@ -40,6 +40,18 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         downloads = try c.decodeIfPresent(Int.self, forKey: .downloads) ?? 0
     }
+
+    /// 管理员改目录时直接拼一张新卡（改置顶、增加都用这个，不走解码）。
+    init(id: String, title: String, tags: [String], thumbnailURL: String, previewURL: String, packageURL: String, pinned: Bool, downloads: Int) {
+        self.id = id
+        self.title = title
+        self.tags = tags
+        self.thumbnailURL = thumbnailURL
+        self.previewURL = previewURL
+        self.packageURL = packageURL
+        self.pinned = pinned
+        self.downloads = downloads
+    }
 }
 
 /// catalog.json 的顶层结构。
@@ -72,9 +84,16 @@ struct DownloadedItem: Identifiable, Codable, Equatable {
 /// 已下载记录存在 UserDefaults，文件存在沙盒 Documents/downloaded-wallpapers/。
 @MainActor
 final class CatalogStore: ObservableObject {
-    /// 目录表地址（公开仓库 raw 地址，改仓库名或分支要同步改这里）。
+    /// 目录表地址（公开目录仓库 raw 地址，改仓库名或分支要同步改这里）。
     static let catalogURLString =
-        "https://raw.githubusercontent.com/zylovehh/wallive-clone/main/catalog.json"
+        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main/catalog.json"
+
+    /// 目录仓库（公开目录仓库，管理员改置顶、增删时推到这里）。
+    static let catalogRepo = "zylovehh/wallive-catalog"
+    static let catalogPath = "catalog.json"
+    static let wallpapersDir = "wallpapers"
+    static let wallpapersRawBase =
+        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main/wallpapers/"
 
     @Published private(set) var items: [CatalogItem] = []
     @Published private(set) var downloaded: [DownloadedItem] = []
@@ -121,17 +140,7 @@ final class CatalogStore: ObservableObject {
                 throw CatalogError.notFound
             }
             let doc = try JSONDecoder().decode(CatalogDocument.self, from: data)
-            // 排序：置顶在前（置顶内保持目录表顺序），其余按下载数从多到少，
-            // 下载数相同保持目录表顺序（Swift sorted 是稳定排序，序号小的在前）。
-            items = doc.items.enumerated().sorted { a, b in
-                if a.element.pinned != b.element.pinned {
-                    return a.element.pinned
-                }
-                if a.element.downloads != b.element.downloads {
-                    return a.element.downloads > b.element.downloads
-                }
-                return a.offset < b.offset
-            }.map { $0.element }
+            items = Self.sortedItems(doc.items)
             errorMessage = ""
         } catch {
             items = []
@@ -192,11 +201,105 @@ final class CatalogStore: ObservableObject {
         }
     }
 
+    /// 排序：置顶在前（置顶内保持目录表顺序），其余按下载数从多到少，
+    /// 下载数相同保持目录表顺序（序号 tiebreak 保证稳定）。
+    static func sortedItems(_ input: [CatalogItem]) -> [CatalogItem] {
+        input.enumerated().sorted { a, b in
+            if a.element.pinned != b.element.pinned {
+                return a.element.pinned
+            }
+            if a.element.downloads != b.element.downloads {
+                return a.element.downloads > b.element.downloads
+            }
+            return a.offset < b.offset
+        }.map { $0.element }
+    }
+
+    // MARK: - 管理员改目录（推到 GitHub 仓库）
+
+    /// 目录推送失败原因（带中文说明）。
+    enum PushError: LocalizedError {
+        case http(Int)
+        var errorDescription: String? {
+            switch self {
+            case .http(let code): return "推到仓库失败（状态码 \(code)）"
+            }
+        }
+    }
+
+    /// 把一整份目录表推到仓库（改置顶、增删都走这里），成功后刷新本机目录顺序。
+    func pushCatalog(_ newItems: [CatalogItem], token: String) async throws {
+        let dicts: [[String: Any]] = newItems.map { item in
+            ["id": item.id, "title": item.title, "tags": item.tags,
+             "thumbnail": item.thumbnailURL, "preview": item.previewURL,
+             "package": item.packageURL, "pinned": item.pinned, "downloads": item.downloads]
+        }
+        let data = try JSONSerialization.data(
+            withJSONObject: ["items": dicts], options: [.withoutEscapingSlashes])
+        try await githubPut(
+            path: Self.catalogPath, contentBase64: data.base64EncodedString(),
+            message: "Update catalog via app", token: token)
+        items = Self.sortedItems(newItems)
+        errorMessage = ""
+    }
+
+    /// 上传一个壁纸文件到仓库 wallpapers/ 目录（已有同名就覆盖，重试不报错）。
+    func uploadWallpaperFile(name: String, data: Data, token: String) async throws {
+        try await githubPut(
+            path: "\(Self.wallpapersDir)/\(name)", contentBase64: data.base64EncodedString(),
+            message: "Upload \(name) via app", token: token)
+    }
+
+    /// GitHub contents 接口地址。
+    private func githubContentsURL(path: String) -> URL {
+        URL(string: "https://api.github.com/repos/\(Self.catalogRepo)/contents/\(path)")!
+    }
+
+    /// 读仓库里某个文件的当前版本标识（sha），文件不存在返回 nil（不是错）。
+    private func githubSHA(path: String, token: String) async throws -> String? {
+        var request = URLRequest(url: githubContentsURL(path: path))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 404 { return nil }
+        guard status == 200 else { throw PushError.http(status) }
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sha = dict["sha"] as? String
+        else { throw PushError.http(status) }
+        return sha
+    }
+
+    /// 写（新建或覆盖）仓库里某个文件：内容先转 base64；已有文件要带上它的 sha 才能覆盖。
+    private func githubPut(path: String, contentBase64: String, message: String, token: String) async throws {
+        var body: [String: Any] = ["message": message, "content": contentBase64]
+        if let sha = try await githubSHA(path: path, token: token) {
+            body["sha"] = sha
+        }
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        var request = URLRequest(url: githubContentsURL(path: path))
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = bodyData
+        let (_, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 || status == 201 else { throw PushError.http(status) }
+    }
+
+    /// id 转安全串：只留字母数字、下划线、横线，其余换成下划线（增加壁纸时用文件名当 id）。
+    static func safeID(from name: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let cleaned = name.unicodeScalars.map { allowed.contains($0) ? String($0) : "_" }.joined()
+        return cleaned.isEmpty ? "wallpaper" : cleaned
+    }
+
     /// id 转安全文件名：只留字母数字、下划线、横线，其余换成下划线。
     private func safeFileName(for id: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        let cleaned = id.unicodeScalars.map { allowed.contains($0) ? String($0) : "_" }.joined()
-        return (cleaned.isEmpty ? "wallpaper" : cleaned) + ".tendies"
+        Self.safeID(from: id) + ".tendies"
     }
 }
 
