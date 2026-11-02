@@ -518,7 +518,7 @@ private struct AddWallpaperView: View {
                 .buttonStyle(.bordered)
                 .disabled(busy)
                 PhotosPicker(selection: $thumbItem, matching: .images) {
-                    Text(thumbImage == nil ? "选缩略图" : "已选缩略图")
+                    Text(thumbImage == nil ? "选缩略图（可不选）" : "已选缩略图")
                 }
                 .buttonStyle(.bordered)
                 .disabled(busy)
@@ -537,12 +537,12 @@ private struct AddWallpaperView: View {
                     Text(message).font(.caption).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("预览视频可选，不选也能下载安装。")
+                Text("缩略图和预览视频都可选：缩略图不选会用包里的图自动生成；预览视频不选也能下载安装。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("增加到目录") { Task { await add() } }
                     .buttonStyle(.borderedProminent)
                     .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty
-                              || tendiesData == nil || thumbData == nil)
+                              || tendiesData == nil)
                 Spacer()
             }
             .padding()
@@ -561,22 +561,27 @@ private struct AddWallpaperView: View {
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
-                    guard url.pathExtension.lowercased() == "tendies" else {
-                        message = "只接受 .tendies 文件，重新选一次。"
-                        return
-                    }
                     guard url.startAccessingSecurityScopedResource() else {
                         message = "没读到文件，重新选一次。"
                         return
                     }
                     defer { url.stopAccessingSecurityScopedResource() }
-                    if let data = try? Data(contentsOf: url) {
-                        tendiesName = url.deletingPathExtension().lastPathComponent
-                        tendiesData = data
-                        message = ""
-                    } else {
+                    guard let data = try? Data(contentsOf: url) else {
                         message = "没读到文件，重新选一次。"
+                        return
                     }
+                    // 后缀不限死：.tendies 直接收；其他后缀按内容认（WALLIVE1 魔数或标准 zip 都算）。
+                    let looksLikeZip = data.count > 4 && data[data.startIndex] == 0x50 && data[data.startIndex + 1] == 0x4B
+                    let looksLikeTendies = url.pathExtension.lowercased() == "tendies"
+                        || Wallive1Crypto.isWallive1(data)
+                        || looksLikeZip
+                    guard looksLikeTendies else {
+                        message = "这个文件认不出是壁纸包，重新选一次。"
+                        return
+                    }
+                    tendiesName = url.deletingPathExtension().lastPathComponent
+                    tendiesData = data
+                    message = ""
                 case .failure:
                     message = "没读到文件，重新选一次。"
                 }
@@ -606,7 +611,16 @@ private struct AddWallpaperView: View {
             message = "先在管理员页保存 GitHub 钥匙。"
             return
         }
-        guard let packageData = tendiesData, let imageData = thumbData else { return }
+        guard let packageData = tendiesData else { return }
+        // 缩略图没选时，用包里的背景图自动生成一张，别卡在必填上。
+        var thumbToUpload = thumbData
+        if thumbToUpload == nil {
+            thumbToUpload = Self.autoThumbnail(from: packageData)
+        }
+        guard let imageData = thumbToUpload else {
+            message = "缩略图没生成，手动选一张图再试。"
+            return
+        }
         let id = CatalogStore.safeID(from: tendiesName)
         guard !store.items.contains(where: { $0.id == id }) else {
             message = "已有同名壁纸，换个文件名。"
@@ -647,6 +661,38 @@ private struct AddWallpaperView: View {
         if item.supportedContentTypes.contains(.mpeg4Movie) { return "mp4" }
         if item.supportedContentTypes.contains(.quickTimeMovie) { return "mov" }
         return "mp4"
+    }
+
+    /// 没选缩略图时的兜底：从包里挑背景层的图自动压一张。
+    private static func autoThumbnail(from packageData: Data) -> Data? {
+        let zip = ZipFoundationAdapter()
+        // 包可能是 WALLIVE1 加密包，先还原成明文 zip 再翻资产。
+        let plain: Data
+        if Wallive1Crypto.isWallive1(packageData) {
+            guard let decrypted = try? Wallive1Crypto.decrypt(packageData) else { return nil }
+            plain = decrypted
+        } else {
+            plain = packageData
+        }
+        guard let entries = try? zip.listEntries(in: plain),
+              let info = try? TendiesPackage.inspect(plain, zip: zip)
+        else { return nil }
+        // 优先背景层目录下的图，其次任意 assets 图片。
+        let images = entries.filter {
+            $0.contains("/assets/") && [".jpeg", ".jpg", ".png"].contains(($0 as NSString).pathExtension.lowercased())
+        }
+        guard let picked = images.first(where: { info.backgroundFile.map { $0.contains($0) } ?? false }) ?? images.first,
+              let data = try? zip.readEntry(picked, in: plain),
+              let image = UIImage(data: data)
+        else { return nil }
+        // 最长边压到 720，控制封面图体积。
+        let maxSide: CGFloat = 720
+        let w = image.size.width, h = image.size.height
+        let ratio = min(maxSide / max(w, 1), maxSide / max(h, 1), 1)
+        let scaled = UIGraphicsImageRenderer(size: CGSize(width: w * ratio, height: h * ratio)).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: w * ratio, height: h * ratio))
+        }
+        return scaled.jpegData(compressionQuality: 0.85)
     }
 }
 
