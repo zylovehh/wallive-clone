@@ -7,6 +7,7 @@ import SwiftUI
 
 struct DepthView: View {
     @EnvironmentObject private var state: AppState
+    @Environment(\.openURL) private var openURL
     @State private var depthData: Data?
     @State private var depthInfo: TendiesPackageInfo?
     @State private var shareURL: URL?
@@ -45,6 +46,18 @@ struct DepthView: View {
                     Text(message).foregroundStyle(.red).font(.caption)
                 }
                 Spacer()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("QQ 交流群").font(.headline)
+                    HStack {
+                        Button("加入 QQ 群") {
+                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                                openURL(url)
+                            }
+                        }.buttonStyle(.bordered)
+                        Text("群号：153226955").font(.caption).textSelection(.enabled)
+                    }
+                    Text("点按钮直接跳到 QQ 群；没装 QQ 时复制群号手动搜。").font(.caption).foregroundStyle(.secondary)
+                }
             }
             .padding()
             .navigationTitle("深景")

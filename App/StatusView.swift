@@ -20,118 +20,123 @@ struct StatusView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("内置 VPN").font(.headline)
-                HStack {
-                    Text(vpn.statusText).font(.caption)
-                    Spacer()
-                    if vpn.isConnected {
-                        Button("关闭内置 VPN") { vpn.stop() }.buttonStyle(.bordered)
-                    } else {
-                        Button("开启内置 VPN") { Task { await vpn.start() } }.buttonStyle(.bordered)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("内置 VPN").font(.headline)
+                    HStack {
+                        Text(vpn.statusText).font(.caption)
+                        Spacer()
+                        if vpn.isConnected {
+                            Button("关闭内置 VPN") { vpn.stop() }.buttonStyle(.bordered)
+                        } else {
+                            Button("开启内置 VPN") { Task { await vpn.start() } }.buttonStyle(.bordered)
+                        }
                     }
-                }
-                if !vpn.lastError.isEmpty {
-                    Text(vpn.lastError).font(.caption).foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                Text("第一次开启会弹系统提示，点“允许”。内置 VPN 只连本机（10.7.0.1），流量不出手机。开起来后，下面的检查和配对就能直接用，不用再装 LocalDevVPN。")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-
-                Text("回环 VPN 连通").font(.headline)
-                HStack {
-                    TextField("管家地址", text: $host).textFieldStyle(.roundedBorder)
-                    TextField("端口", text: $portText).textFieldStyle(.roundedBorder)
-                        .keyboardType(.numberPad).frame(width: 90)
-                    Button("检查") {
-                        Task { await check() }
-                    }.buttonStyle(.bordered)
-                }
-                if checking { ProgressView() }
-                if !vpnResult.isEmpty { Text(vpnResult).font(.caption) }
-
-                Text("配对记录").font(.headline)
-                Text(state.pairingDescription).font(.caption)
-                HStack {
-                    Button("导入配对记录文件") { showPairingPicker = true }
-                    Button("删除") { state.removePairingFile() }
-                }.buttonStyle(.bordered)
-                HStack {
-                    Button("检查配对状态") {
-                        Task { await checkPairing() }
-                    }.disabled(pairingChecking)
-                    if pairingChecking { ProgressView() }
-                }.buttonStyle(.bordered)
-                if !pairingCheckResult.isEmpty {
-                    Text(pairingCheckResult).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                Button("下载 LocalDevVPN") {
-                    if let url = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044") {
-                        openURL(url)
+                    if !vpn.lastError.isEmpty {
+                        Text(vpn.lastError).font(.caption).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
-                }.buttonStyle(.bordered)
-                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”，等界面出现 6 位 PIN 后，去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                HStack {
-                    Button("生成配对文件") {
-                        Task { await generate() }
-                    }.disabled(generating)
-                    if generating { ProgressView() }
-                    if pairingHost.running {
-                        Button("取消") { pairingHost.softCancel() }
-                    }
-                }.buttonStyle(.bordered)
-                if let pin = pairingHost.pairingPIN {
-                    Text("配对 PIN：\(pin)")
-                        .font(.title2.bold())
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                    Text("去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输入上面这串数字。")
+                    Text("第一次开启会弹系统提示，点“允许”。内置 VPN 只连本机（10.7.0.1），流量不出手机。开起来后，下面的检查和配对就能直接用，不用再装 LocalDevVPN。")
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
-                }
-                if !pairingHost.pairingStatus.isEmpty && pairingHost.pairingStatus != "未开始" {
-                    Text(pairingHost.pairingStatus).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                if !generateResult.isEmpty {
-                    Text(generateResult).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
 
-                Text("已安装（本机记录）").font(.headline)
-                if state.installHistory.isEmpty {
-                    Text("还没有成功安装的记录。").foregroundStyle(.secondary).font(.caption)
-                } else {
-                    ForEach(state.installHistory, id: \.self) { uuid in
-                        Text(uuid).font(.caption)
+                    Text("回环 VPN 连通").font(.headline)
+                    HStack {
+                        TextField("管家地址", text: $host).textFieldStyle(.roundedBorder)
+                        TextField("端口", text: $portText).textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad).frame(width: 90)
+                        Button("检查") {
+                            Task { await check() }
+                        }.buttonStyle(.bordered)
                     }
-                }
+                    if checking { ProgressView() }
+                    if !vpnResult.isEmpty {
+                        Text(vpnResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
-                Text("说明：本 App 不含广告、不含会员与解锁逻辑；配对记录文件只存在 App 沙盒内，不会发给任何人。")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("状态")
-            .onAppear { state.refreshPairingStatus() }
-            .sheet(isPresented: $showPairingPicker) {
-                DocumentPicker(contentTypes: [.propertyList]) { url in
-                    showPairingPicker = false
-                    Task { @MainActor in
-                        state.importPairingFile(from: url)
+                    Text("配对记录").font(.headline)
+                    Text(state.pairingDescription).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("导入配对记录文件") { showPairingPicker = true }
+                        Button("删除") { state.removePairingFile() }
+                    }.buttonStyle(.bordered)
+                    HStack {
+                        Button("检查配对状态") {
+                            Task { await checkPairing() }
+                        }.disabled(pairingChecking)
+                        if pairingChecking { ProgressView() }
+                    }.buttonStyle(.bordered)
+                    if !pairingCheckResult.isEmpty {
+                        Text(pairingCheckResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    Button("下载 LocalDevVPN") {
+                        if let url = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044") {
+                            openURL(url)
+                        }
+                    }.buttonStyle(.bordered)
+                    Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”，等界面出现 6 位 PIN 后，去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    HStack {
+                        Button("生成配对文件") {
+                            Task { await generate() }
+                        }.disabled(generating)
+                        if generating { ProgressView() }
+                        if pairingHost.running {
+                            Button("取消") { pairingHost.softCancel() }
+                        }
+                    }.buttonStyle(.bordered)
+                    if let pin = pairingHost.pairingPIN {
+                        Text("配对 PIN：\(pin)")
+                            .font(.title2.bold())
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        Text("去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输入上面这串数字。")
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if !pairingHost.pairingStatus.isEmpty && pairingHost.pairingStatus != "未开始" {
+                        Text(pairingHost.pairingStatus).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if !generateResult.isEmpty {
+                        Text(generateResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+
+                    Text("已安装（本机记录）").font(.headline)
+                    if state.installHistory.isEmpty {
+                        Text("还没有成功安装的记录。").foregroundStyle(.secondary).font(.caption)
+                    } else {
+                        ForEach(state.installHistory, id: \.self) { uuid in
+                            Text(uuid).font(.caption)
+                        }
+                    }
+
+                    Text("说明：本 App 不含广告、不含会员与解锁逻辑；配对记录文件只存在 App 沙盒内，不会发给任何人。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .padding()
+                .navigationTitle("状态")
+                .onAppear { state.refreshPairingStatus() }
+                .sheet(isPresented: $showPairingPicker) {
+                    DocumentPicker(contentTypes: [.propertyList]) { url in
+                        showPairingPicker = false
+                        Task { @MainActor in
+                            state.importPairingFile(from: url)
+                        }
                     }
                 }
             }
