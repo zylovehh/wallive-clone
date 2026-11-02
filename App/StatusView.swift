@@ -7,6 +7,7 @@ struct StatusView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.openURL) private var openURL
     @ObservedObject private var pairingHost = PairingHost.shared
+    @StateObject private var vpn = VPNManager()
     @State private var showPairingPicker = false
     @State private var host = "10.7.0.1"
     @State private var portText = "62078"
@@ -20,6 +21,26 @@ struct StatusView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
+                Text("内置 VPN").font(.headline)
+                HStack {
+                    Text(vpn.statusText).font(.caption)
+                    Spacer()
+                    if vpn.isConnected {
+                        Button("关闭内置 VPN") { vpn.stop() }.buttonStyle(.bordered)
+                    } else {
+                        Button("开启内置 VPN") { Task { await vpn.start() } }.buttonStyle(.bordered)
+                    }
+                }
+                if !vpn.lastError.isEmpty {
+                    Text(vpn.lastError).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Text("第一次开启会弹系统提示，点“允许”。内置 VPN 只连本机（10.7.0.1），流量不出手机。开起来后，下面的检查和配对就能直接用，不用再装 LocalDevVPN。")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+
                 Text("回环 VPN 连通").font(.headline)
                 HStack {
                     TextField("管家地址", text: $host).textFieldStyle(.roundedBorder)
@@ -136,7 +157,7 @@ struct StatusView: View {
         let port = UInt16(portText) ?? 62078
         let vpnOK = await state.checkVPN(host: host, port: port)
         guard vpnOK else {
-            generateResult = "没连上回环 VPN：请先在设置里连上 LocalDevVPN，再点生成。"
+            generateResult = "没连上回环 VPN：请先在上面开启内置 VPN，或连上 LocalDevVPN，再点生成。"
             return
         }
         generateResult = "正在启动本机配对…随后界面会出现 6 位 PIN。"
