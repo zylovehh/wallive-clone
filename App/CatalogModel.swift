@@ -1,7 +1,9 @@
 // CatalogModel.swift
 // 目录数据：一条壁纸的元数据、目录拉取、已下载管理。
-// 目录表 catalog.json 放在仓库根目录，App 打开时从 raw 地址拉取；
-// 拉不到就显示空状态，不崩。壁纸包、预览视频、缩略图放仓库 wallpapers/ 目录。
+// 目录表 catalog.json 放在仓库根目录，App 打开时按分发线路顺序拉取
+// （jsDelivr Fastly → jsDelivr Gcore → 仓库 raw 兜底），国内访问走前两条快线；
+// 全部失败就显示空状态，不崩。壁纸包、预览视频、缩略图放仓库 wallpapers/ 目录。
+// 管理端推完目录/传完壁纸后，自动清一下 CDN 缓存，用户端马上能看到新内容。
 
 import Foundation
 
@@ -84,16 +86,24 @@ struct DownloadedItem: Identifiable, Codable, Equatable {
 /// 已下载记录存在 UserDefaults，文件存在沙盒 Documents/downloaded-wallpapers/。
 @MainActor
 final class CatalogStore: ObservableObject {
-    /// 目录表地址（公开目录仓库 raw 地址，改仓库名或分支要同步改这里）。
-    static let catalogURLString =
-        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main/catalog.json"
+    /// 目录/壁纸分发线路，按顺序尝试：jsDelivr Fastly（国内快线）→
+    /// jsDelivr Gcore（备胎）→ 仓库 raw 地址（兜底，前面全挂才用它）。
+    /// 改仓库名或分支要同步改这里。
+    static let catalogHosts = [
+        "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
+        "https://gcore.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
+        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
+    ]
+
+    /// 目录表地址（主线路；实际拉取在 fetch 里按 catalogHosts 顺序尝试）。
+    static let catalogURLString = catalogHosts[0] + "/" + catalogPath
 
     /// 目录仓库（公开目录仓库，管理员改置顶、增删时推到这里）。
     static let catalogRepo = "zylovehh/wallive-catalog"
     static let catalogPath = "catalog.json"
     static let wallpapersDir = "wallpapers"
-    static let wallpapersRawBase =
-        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main/wallpapers/"
+    /// 新壁纸写进目录表的地址前缀（与主线路一致；下载实际按目录表里的地址走）。
+    static let wallpapersRawBase = catalogHosts[0] + "/wallpapers/"
 
     @Published private(set) var items: [CatalogItem] = []
     @Published private(set) var downloaded: [DownloadedItem] = []
@@ -129,23 +139,29 @@ final class CatalogStore: ObservableObject {
         downloadedDirectory.appendingPathComponent(record.fileName)
     }
 
-    /// 拉目录表：失败就留空 + 报错文案，绝不崩。
+    /// 拉目录表：按线路顺序尝试（Fastly → Gcore → 仓库 raw），
+    /// 第一条通的生效；全失败就留空 + 报错文案，绝不崩。
     func fetch() async {
-        guard let url = URL(string: Self.catalogURLString) else { return }
         loading = true
         defer { loading = false }
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw CatalogError.notFound
+        var lastError: Error?
+        for host in Self.catalogHosts {
+            guard let url = URL(string: host + "/" + Self.catalogPath) else { continue }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw CatalogError.notFound
+                }
+                let doc = try JSONDecoder().decode(CatalogDocument.self, from: data)
+                items = Self.sortedItems(doc.items)
+                errorMessage = ""
+                return
+            } catch {
+                lastError = error
             }
-            let doc = try JSONDecoder().decode(CatalogDocument.self, from: data)
-            items = Self.sortedItems(doc.items)
-            errorMessage = ""
-        } catch {
-            items = []
-            errorMessage = "目录没拉到：\(error.localizedDescription)"
         }
+        items = []
+        errorMessage = "目录没拉到：\(lastError?.localizedDescription ?? "所有线路都不可用")"
     }
 
     /// 下载一张壁纸：存到沙盒并记入已下载，成功返回包数据（供安装页直接用）。
@@ -241,6 +257,8 @@ final class CatalogStore: ObservableObject {
             message: "Update catalog via app", token: token)
         items = Self.sortedItems(newItems)
         errorMessage = ""
+        // 推完顺手清 CDN 缓存，用户端马上能看到新目录（失败不影响主流程）。
+        await purgeCDNCache(paths: [Self.catalogPath])
     }
 
     /// 上传一个壁纸文件到仓库 wallpapers/ 目录（已有同名就覆盖，重试不报错）。
@@ -248,6 +266,21 @@ final class CatalogStore: ObservableObject {
         try await githubPut(
             path: "\(Self.wallpapersDir)/\(name)", contentBase64: data.base64EncodedString(),
             message: "Upload \(name) via app", token: token)
+        // 清掉该文件的 CDN 缓存（目录本身的缓存由随后的 pushCatalog 统一清）。
+        await purgeCDNCache(paths: ["\(Self.wallpapersDir)/\(name)"])
+    }
+
+    /// 让 CDN 缓存失效（best effort）：逐条请求 purge 接口，失败静默忽略，
+    /// 不影响推目录主流程。下次用户拉取时 CDN 会回源拿最新内容。
+    private func purgeCDNCache(paths: [String]) async {
+        for path in paths {
+            guard let url = URL(string:
+                "https://purge.jsdelivr.net/gh/\(Self.catalogRepo)@main/\(path)")
+            else { continue }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 10
+            _ = try? await URLSession.shared.data(for: request)
+        }
     }
 
     /// GitHub contents 接口地址。
