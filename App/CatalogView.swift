@@ -553,19 +553,10 @@ private struct AddWallpaperView: View {
                     Button("取消") { dismiss() }
                 }
             }
-            .fileImporter(
-                isPresented: $showingTendiesPicker,
-                allowedContentTypes: [.data],
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first else { return }
-                    guard url.startAccessingSecurityScopedResource() else {
-                        message = "没读到文件，重新选一次。"
-                        return
-                    }
-                    defer { url.stopAccessingSecurityScopedResource() }
+            // 不用 SwiftUI fileImporter：部分系统版本上它会把自定义后缀整排置灰点不动。
+            // 改用 UIDocumentPicker（asCopy 取副本，免安全域处理），public.item 收一切文件。
+            .sheet(isPresented: $showingTendiesPicker) {
+                DocumentPicker(contentTypes: [.item]) { url in
                     guard let data = try? Data(contentsOf: url) else {
                         message = "没读到文件，重新选一次。"
                         return
@@ -582,8 +573,6 @@ private struct AddWallpaperView: View {
                     tendiesName = url.deletingPathExtension().lastPathComponent
                     tendiesData = data
                     message = ""
-                case .failure:
-                    message = "没读到文件，重新选一次。"
                 }
             }
             .task(id: thumbItem?.itemIdentifier) {
