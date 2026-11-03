@@ -1,6 +1,6 @@
 // DepthView.swift
 // 深景包制作：给标准包加渲染配置开关 + Clownfish 前缀（装机验证过的配方），
-// 生成后可分享、可设为当前包再去安装。
+// 生成后可分享、可设为当前包再去安装，也能直接在本页安装。
 
 import Foundation
 import SwiftUI
@@ -15,6 +15,8 @@ struct DepthView: View {
     @State private var depthInfo: TendiesPackageInfo?
     @State private var shareURL: URL?
     @State private var message = ""
+    @State private var installing = false
+    @State private var installMessage = ""
 
     var body: some View {
         NavigationStack {
@@ -39,10 +41,20 @@ struct DepthView: View {
                             Button("设为当前包并去安装") {
                                 if let data = depthData {
                                     state.setPackage(data)
-                                    state.selectedTab = 1
+                                    state.selectedTab = 2
                                 }
                             }
                         }.buttonStyle(.bordered)
+                        Button("安装壁纸") {
+                            Task { await runDepthInstall() }
+                        }.buttonStyle(.borderedProminent)
+                        .disabled(installing)
+                        if installing {
+                            ProgressView("正在安装…")
+                        }
+                        if !installMessage.isEmpty {
+                            Text(installMessage).font(.caption)
+                        }
                     }
                 }
                 if !message.isEmpty {
@@ -79,6 +91,26 @@ struct DepthView: View {
             message = ""
         } catch {
             message = "生成失败：\(error.localizedDescription)"
+        }
+    }
+
+    // 深景页直接安装：先把刚生成的深景包设为当前包，再装，装的就是深景包不是原包。
+    // 装完显示结果；没生成、没配对、VPN 没连时只显示提示，不会没反应。
+    private func runDepthInstall() async {
+        guard let data = depthData else {
+            installMessage = "先点“生成深景包”，生成好了再装。"
+            return
+        }
+        installing = true
+        installMessage = ""
+        defer { installing = false }
+        state.setPackage(data)
+        if let uuid = await state.install(host: "10.7.0.1") {
+            installMessage = "安装完成，描述符：\(uuid)。去锁屏看看，换上去了就是成了。"
+        } else if !state.statusMessage.isEmpty {
+            installMessage = state.statusMessage
+        } else {
+            installMessage = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
         }
     }
 }
