@@ -146,9 +146,14 @@ final class CatalogStore: ObservableObject {
         defer { loading = false }
         var lastError: Error?
         for host in Self.catalogHosts {
-            guard let url = URL(string: host + "/" + Self.catalogPath) else { continue }
+            guard var components = URLComponents(string: host + "/" + Self.catalogPath) else { continue }
+            // 时间戳参数：让运营商/CDN 中间缓存无法命中旧目录（部分线路缓存宽限长达 7 天）。
+            components.queryItems = [URLQueryItem(name: "ts", value: String(Int(Date().timeIntervalSince1970)))]
+            guard let url = components.url else { continue }
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
+                var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+                request.timeoutInterval = 15
+                let (data, response) = try await URLSession.shared.data(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     throw CatalogError.notFound
                 }
