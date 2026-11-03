@@ -655,14 +655,22 @@ private struct AddWallpaperView: View {
             }
             .task(id: thumbItem?.itemIdentifier) {
                 guard let item = thumbItem else { return }
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   let image = UIImage(data: data),
-                   let jpeg = image.jpegData(compressionQuality: 0.85) {
-                    thumbImage = image
-                    thumbData = jpeg
-                } else {
+                do {
+                    let data = try await Self.loadImageData(from: item)
+                    if let image = UIImage(data: data),
+                       let jpeg = image.jpegData(compressionQuality: 0.85) {
+                        thumbImage = image
+                        thumbData = jpeg
+                    } else {
+                        thumbItem = nil
+                        message = "这张图没读到，重新选一次。"
+                    }
+                } catch is CancellationError {
+                    // 换了新选择或离开页面导致的取消，不算失败，安静退出。
+                    return
+                } catch {
                     thumbItem = nil
-                    message = "这张图没读到，重新选一次。"
+                    message = "图片 30 秒没读出来，已停止等待。重新选一次；反复失败就重启手机再试。"
                 }
             }
             .task(id: videoItem?.itemIdentifier) {
@@ -683,6 +691,21 @@ private struct AddWallpaperView: View {
     /// 视频读取（防干等版）：先走数据直读，30 秒没结果就取消，换“导出成临时文件再读”的
     /// 备用通道再试 30 秒；两通道都不行就抛超时，绝不让界面无限转圈。
     private static func loadVideoData(from item: PhotosPickerItem) async throws -> Data {
+        if let data = try await withReadTimeout(seconds: 30, work: {
+            try await item.loadTransferable(type: Data.self)
+        }) {
+            return data
+        }
+        if let url = try await withReadTimeout(seconds: 30, work: {
+            try await item.loadTransferable(type: URL.self)
+        }) {
+            return try Data(contentsOf: url)
+        }
+        throw URLError(.timedOut)
+    }
+
+    /// 图片读取（防干等版）：与视频同款，数据直读 30 秒，超时换导出文件通道再 30 秒。
+    private static func loadImageData(from item: PhotosPickerItem) async throws -> Data {
         if let data = try await withReadTimeout(seconds: 30, work: {
             try await item.loadTransferable(type: Data.self)
         }) {
