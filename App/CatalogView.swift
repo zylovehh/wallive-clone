@@ -13,8 +13,8 @@ import UIKit
 
 /// 发版角标：V 号每次发版 +1，日期与说明跟当天对应，用于一眼确认手机上装的是哪个版本。
 enum AppBuild {
-    static let version = "V5"
-    static let tag = "\(version)·1103深景直装"
+    static let version = "V6"
+    static let tag = "\(version)·1104免重启"
 }
 
 struct CatalogView: View {
@@ -74,11 +74,19 @@ struct CatalogView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 8) {
-                Picker("目录", selection: $segment) {
-                    Text("发现").tag(0)
-                    Text("我的").tag(1)
+                // 发现 / 我的：高透液态玻璃分段条，选中的那段稍亮一点。
+                HStack(spacing: 4) {
+                    ForEach([(0, "发现"), (1, "我的")], id: \.0) { value, label in
+                        Button(label) { segment = value }
+                            .font(.subheadline.weight(segment == value ? .semibold : .regular))
+                            .foregroundStyle(segment == value ? .white : .white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(segment == value ? Color.white.opacity(0.18) : Color.clear, in: Capsule())
+                    }
                 }
-                .pickerStyle(.segmented)
+                .padding(4)
+                .modifier(LiquidGlassSegmented())
                 .padding(.horizontal)
 
                 if segment == 0 {
@@ -87,6 +95,7 @@ struct CatalogView: View {
                     myView
                 }
             }
+            .background(AppBackgroundView())
             // 顶部不留大黑边：不用系统大标题，改用一行小标题，整个目录往上贴。
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -218,12 +227,12 @@ struct CatalogView: View {
         if store.isDownloaded(item),
            let data = try? Data(contentsOf: store.localURL(for: item)) {
             state.setPackage(data)
-            state.selectedTab = 2
+            state.selectedTab = 1
             return
         }
         if let data = await store.download(item) {
             state.setPackage(data)
-            state.selectedTab = 2
+            state.selectedTab = 1
         }
     }
 
@@ -297,7 +306,7 @@ struct CatalogView: View {
                                 Button("安装") {
                                     if let data = try? Data(contentsOf: store.localURL(for: record)) {
                                         state.setPackage(data)
-                                        state.selectedTab = 2
+                                        state.selectedTab = 1
                                     }
                                 }
                                 Button("删除", role: .destructive) {
@@ -408,8 +417,7 @@ private struct CatalogCard: View {
                         Image(systemName: "play.fill")
                             .foregroundStyle(.white)
                             .padding(10)
-                            .background(.black.opacity(0.45))
-                            .clipShape(Circle())
+                            .modifier(LiquidGlassCircle())
                     }
                 }
                 Spacer()
@@ -419,17 +427,15 @@ private struct CatalogCard: View {
                     Image(systemName: favorites.isFavorite(item.id) ? "heart.fill" : "heart")
                         .foregroundStyle(.white)
                         .padding(10)
-                        .background(.black.opacity(0.45))
-                        .clipShape(Circle())
+                        .modifier(LiquidGlassCircle())
                 }
-                // 管理员图钉：点一下改置顶（只有登入的管理员能看到）。
+                // 管理员图钉：同排圆钮，也换高透玻璃，保持一排样式一致。
                 if isAdmin {
                     Button(action: onTogglePin) {
                         Image(systemName: item.pinned ? "pin.fill" : "pin")
                             .foregroundStyle(.white)
                             .padding(10)
-                            .background(.black.opacity(0.45))
-                            .clipShape(Circle())
+                            .modifier(LiquidGlassCircle())
                     }
                     .disabled(adminBusy)
                 }
@@ -538,19 +544,41 @@ private struct InlineVideoCover: UIViewRepresentable {
     }
 }
 
+/// 高透液态玻璃圆钮：播放、收藏、图钉共用，tint 尽量淡。
+private struct LiquidGlassCircle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.tint(.white.opacity(0.08)), in: Circle())
+        } else {
+            content.background(.black.opacity(0.12)).clipShape(Circle())
+        }
+    }
+}
+
+/// 高透液态玻璃分段条外框：发现 / 我的共用。
+private struct LiquidGlassSegmented: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.tint(.white.opacity(0.08)), in: Capsule())
+        } else {
+            content.background(.black.opacity(0.12)).clipShape(Capsule())
+        }
+    }
+}
+
 /// 液态玻璃条：iOS 26+ 用系统液态玻璃，低版本回退到半透明黑条，
 /// 视觉上仍是同一条玻璃下载条，不会因系统版本编译不过或显示断层。
-/// 形状是两头全圆的胶囊，玻璃比之前更透。
+/// 形状是两头全圆的胶囊，高透：tint 尽量淡，让底下的壁纸透出来。
 private struct LiquidGlassBar: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.glassEffect(
-                .regular.tint(.black.opacity(0.12)),
+                .regular.tint(.white.opacity(0.08)),
                 in: Capsule()
             )
         } else {
             content
-                .background(.black.opacity(0.30))
+                .background(.black.opacity(0.12))
                 .clipShape(Capsule())
         }
     }

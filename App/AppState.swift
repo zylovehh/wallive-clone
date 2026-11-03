@@ -12,6 +12,7 @@ final class AppState: ObservableObject {
     @Published var selectedTab = 0
     @Published var packageData: Data?
     @Published var packageInfo: TendiesPackageInfo?
+    @Published var packageImportedAt: Date?
     @Published var packageError: String?
     @Published var pairingLoaded = false
     @Published var pairingDescription = "未导入"
@@ -33,6 +34,7 @@ final class AppState: ObservableObject {
     /// 设当前包并做检查（WALLIVE1 加密包先解密再校验结构）。
     func setPackage(_ data: Data) {
         packageData = data
+        packageImportedAt = Date()
         do {
             packageInfo = try TendiesPackage.inspect(data, zip: zip)
             packageError = nil

@@ -5,6 +5,23 @@
 import Foundation
 import SwiftUI
 
+/// 高透液态玻璃按钮样式：iOS 26+ 系统玻璃，低版本回退半透明黑胶囊。
+private struct GlassButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 20).padding(.vertical, 10)
+            .background {
+                if #available(iOS 26.0, *) {
+                    Capsule().glassEffect(.regular.tint(.white.opacity(0.08)))
+                } else {
+                    Capsule().fill(.black.opacity(0.12))
+                }
+            }
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+    }
+}
+
 struct DepthView: View {
     @EnvironmentObject private var state: AppState
     // 管理员账号：分享深景包只给管理员，没登入不显示分享按钮，别人拿不到导出的包。
@@ -27,7 +44,7 @@ struct DepthView: View {
                 } else {
                     Button("生成深景包") {
                         Task { await build() }
-                    }.buttonStyle(.borderedProminent)
+                    }.buttonStyle(GlassButtonStyle())
                     if let info = depthInfo {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("新包大小：\(depthData?.count ?? 0) 字节").font(.caption)
@@ -41,17 +58,14 @@ struct DepthView: View {
                             Button("设为当前包并去安装") {
                                 if let data = depthData {
                                     state.setPackage(data)
-                                    state.selectedTab = 2
+                                    state.selectedTab = 1
                                 }
                             }
-                        }.buttonStyle(.bordered)
+                        }.buttonStyle(GlassButtonStyle())
                         Button("安装壁纸") {
                             Task { await runDepthInstall() }
-                        }.buttonStyle(.borderedProminent)
+                        }.buttonStyle(GlassButtonStyle())
                         .disabled(installing)
-                        if installing {
-                            ProgressView("正在安装…")
-                        }
                         if !installMessage.isEmpty {
                             Text(installMessage).font(.caption)
                         }
@@ -61,21 +75,36 @@ struct DepthView: View {
                     Text(message).foregroundStyle(.red).font(.caption)
                 }
                 Spacer()
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("QQ 交流群").font(.headline)
-                    HStack {
-                        Button("加入 QQ 群") {
-                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                openURL(url)
-                            }
-                        }.buttonStyle(.bordered)
-                        Text("群号：153226955").font(.caption).textSelection(.enabled)
-                    }
-                    Text("点按钮直接跳到 QQ 群；没装 QQ 时复制群号手动搜。").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    Text("🐧").font(.largeTitle)
+                    Button("加入 QQ 群") {
+                        if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                            openURL(url)
+                        }
+                    }.buttonStyle(GlassButtonStyle())
+                    .foregroundStyle(.green)
+                    Spacer()
                 }
             }
             .padding()
+            .background(AppBackgroundView())
             .navigationTitle("深景")
+            .overlay {
+                if installing {
+                    ZStack {
+                        Color.black.opacity(0.4).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("正在安装…")
+                            Text("请稍等，不要退出").font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(28)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
+                        .overlay(RoundedRectangle(cornerRadius: 28).stroke(.white.opacity(0.25), lineWidth: 1))
+                        .shadow(radius: 20)
+                    }
+                }
+            }
         }
     }
 
@@ -95,7 +124,7 @@ struct DepthView: View {
     }
 
     // 深景页直接安装：先把刚生成的深景包设为当前包，再装，装的就是深景包不是原包。
-    // 装完显示结果；没生成、没配对、VPN 没连时只显示提示，不会没反应。
+    // 装完不重启桌面、不闪，只导入图库，用户去图库手动设；没生成、没配对、VPN 没连时只显示提示，不会没反应。
     private func runDepthInstall() async {
         guard let data = depthData else {
             installMessage = "先点“生成深景包”，生成好了再装。"
@@ -106,7 +135,7 @@ struct DepthView: View {
         defer { installing = false }
         state.setPackage(data)
         if let uuid = await state.install(host: "10.7.0.1") {
-            installMessage = "安装完成，描述符：\(uuid)。去锁屏看看，换上去了就是成了。"
+            installMessage = "安装完成，描述符：\(uuid)。已导入图库，去锁屏长按进图库，找到新壁纸，点设为墙纸组合。"
         } else if !state.statusMessage.isEmpty {
             installMessage = state.statusMessage
         } else {

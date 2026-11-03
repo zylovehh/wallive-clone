@@ -1,8 +1,9 @@
 // WalliveCloneApp.swift
 // 复刻版 App 壳：SwiftUI 入口（干净重写，无广告 SDK、无会员逻辑）。
-// 五个页签：目录 → 导入 → 安装 → 深景 → 状态。
+// V6 四个页签：目录 → 导入 → 深景 → 状态（安装并进导入详情页）。
 
 import SwiftUI
+import UIKit
 
 @main
 struct WalliveCloneApp: App {
@@ -35,6 +36,24 @@ func ALGetGrappaToken(
     _ errBuf: UnsafeMutablePointer<CChar>?,
     _ errLen: Int
 ) -> Int32
+
+/// 全页背景：仓库里 App/app-background.jpg（网页上传的原图），
+/// 各页根视图垫在它上面，卡片用半透明底，背景才透得出来。
+/// 找不到图时回退纯黑，不会闪白屏。
+struct AppBackgroundView: View {
+    var body: some View {
+        if let url = Bundle.main.url(forResource: "app-background", withExtension: "jpg"),
+           let data = try? Data(contentsOf: url),
+           let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
+        } else {
+            Color.black.ignoresSafeArea()
+        }
+    }
+}
 
 /// 进软件流程：Hello 动画 → 直接进主界面（别人不用登入）。
 /// 登入入口在目录页右上角人头按钮，只给管理员（改置顶、增删）用。
@@ -74,15 +93,12 @@ struct ContentView: View {
             ImportView()
                 .tabItem { Label("导入", systemImage: "square.and.arrow.down") }
                 .tag(1)
-            InstallView()
-                .tabItem { Label("安装", systemImage: "arrow.down.to.line") }
-                .tag(2)
             DepthView()
                 .tabItem { Label("深景", systemImage: "moon.stars") }
-                .tag(3)
+                .tag(2)
             StatusView()
                 .tabItem { Label("状态", systemImage: "info.circle") }
-                .tag(4)
+                .tag(3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environmentObject(accountStore)
