@@ -11,6 +11,11 @@ import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
 
+/// 发版角标：每次打包前手改，用于一眼确认手机上装的是哪个版本。
+enum AppBuild {
+    static let tag = "1103-1521错码版"
+}
+
 struct CatalogView: View {
     @EnvironmentObject private var state: AppState
     @EnvironmentObject private var accountStore: AccountStore
@@ -306,6 +311,11 @@ struct CatalogView: View {
             }
         }
         .padding(.horizontal)
+        .overlay(alignment: .bottom) {
+            Text("构建 \(AppBuild.tag)")
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.bottom, 4)
+        }
     }
 }
 
@@ -638,6 +648,8 @@ private struct AddWallpaperView: View {
                               || tendiesData == nil
                               || (thumbItem != nil && thumbData == nil)
                               || (videoItem != nil && videoData == nil))
+                Text("构建 \(AppBuild.tag)")
+                    .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
             }
             .padding()
