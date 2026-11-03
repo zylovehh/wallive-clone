@@ -567,6 +567,8 @@ private struct AddWallpaperView: View {
     @State private var showingTendiesPicker = false
     @State private var message = ""
     @State private var busy = false
+    // 上传进度（0~1）；nil 表示当前不在上传（读文件/推表阶段可能暂时没有）。
+    @State private var uploadProgress: Double?
 
     var body: some View {
         NavigationStack {
@@ -597,6 +599,12 @@ private struct AddWallpaperView: View {
                 .disabled(busy)
                 if busy {
                     ProgressView()
+                    if let uploadProgress {
+                        ProgressView(value: uploadProgress)
+                            .progressViewStyle(.linear)
+                        Text("正在上传 \(Int((uploadProgress * 100).rounded()))%，大文件传得慢是正常的")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 } else if (thumbItem != nil && thumbData == nil) || (videoItem != nil && videoData == nil) {
                     // 图/视频还在从相册读取，读完前不让传，防止视频被当没选悄悄丢掉。
                     Text("图/视频还在读取，读完自动放开上传按钮。").font(.caption).foregroundStyle(.secondary)
@@ -692,24 +700,27 @@ private struct AddWallpaperView: View {
             return
         }
         busy = true
-        defer { busy = false }
+        defer { busy = false; uploadProgress = nil }
         let parsedTags = tags
             .components(separatedBy: CharacterSet(charactersIn: ",，、"))
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         let finalTags = parsedTags.isEmpty ? ["动漫"] : parsedTags
         do {
-            try await store.uploadWallpaperFile(name: "\(id).tendies", data: packageData, token: token)
+            try await store.uploadWallpaperFile(name: "\(id).tendies", data: packageData, token: token,
+                                                progress: { value in Task { @MainActor in uploadProgress = value } })
             // 视频优先：选了视频就不传静态封面图，thumbnail 和 preview 都指这个视频。
             var thumbnailURL = ""
             var previewURL = ""
             if let videoData {
                 let videoName = "\(id)-preview.\(Self.videoExtension(for: videoItem))"
-                try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token)
+                try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token,
+                                                    progress: { value in Task { @MainActor in uploadProgress = value } })
                 previewURL = CatalogStore.wallpapersRawBase + videoName
                 thumbnailURL = previewURL
             } else {
-                try await store.uploadWallpaperFile(name: "\(id)-thumb.jpg", data: imageData!, token: token)
+                try await store.uploadWallpaperFile(name: "\(id)-thumb.jpg", data: imageData!, token: token,
+                                                    progress: { value in Task { @MainActor in uploadProgress = value } })
                 thumbnailURL = CatalogStore.wallpapersRawBase + "\(id)-thumb.jpg"
             }
             let newItem = CatalogItem(
