@@ -344,28 +344,43 @@ private struct CatalogCard: View {
     let onTogglePin: () -> Void
     let onDelete: () -> Void
 
+    /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封面播。
+    private var coverVideoURL: URL? {
+        if Self.isVideoPath(item.thumbnailURL), let url = URL(string: item.thumbnailURL) {
+            return url
+        }
+        if !item.previewURL.isEmpty, Self.isVideoPath(item.previewURL),
+           let url = URL(string: item.previewURL) {
+            return url
+        }
+        return nil
+    }
+
     var body: some View {
-        ZStack {
-            if let url = URL(string: item.thumbnailURL) {
-                if Self.isVideoPath(item.thumbnailURL) {
-                    // 封面就是视频：卡片里静音循环播放当封面。
-                    InlineVideoCover(url: url)
-                } else {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable().scaledToFill()
-                        default:
-                            placeholder
+        // 统一规格：所有封面（图、视频）都按同一个 9:19.5 框铺满裁切，
+        // 卡片高度一致、两列对齐，圆角统一。
+        Color.clear
+            .aspectRatio(9 / 19.5, contentMode: .fit)
+            .overlay {
+                ZStack {
+                    if let url = coverVideoURL {
+                        // 有视频的：卡片里静音循环播放当封面，对齐原版样式。
+                        InlineVideoCover(url: url)
+                    } else if let url = URL(string: item.thumbnailURL) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable().scaledToFill()
+                            default:
+                                placeholder
+                            }
                         }
+                    } else {
+                        placeholder
                     }
                 }
-            } else {
-                placeholder
             }
-        }
-        .aspectRatio(9 / 19.5, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .bottom) {
             // 底部渐变罩，让压在图上的白字在亮图上也看得清。
             LinearGradient(
@@ -580,7 +595,12 @@ private struct AddWallpaperView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(busy)
-                if busy { ProgressView() }
+                if busy {
+                    ProgressView()
+                } else if (thumbItem != nil && thumbData == nil) || (videoItem != nil && videoData == nil) {
+                    // 图/视频还在从相册读取，读完前不让传，防止视频被当没选悄悄丢掉。
+                    Text("图/视频还在读取，读完自动放开上传按钮。").font(.caption).foregroundStyle(.secondary)
+                }
                 if !message.isEmpty {
                     Text(message).font(.caption).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
@@ -590,7 +610,9 @@ private struct AddWallpaperView: View {
                 Button("增加到目录") { Task { await add() } }
                     .buttonStyle(.borderedProminent)
                     .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty
-                              || tendiesData == nil)
+                              || tendiesData == nil
+                              || (thumbItem != nil && thumbData == nil)
+                              || (videoItem != nil && videoData == nil))
                 Spacer()
             }
             .padding()
@@ -624,19 +646,25 @@ private struct AddWallpaperView: View {
                 }
             }
             .task(id: thumbItem?.itemIdentifier) {
-                guard let item = thumbItem,
-                      let data = try? await item.loadTransferable(type: Data.self),
-                      let image = UIImage(data: data),
-                      let jpeg = image.jpegData(compressionQuality: 0.85)
-                else { return }
-                thumbImage = image
-                thumbData = jpeg
+                guard let item = thumbItem else { return }
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data),
+                   let jpeg = image.jpegData(compressionQuality: 0.85) {
+                    thumbImage = image
+                    thumbData = jpeg
+                } else {
+                    thumbItem = nil
+                    message = "这张图没读到，重新选一次。"
+                }
             }
             .task(id: videoItem?.itemIdentifier) {
-                guard let item = videoItem,
-                      let data = try? await item.loadTransferable(type: Data.self)
-                else { return }
-                videoData = data
+                guard let item = videoItem else { return }
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    videoData = data
+                } else {
+                    videoItem = nil
+                    message = "这个视频没读到，重新选一次。"
+                }
             }
         }
     }
