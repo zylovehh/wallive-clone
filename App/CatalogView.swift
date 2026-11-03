@@ -667,13 +667,47 @@ private struct AddWallpaperView: View {
             }
             .task(id: videoItem?.itemIdentifier) {
                 guard let item = videoItem else { return }
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    videoData = data
-                } else {
+                do {
+                    videoData = try await Self.loadVideoData(from: item)
+                } catch is CancellationError {
+                    // 换了新选择或离开页面导致的取消，不算失败，安静退出。
+                    return
+                } catch {
                     videoItem = nil
-                    message = "这个视频没读到，重新选一次。"
+                    message = "视频 30 秒没读出来，已停止等待。重新选一次；反复失败就把视频重新保存到相册再试。"
                 }
             }
+        }
+    }
+
+    /// 视频读取（防干等版）：先走数据直读，30 秒没结果就取消，换“导出成临时文件再读”的
+    /// 备用通道再试 30 秒；两通道都不行就抛超时，绝不让界面无限转圈。
+    private static func loadVideoData(from item: PhotosPickerItem) async throws -> Data {
+        if let data = try await withReadTimeout(seconds: 30, work: {
+            try await item.loadTransferable(type: Data.self)
+        }) {
+            return data
+        }
+        if let url = try await withReadTimeout(seconds: 30, work: {
+            try await item.loadTransferable(type: URL.self)
+        }) {
+            return try Data(contentsOf: url)
+        }
+        throw URLError(.cannotLoadContent)
+    }
+
+    /// 给可能卡死的读取操作加超时：到点先取消读取任务，再抛超时错误。
+    private static func withReadTimeout<T: Sendable>(seconds: TimeInterval,
+                                                     work: @escaping @Sendable () async throws -> T?) async throws -> T? {
+        try await withThrowingTaskGroup(of: T?.self) { group in
+            group.addTask { try await work() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw URLError(.timedOut)
+            }
+            let result = try await group.next() ?? nil
+            group.cancelAll()
+            return result
         }
     }
 
