@@ -566,6 +566,9 @@ private struct AddWallpaperView: View {
     @State private var videoData: Data?
     @State private var showingTendiesPicker = false
     @State private var message = ""
+    // 出错时的错误代码与原始细节：长按可选，或点“复制错误代码”一键复制发给灵光。
+    @State private var errorDetail = ""
+    @State private var copiedError = false
     @State private var busy = false
     // 上传进度（0~1）；nil 表示当前不在上传（读文件/推表阶段可能暂时没有）。
     @State private var uploadProgress: Double?
@@ -612,6 +615,20 @@ private struct AddWallpaperView: View {
                 if !message.isEmpty {
                     Text(message).font(.caption).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
+                    if !errorDetail.isEmpty {
+                        Text(errorDetail)
+                            .font(.caption2)
+                            .monospaced()
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(copiedError ? "已复制，去聊天里粘贴给灵光" : "复制错误代码") {
+                            UIPasteboard.general.string = errorDetail
+                            copiedError = true
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
                 }
                 Text("缩略图和预览视频都可选：选了视频就用视频当封面（卡片里直接循环播放）；没视频才会用图或包里的图自动生成封面；预览视频不选也能下载安装。")
                     .font(.caption).foregroundStyle(.secondary)
@@ -636,7 +653,7 @@ private struct AddWallpaperView: View {
             .sheet(isPresented: $showingTendiesPicker) {
                 DocumentPicker(contentTypes: [.item]) { url in
                     guard let data = try? Data(contentsOf: url) else {
-                        message = "没读到文件，重新选一次。"
+                        fail("没读到文件，重新选一次。", code: "E-101 壁纸包读取-无内容")
                         return
                     }
                     // 后缀不限死：.tendies 直接收；其他后缀按内容认（WALLIVE1 魔数或标准 zip 都算）。
@@ -645,12 +662,13 @@ private struct AddWallpaperView: View {
                         || Wallive1Crypto.isWallive1(data)
                         || looksLikeZip
                     guard looksLikeTendies else {
-                        message = "这个文件认不出是壁纸包，重新选一次。"
+                        fail("这个文件认不出是壁纸包，重新选一次。", code: "E-102 壁纸包读取-内容不识别")
                         return
                     }
                     tendiesName = url.deletingPathExtension().lastPathComponent
                     tendiesData = data
                     message = ""
+                    errorDetail = ""
                 }
             }
             .task(id: thumbItem?.itemIdentifier) {
@@ -663,14 +681,14 @@ private struct AddWallpaperView: View {
                         thumbData = jpeg
                     } else {
                         thumbItem = nil
-                        message = "这张图没读到，重新选一次。"
+                        fail("这张图没读到，重新选一次。", code: "E-201 图片读取-无内容")
                     }
                 } catch is CancellationError {
                     // 换了新选择或离开页面导致的取消，不算失败，安静退出。
                     return
                 } catch {
                     thumbItem = nil
-                    message = "图片 30 秒没读出来，已停止等待。重新选一次；反复失败就重启手机再试。"
+                    fail("图片 30 秒没读出来，已停止等待。重新选一次；反复失败就重启手机再试。", code: "E-203 图片读取-超时", detail: String(describing: error))
                 }
             }
             .task(id: videoItem?.itemIdentifier) {
@@ -682,7 +700,7 @@ private struct AddWallpaperView: View {
                     return
                 } catch {
                     videoItem = nil
-                    message = "视频 30 秒没读出来，已停止等待。重新选一次；反复失败就把视频重新保存到相册再试。"
+                    fail("视频 30 秒没读出来，已停止等待。重新选一次；反复失败就把视频重新保存到相册再试。", code: "E-204 视频读取-超时", detail: String(describing: error))
                 }
             }
         }
@@ -734,11 +752,18 @@ private struct AddWallpaperView: View {
         }
     }
 
+    /// 统一报错：正文说人话，附上错误代码和原始细节，方便一键复制发回给灵光。
+    private func fail(_ text: String, code: String, detail: String = "") {
+        message = text
+        errorDetail = detail.isEmpty ? code : "\(code) | \(detail)"
+        copiedError = false
+    }
+
     /// 增加流程：传包 → （选了视频传视频当封面，否则传图）→ 追加条目并推表。
     @MainActor
     private func add() async {
         guard let token = accountStore.loadToken() else {
-            message = "先在管理员页保存 GitHub 钥匙。"
+            fail("先在管理员页保存 GitHub 钥匙。", code: "E-301 增加壁纸-缺少钥匙")
             return
         }
         guard let packageData = tendiesData else { return }
@@ -748,12 +773,12 @@ private struct AddWallpaperView: View {
             imageData = thumbData ?? Self.autoThumbnail(from: packageData)
         }
         guard videoData != nil || imageData != nil else {
-            message = "封面没着落：这个包里没找到图，点上方\"选缩略图\"手动选一张。"
+            fail("封面没着落：这个包里没找到图，点上方\"选缩略图\"手动选一张。", code: "E-302 增加壁纸-无封面来源")
             return
         }
         let id = CatalogStore.safeID(from: tendiesName)
         guard !store.items.contains(where: { $0.id == id }) else {
-            message = "已有同名壁纸，换个文件名。"
+            fail("已有同名壁纸，换个文件名。", code: "E-303 增加壁纸-条目重名")
             return
         }
         busy = true
@@ -789,7 +814,7 @@ private struct AddWallpaperView: View {
             try await store.pushCatalog(store.items + [newItem], token: token)
             onAdded()
         } catch {
-            message = "没推上去：\(error.localizedDescription)"
+            fail("没推上去，请点“复制错误代码”发给灵光。", code: "E-304 上传目录-失败", detail: String(describing: error))
         }
     }
 
