@@ -38,6 +38,10 @@ struct ImportView: View {
                     Text(message).foregroundStyle(.red).font(.caption)
                 }
                 Spacer()
+                Text("王炸奓制作")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 4)
             }
             .padding()
             .navigationTitle("导入")
