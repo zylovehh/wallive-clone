@@ -13,8 +13,8 @@ import UIKit
 
 /// 发版角标：V 号每次发版 +1，日期与说明跟当天对应，用于一眼确认手机上装的是哪个版本。
 enum AppBuild {
-    static let version = "V2"
-    static let tag = "\(version)·1103视频直链版"
+    static let version = "V3"
+    static let tag = "\(version)·1103选了就读版"
 }
 
 struct CatalogView: View {
@@ -575,6 +575,10 @@ private struct AddWallpaperView: View {
     @State private var thumbData: Data?
     @State private var videoItem: PhotosPickerItem?
     @State private var videoData: Data?
+    // 选一次记一次数：相册选中项的编号在没授权时是空的，靠编号触发读取根本启动不了，
+    // 所以改靠次数触发——选了就加一，次数一变读取任务就启动，不管有没有编号。
+    @State private var thumbPickVersion = 0
+    @State private var videoPickVersion = 0
     @State private var showingTendiesPicker = false
     @State private var message = ""
     // 出错时的错误代码与原始细节：长按可选，或点“复制错误代码”一键复制发给灵光。
@@ -596,7 +600,13 @@ private struct AddWallpaperView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(busy)
-                PhotosPicker(selection: $thumbItem, matching: .images) {
+                PhotosPicker(selection: Binding(
+                    get: { thumbItem },
+                    set: { newValue in
+                        thumbItem = newValue
+                        if newValue != nil { thumbPickVersion += 1 }
+                    }
+                ), matching: .images) {
                     Text(thumbImage == nil ? "选缩略图（可不选）" : "已选缩略图")
                 }
                 .buttonStyle(.bordered)
@@ -606,7 +616,13 @@ private struct AddWallpaperView: View {
                         .resizable().scaledToFit().frame(height: 120)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                PhotosPicker(selection: $videoItem, matching: .videos) {
+                PhotosPicker(selection: Binding(
+                    get: { videoItem },
+                    set: { newValue in
+                        videoItem = newValue
+                        if newValue != nil { videoPickVersion += 1 }
+                    }
+                ), matching: .videos) {
                     Text(videoData == nil ? "选预览视频" : "已选预览视频")
                 }
                 .buttonStyle(.bordered)
@@ -688,7 +704,7 @@ private struct AddWallpaperView: View {
                     errorDetail = ""
                 }
             }
-            .task(id: thumbItem?.itemIdentifier) {
+            .task(id: thumbPickVersion) {
                 guard let item = thumbItem else { return }
                 do {
                     let data = try await Self.loadImageData(from: item)
@@ -709,7 +725,7 @@ private struct AddWallpaperView: View {
                     fail("图片 30 秒没读出来，已停止等待。重新选一次；反复失败就重启手机再试。", code: "E-203 图片读取-超时", detail: String(describing: error))
                 }
             }
-            .task(id: videoItem?.itemIdentifier) {
+            .task(id: videoPickVersion) {
                 guard let item = videoItem else { return }
                 do {
                     videoData = try await Self.loadVideoData(from: item)
@@ -764,6 +780,7 @@ private struct AddWallpaperView: View {
     /// 旧版用任务组等第一个结果，卡住的子任务不响应取消时组会一直等，
     /// 所以 30 秒到了界面还在转；新版用“谁先到谁赢、输家直接丢弃”的办法，
     /// 超时到了就报错，卡住的后台任务不再挡界面。
+    /// 超时和读取都用独立任务跑，不跟主界面抢道，保证到点一定能报错。
     private actor TimeoutGate {
         private var done = false
         func claim() -> Bool {
@@ -777,7 +794,7 @@ private struct AddWallpaperView: View {
                                                      work: @escaping @Sendable () async throws -> T?) async throws -> T? {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T?, Error>) in
             let gate = TimeoutGate()
-            Task {
+            Task.detached {
                 do {
                     let result = try await work()
                     if await gate.claim() {
@@ -789,7 +806,7 @@ private struct AddWallpaperView: View {
                     }
                 }
             }
-            Task {
+            Task.detached {
                 try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                 if await gate.claim() {
                     continuation.resume(throwing: URLError(.timedOut))
