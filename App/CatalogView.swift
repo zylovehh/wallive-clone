@@ -13,8 +13,8 @@ import UIKit
 
 /// 发版角标：V 号每次发版 +1，日期与说明跟当天对应，用于一眼确认手机上装的是哪个版本。
 enum AppBuild {
-    static let version = "V8"
-    static let tag = "\(version)·1103-1521错码版"
+    static let version = "V1"
+    static let tag = "\(version)·1103-1624转圈版"
 }
 
 struct CatalogView: View {
@@ -620,8 +620,12 @@ private struct AddWallpaperView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } else if (thumbItem != nil && thumbData == nil) || (videoItem != nil && videoData == nil) {
-                    // 图/视频还在从相册读取，读完前不让传，防止视频被当没选悄悄丢掉。
-                    Text("图/视频还在读取，读完自动放开上传按钮。").font(.caption).foregroundStyle(.secondary)
+                    // 图/视频还在从相册读取：转圈动画提示，读完自动消失并放开上传按钮。
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("图/视频还在读取，读完自动放开上传按钮。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if !message.isEmpty {
                     Text(message).font(.caption).foregroundStyle(.red)
