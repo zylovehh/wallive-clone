@@ -1,7 +1,7 @@
 // CatalogModel.swift
 // 目录数据：一条壁纸的元数据、目录拉取、已下载管理。
-// 目录表 catalog.json 放在仓库根目录，App 打开时按分发线路顺序拉取
-// （jsDelivr Fastly → jsDelivr Gcore → 仓库 raw 兜底），国内访问走前两条快线；
+// 目录表 catalog.json 放在仓库根目录，App 打开时先拉仓库 raw 直链
+// （新表一推就能拉到，不受加速缓存影响），直链不通再回落到加速线路；
 // 全部失败就显示空状态，不崩。壁纸包、预览视频、缩略图放仓库 wallpapers/ 目录。
 // 管理端推完目录/传完壁纸后，自动清一下 CDN 缓存，用户端马上能看到新内容。
 
@@ -86,8 +86,9 @@ struct DownloadedItem: Identifiable, Codable, Equatable {
 /// 已下载记录存在 UserDefaults，文件存在沙盒 Documents/downloaded-wallpapers/。
 @MainActor
 final class CatalogStore: ObservableObject {
-    /// 目录/壁纸分发线路，按顺序尝试：jsDelivr Fastly（国内快线）→
-    /// jsDelivr Gcore（备胎）→ 仓库 raw 地址（兜底，前面全挂才用它）。
+    /// 目录/壁纸分发线路：壁纸包、视频、缩略图等大文件走 jsDelivr
+    /// Fastly（国内快线），新加进目录表的地址也用它；目录表本身
+    /// 另外按 catalogFetchHosts 的顺序拉（先直链后加速，见下）。
     /// 改仓库名或分支要同步改这里。
     static let catalogHosts = [
         "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
@@ -95,7 +96,17 @@ final class CatalogStore: ObservableObject {
         "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
     ]
 
-    /// 目录表地址（主线路；实际拉取在 fetch 里按 catalogHosts 顺序尝试）。
+    /// 目录表拉取顺序：仓库 raw 直链在先（新表一推就能拉到，不受
+    /// 加速缓存卡旧版的影响；表只有几 KB，直链慢一点也感觉不出来），
+    /// 直链不通就回落到 jsDelivr Fastly → Gcore（旧表保底）。
+    /// 大文件不走这条顺序，仍按目录表里的加速地址下载。
+    static let catalogFetchHosts = [
+        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
+        "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
+        "https://gcore.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
+    ]
+
+    /// 目录表地址（主线路；实际拉取在 fetch 里按 catalogFetchHosts 顺序尝试）。
     static let catalogURLString = catalogHosts[0] + "/" + catalogPath
 
     /// 目录仓库（公开目录仓库，管理员改置顶、增删时推到这里）。
@@ -139,16 +150,18 @@ final class CatalogStore: ObservableObject {
         downloadedDirectory.appendingPathComponent(record.fileName)
     }
 
-    /// 拉目录表：按线路顺序尝试（Fastly → Gcore → 仓库 raw），
+    /// 拉目录表：按 catalogFetchHosts 顺序尝试（直链 → Fastly → Gcore），
     /// 第一条通的生效；全失败就留空 + 报错文案，绝不崩。
     func fetch() async {
         loading = true
         defer { loading = false }
         var lastError: Error?
-        for host in Self.catalogHosts {
+        for host in Self.catalogFetchHosts {
             guard let url = URL(string: host + "/" + Self.catalogPath) else { continue }
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
+                // 直链在国内可能慢甚至打不开，只给它 10 秒，超时就回落到加速线路。
+                let request = URLRequest(url: url, timeoutInterval: host == Self.catalogFetchHosts[0] ? 10 : 60)
+                let (data, response) = try await URLSession.shared.data(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     throw CatalogError.notFound
                 }
