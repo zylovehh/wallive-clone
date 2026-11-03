@@ -13,8 +13,8 @@ import UIKit
 
 /// 发版角标：V 号每次发版 +1，日期与说明跟当天对应，用于一眼确认手机上装的是哪个版本。
 enum AppBuild {
-    static let version = "V3"
-    static let tag = "\(version)·1103选了就读版"
+    static let version = "V4"
+    static let tag = "\(version)·1103分享仅管理员"
 }
 
 struct CatalogView: View {

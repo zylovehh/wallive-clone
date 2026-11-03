@@ -7,6 +7,9 @@ import SwiftUI
 
 struct DepthView: View {
     @EnvironmentObject private var state: AppState
+    // 管理员账号：分享深景包只给管理员，没登入不显示分享按钮，别人拿不到导出的包。
+    // 生成和安装不动，人人都能用。
+    @EnvironmentObject private var accountStore: AccountStore
     @Environment(\.openURL) private var openURL
     @State private var depthData: Data?
     @State private var depthInfo: TendiesPackageInfo?
@@ -30,7 +33,7 @@ struct DepthView: View {
                             Text(info.floatingHasClownfishPrefix ? "漂浮层已有 Clownfish 前缀" : "漂浮层无 Clownfish 前缀").font(.caption)
                         }
                         HStack {
-                            if let url = shareURL {
+                            if let url = shareURL, accountStore.currentUser != nil {
                                 ShareLink("分享深景包", item: url)
                             }
                             Button("设为当前包并去安装") {
