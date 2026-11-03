@@ -86,13 +86,13 @@ struct DownloadedItem: Identifiable, Codable, Equatable {
 /// 已下载记录存在 UserDefaults，文件存在沙盒 Documents/downloaded-wallpapers/。
 @MainActor
 final class CatalogStore: ObservableObject {
-    /// 目录/壁纸分发线路，按顺序尝试：jsDelivr Fastly（国内快线）→
-    /// jsDelivr Gcore（备胎）→ 仓库 raw 地址（兜底，前面全挂才用它）。
+    /// 目录表拉取顺序：仓库直链在先（新表马上能看到）→ Fastly → Gcore。
+    /// 大文件仍走 Fastly 加速，不跟目录表一起改直链。
     /// 改仓库名或分支要同步改这里。
     static let catalogHosts = [
+        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
         "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
         "https://gcore.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
-        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
     ]
 
     /// 目录表地址（主线路；实际拉取在 fetch 里按 catalogHosts 顺序尝试）。
@@ -102,8 +102,8 @@ final class CatalogStore: ObservableObject {
     static let catalogRepo = "zylovehh/wallive-catalog"
     static let catalogPath = "catalog.json"
     static let wallpapersDir = "wallpapers"
-    /// 新壁纸写进目录表的地址前缀（与主线路一致；下载实际按目录表里的地址走）。
-    static let wallpapersRawBase = catalogHosts[0] + "/wallpapers/"
+    /// 新壁纸写进目录表的地址前缀（大文件走 Fastly 加速；下载实际按目录表里的地址走）。
+    static let wallpapersRawBase = "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main/wallpapers/"
 
     @Published private(set) var items: [CatalogItem] = []
     @Published private(set) var downloaded: [DownloadedItem] = []
@@ -139,7 +139,7 @@ final class CatalogStore: ObservableObject {
         downloadedDirectory.appendingPathComponent(record.fileName)
     }
 
-    /// 拉目录表：按线路顺序尝试（Fastly → Gcore → 仓库 raw），
+    /// 拉目录表：按线路顺序尝试（仓库直链 → Fastly → Gcore），
     /// 第一条通的生效；全失败就留空 + 报错文案，绝不崩。
     func fetch() async {
         loading = true

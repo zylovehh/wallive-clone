@@ -13,8 +13,8 @@ import UIKit
 
 /// 发版角标：V 号每次发版 +1，日期与说明跟当天对应，用于一眼确认手机上装的是哪个版本。
 enum AppBuild {
-    static let version = "V1"
-    static let tag = "\(version)·1103-1624转圈版"
+    static let version = "V2"
+    static let tag = "\(version)·1103视频直链版"
 }
 
 struct CatalogView: View {
@@ -704,6 +704,7 @@ private struct AddWallpaperView: View {
                     // 换了新选择或离开页面导致的取消，不算失败，安静退出。
                     return
                 } catch {
+                    if Task.isCancelled { return }
                     thumbItem = nil
                     fail("图片 30 秒没读出来，已停止等待。重新选一次；反复失败就重启手机再试。", code: "E-203 图片读取-超时", detail: String(describing: error))
                 }
@@ -716,25 +717,30 @@ private struct AddWallpaperView: View {
                     // 换了新选择或离开页面导致的取消，不算失败，安静退出。
                     return
                 } catch {
+                    // 旧任务超时后才回来、用户已经换了新选择时，不清新选择、不报错。
+                    if Task.isCancelled { return }
                     videoItem = nil
-                    fail("视频 30 秒没读出来，已停止等待。重新选一次；反复失败就把视频重新保存到相册再试。", code: "E-204 视频读取-超时", detail: String(describing: error))
+                    fail("视频 30 秒没读出来，已停止等待。先在相册里把视频点开播一遍（最好连 WiFi），再重新选一次。", code: "E-204 视频读取-超时", detail: String(describing: error))
                 }
             }
         }
     }
 
-    /// 视频读取（防干等版）：先走数据直读，30 秒没结果就取消，换“导出成临时文件再读”的
-    /// 备用通道再试 30 秒；两通道都不行就抛超时，绝不让界面无限转圈。
+    /// 视频读取（视频当预览用，绝不跳过）：先走文件导出，系统把视频拷到临时文件再读，
+    /// 不整段往内存里塞，本地小视频这条路最稳；导出文件读不到再回数据直读。
+    /// 两通道都不行就抛超时，绝不让界面无限转圈。
     private static func loadVideoData(from item: PhotosPickerItem) async throws -> Data {
+        if let url = try await withReadTimeout(seconds: 30, work: {
+            try await item.loadTransferable(type: URL.self)
+        }) {
+            if let data = try? Data(contentsOf: url) {
+                return data
+            }
+        }
         if let data = try await withReadTimeout(seconds: 30, work: {
             try await item.loadTransferable(type: Data.self)
         }) {
             return data
-        }
-        if let url = try await withReadTimeout(seconds: 30, work: {
-            try await item.loadTransferable(type: URL.self)
-        }) {
-            return try Data(contentsOf: url)
         }
         throw URLError(.timedOut)
     }
@@ -754,18 +760,41 @@ private struct AddWallpaperView: View {
         throw URLError(.timedOut)
     }
 
-    /// 给可能卡死的读取操作加超时：到点先取消读取任务，再抛超时错误。
+    /// 给可能卡死的读取操作加真超时：到点就报错返回，不等卡住的任务。
+    /// 旧版用任务组等第一个结果，卡住的子任务不响应取消时组会一直等，
+    /// 所以 30 秒到了界面还在转；新版用“谁先到谁赢、输家直接丢弃”的办法，
+    /// 超时到了就报错，卡住的后台任务不再挡界面。
+    private actor TimeoutGate {
+        private var done = false
+        func claim() -> Bool {
+            if done { return false }
+            done = true
+            return true
+        }
+    }
+
     private static func withReadTimeout<T: Sendable>(seconds: TimeInterval,
                                                      work: @escaping @Sendable () async throws -> T?) async throws -> T? {
-        try await withThrowingTaskGroup(of: T?.self) { group in
-            group.addTask { try await work() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw URLError(.timedOut)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T?, Error>) in
+            let gate = TimeoutGate()
+            Task {
+                do {
+                    let result = try await work()
+                    if await gate.claim() {
+                        continuation.resume(returning: result)
+                    }
+                } catch {
+                    if await gate.claim() {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
-            let result = try await group.next() ?? nil
-            group.cancelAll()
-            return result
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if await gate.claim() {
+                    continuation.resume(throwing: URLError(.timedOut))
+                }
+            }
         }
     }
 
@@ -923,4 +952,5 @@ private struct PreviewPlayerView: View {
         }
     }
 }
+
 
