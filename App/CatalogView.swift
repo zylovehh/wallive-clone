@@ -693,7 +693,7 @@ private struct AddWallpaperView: View {
         }) {
             return try Data(contentsOf: url)
         }
-        throw URLError(.cannotLoadContent)
+        throw URLError(.timedOut)
     }
 
     /// 给可能卡死的读取操作加超时：到点先取消读取任务，再抛超时错误。
