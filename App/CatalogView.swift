@@ -483,7 +483,7 @@ private struct InlineVideoCover: UIViewRepresentable {
         let queuePlayer = AVQueuePlayer()
         queuePlayer.isMuted = true
         let item = AVPlayerItem(url: url)
-        context.coordinator.looper = AVPlayerLooper(player: queuePlayer, item: item)
+        context.coordinator.looper = AVPlayerLooper(player: queuePlayer, templateItem: item)
         queuePlayer.play()
         let layer = AVPlayerLayer(player: queuePlayer)
         layer.videoGravity = .resizeAspectFill
