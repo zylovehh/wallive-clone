@@ -347,12 +347,17 @@ private struct CatalogCard: View {
     var body: some View {
         ZStack {
             if let url = URL(string: item.thumbnailURL) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        placeholder
+                if Self.isVideoPath(item.thumbnailURL) {
+                    // 封面就是视频：卡片里静音循环播放当封面。
+                    InlineVideoCover(url: url)
+                } else {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        default:
+                            placeholder
+                        }
                     }
                 }
             } else {
@@ -462,6 +467,49 @@ private struct CatalogCard: View {
             .fill(.quaternary)
             .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
     }
+
+    /// 封面地址指到视频文件（.mp4/.mov）时，卡片直接播视频当封面。
+    static func isVideoPath(_ path: String) -> Bool {
+        ["mp4", "mov", "m4v"].contains((path as NSString).pathExtension.lowercased())
+    }
+}
+
+/// 卡片内嵌视频封面：静音、无控件、无缝循环播放。
+private struct InlineVideoCover: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> UIView {
+        let view = PlayerContainerView()
+        let queuePlayer = AVQueuePlayer()
+        queuePlayer.isMuted = true
+        let item = AVPlayerItem(url: url)
+        context.coordinator.looper = AVPlayerLooper(player: queuePlayer, item: item)
+        queuePlayer.play()
+        let layer = AVPlayerLayer(player: queuePlayer)
+        layer.videoGravity = .resizeAspectFill
+        layer.frame = CGRect(x: 0, y: 0, width: 1, height: 1) // layoutSubviews 会铺满
+        view.layer.addSublayer(layer)
+        view.playerLayer = layer
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var looper: AVPlayerLooper?
+    }
+
+    /// 容器视图：铺满父视图时同步把播放层也铺满。
+    final class PlayerContainerView: UIView {
+        var playerLayer: AVPlayerLayer?
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            playerLayer?.frame = bounds
+        }
+    }
 }
 
 /// 液态玻璃条：iOS 26+ 用系统液态玻璃，低版本回退到半透明黑条，
@@ -537,7 +585,7 @@ private struct AddWallpaperView: View {
                     Text(message).font(.caption).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("缩略图和预览视频都可选：缩略图不选会用包里的图自动生成；预览视频不选也能下载安装。")
+                Text("缩略图和预览视频都可选：选了视频就用视频当封面（卡片里直接循环播放）；没视频才会用图或包里的图自动生成封面；预览视频不选也能下载安装。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("增加到目录") { Task { await add() } }
                     .buttonStyle(.borderedProminent)
@@ -593,7 +641,7 @@ private struct AddWallpaperView: View {
         }
     }
 
-    /// 增加流程（顺序固定）：传包 → 传图 → 传视频（可选）→ 追加条目并推表。
+    /// 增加流程：传包 → （选了视频传视频当封面，否则传图）→ 追加条目并推表。
     @MainActor
     private func add() async {
         guard let token = accountStore.loadToken() else {
@@ -601,13 +649,13 @@ private struct AddWallpaperView: View {
             return
         }
         guard let packageData = tendiesData else { return }
-        // 缩略图没选时，用包里的背景图自动生成一张，别卡在必填上。
-        var thumbToUpload = thumbData
-        if thumbToUpload == nil {
-            thumbToUpload = Self.autoThumbnail(from: packageData)
+        // 封面优先级：选了视频 → 视频直接当封面（不抽帧）；没视频才找图（选的图 > 包里的图）。
+        var imageData: Data?
+        if videoData == nil {
+            imageData = thumbData ?? Self.autoThumbnail(from: packageData)
         }
-        guard let imageData = thumbToUpload else {
-            message = "缩略图没生成，手动选一张图再试。"
+        guard videoData != nil || imageData != nil else {
+            message = "封面没着落：这个包里没找到图，点上方\"选缩略图\"手动选一张。"
             return
         }
         let id = CatalogStore.safeID(from: tendiesName)
@@ -624,16 +672,21 @@ private struct AddWallpaperView: View {
         let finalTags = parsedTags.isEmpty ? ["动漫"] : parsedTags
         do {
             try await store.uploadWallpaperFile(name: "\(id).tendies", data: packageData, token: token)
-            try await store.uploadWallpaperFile(name: "\(id)-thumb.jpg", data: imageData, token: token)
+            // 视频优先：选了视频就不传静态封面图，thumbnail 和 preview 都指这个视频。
+            var thumbnailURL = ""
             var previewURL = ""
             if let videoData {
                 let videoName = "\(id)-preview.\(Self.videoExtension(for: videoItem))"
                 try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token)
                 previewURL = CatalogStore.wallpapersRawBase + videoName
+                thumbnailURL = previewURL
+            } else {
+                try await store.uploadWallpaperFile(name: "\(id)-thumb.jpg", data: imageData!, token: token)
+                thumbnailURL = CatalogStore.wallpapersRawBase + "\(id)-thumb.jpg"
             }
             let newItem = CatalogItem(
                 id: id, title: title.trimmingCharacters(in: .whitespaces), tags: finalTags,
-                thumbnailURL: CatalogStore.wallpapersRawBase + "\(id)-thumb.jpg",
+                thumbnailURL: thumbnailURL,
                 previewURL: previewURL,
                 packageURL: CatalogStore.wallpapersRawBase + "\(id).tendies",
                 pinned: false, downloads: 0)
@@ -653,6 +706,8 @@ private struct AddWallpaperView: View {
     }
 
     /// 没选缩略图时的兜底：从包里挑背景层的图自动压一张。
+    /// 找图条件放宽：assets 路径大小写不敏感、前后缀不限，常见图片格式都认；
+    /// 实在没命中就全包逐张试解，挑像素最大的当封面，尽量不卡在封面这步。
     private static func autoThumbnail(from packageData: Data) -> Data? {
         let zip = ZipFoundationAdapter()
         // 包可能是 WALLIVE1 加密包，先还原成明文 zip 再翻资产。
@@ -664,15 +719,37 @@ private struct AddWallpaperView: View {
             plain = packageData
         }
         guard let entries = try? zip.listEntries(in: plain) else { return nil }
-        // 资产图片里优先背景层，其次第一张。
-        let images = entries.filter {
-            $0.contains("/assets/") && [".jpeg", ".jpg", ".png"].contains(($0 as NSString).pathExtension.lowercased())
+        let imageExts = ["jpeg", "jpg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"]
+        let isImageEntry = { (path: String) -> Bool in
+            imageExts.contains((path as NSString).pathExtension.lowercased())
         }
-        guard let picked = images.first(where: { $0.contains("Background") }) ?? images.first,
-              let data = try? zip.readEntry(picked, in: plain),
-              let image = UIImage(data: data)
-        else { return nil }
-        // 最长边压到 720，控制封面图体积。
+        // 资产图片里优先背景层，其次 assets 下第一张；
+        // 都没有就把全包的图挨个解开，挑像素面积最大的那张。
+        let assetImages = entries.filter { isImageEntry($0) && $0.lowercased().contains("assets") }
+        if let picked = assetImages.first(where: { $0.lowercased().contains("background") })
+            ?? assetImages.first,
+            let data = try? zip.readEntry(picked, in: plain),
+            let image = UIImage(data: data) {
+            return Self.compressThumbnail(image)
+        }
+        var bestImage: UIImage?
+        var bestPixels: CGFloat = 0
+        for path in entries.filter(isImageEntry) {
+            guard let data = try? zip.readEntry(path, in: plain),
+                  let image = UIImage(data: data) else { continue }
+            let pixels = image.size.width * image.size.height * image.scale
+            if pixels > bestPixels {
+                bestPixels = pixels
+                bestImage = image
+            }
+            if bestPixels > 2_000_000 { break } // 够大就收手，别把大包全翻一遍。
+        }
+        guard let image = bestImage else { return nil }
+        return Self.compressThumbnail(image)
+    }
+
+    /// 最长边压到 720，控制封面图体积。
+    private static func compressThumbnail(_ image: UIImage) -> Data? {
         let maxSide: CGFloat = 720
         let size = image.size
         let longest = max(size.width, size.height)
