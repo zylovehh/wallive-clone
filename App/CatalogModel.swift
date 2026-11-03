@@ -1,7 +1,7 @@
 // CatalogModel.swift
 // 目录数据：一条壁纸的元数据、目录拉取、已下载管理。
-// 目录表 catalog.json 放在仓库根目录，App 打开时先拉仓库 raw 直链
-// （新表一推就能拉到，不受加速缓存影响），直链不通再回落到加速线路；
+// 目录表 catalog.json 放在仓库根目录，App 打开时按分发线路顺序拉取
+// （jsDelivr Fastly → jsDelivr Gcore → 仓库 raw 兜底），国内访问走前两条快线；
 // 全部失败就显示空状态，不崩。壁纸包、预览视频、缩略图放仓库 wallpapers/ 目录。
 // 管理端推完目录/传完壁纸后，自动清一下 CDN 缓存，用户端马上能看到新内容。
 
@@ -86,9 +86,8 @@ struct DownloadedItem: Identifiable, Codable, Equatable {
 /// 已下载记录存在 UserDefaults，文件存在沙盒 Documents/downloaded-wallpapers/。
 @MainActor
 final class CatalogStore: ObservableObject {
-    /// 目录/壁纸分发线路：壁纸包、视频、缩略图等大文件走 jsDelivr
-    /// Fastly（国内快线），新加进目录表的地址也用它；目录表本身
-    /// 另外按 catalogFetchHosts 的顺序拉（先直链后加速，见下）。
+    /// 目录/壁纸分发线路，按顺序尝试：jsDelivr Fastly（国内快线）→
+    /// jsDelivr Gcore（备胎）→ 仓库 raw 地址（兜底，前面全挂才用它）。
     /// 改仓库名或分支要同步改这里。
     static let catalogHosts = [
         "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
@@ -96,17 +95,7 @@ final class CatalogStore: ObservableObject {
         "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
     ]
 
-    /// 目录表拉取顺序：仓库 raw 直链在先（新表一推就能拉到，不受
-    /// 加速缓存卡旧版的影响；表只有几 KB，直链慢一点也感觉不出来），
-    /// 直链不通就回落到 jsDelivr Fastly → Gcore（旧表保底）。
-    /// 大文件不走这条顺序，仍按目录表里的加速地址下载。
-    static let catalogFetchHosts = [
-        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
-        "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
-        "https://gcore.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
-    ]
-
-    /// 目录表地址（主线路；实际拉取在 fetch 里按 catalogFetchHosts 顺序尝试）。
+    /// 目录表地址（主线路；实际拉取在 fetch 里按 catalogHosts 顺序尝试）。
     static let catalogURLString = catalogHosts[0] + "/" + catalogPath
 
     /// 目录仓库（公开目录仓库，管理员改置顶、增删时推到这里）。
@@ -150,18 +139,16 @@ final class CatalogStore: ObservableObject {
         downloadedDirectory.appendingPathComponent(record.fileName)
     }
 
-    /// 拉目录表：按 catalogFetchHosts 顺序尝试（直链 → Fastly → Gcore），
+    /// 拉目录表：按线路顺序尝试（Fastly → Gcore → 仓库 raw），
     /// 第一条通的生效；全失败就留空 + 报错文案，绝不崩。
     func fetch() async {
         loading = true
         defer { loading = false }
         var lastError: Error?
-        for host in Self.catalogFetchHosts {
+        for host in Self.catalogHosts {
             guard let url = URL(string: host + "/" + Self.catalogPath) else { continue }
             do {
-                // 直链在国内可能慢甚至打不开，只给它 10 秒，超时就回落到加速线路。
-                let request = URLRequest(url: url, timeoutInterval: host == Self.catalogFetchHosts[0] ? 10 : 60)
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await URLSession.shared.data(from: url)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     throw CatalogError.notFound
                 }
@@ -284,10 +271,12 @@ final class CatalogStore: ObservableObject {
     }
 
     /// 上传一个壁纸文件到仓库 wallpapers/ 目录（已有同名就覆盖，重试不报错）。
-    func uploadWallpaperFile(name: String, data: Data, token: String) async throws {
+    /// progress：上传进度回调（0~1，可能从非主线程调用），nil 表示不关心进度。
+    func uploadWallpaperFile(name: String, data: Data, token: String,
+                             progress: ((Double) -> Void)? = nil) async throws {
         try await githubPut(
             path: "\(Self.wallpapersDir)/\(name)", contentBase64: data.base64EncodedString(),
-            message: "Upload \(name) via app", token: token)
+            message: "Upload \(name) via app", token: token, progress: progress)
         // 清掉该文件的 CDN 缓存（目录本身的缓存由随后的 pushCatalog 统一清）。
         await purgeCDNCache(paths: ["\(Self.wallpapersDir)/\(name)"])
     }
@@ -328,7 +317,8 @@ final class CatalogStore: ObservableObject {
 
     /// 写（新建或覆盖）仓库里某个文件：内容先转 base64；已有文件要带上它的 sha 才能覆盖。
     /// 连续操作（删除/置顶连着点）时接口偶尔报 409 版本冲突，自动等一拍重取再推，最多重试两次。
-    private func githubPut(path: String, contentBase64: String, message: String, token: String) async throws {
+    private func githubPut(path: String, contentBase64: String, message: String, token: String,
+                           progress: ((Double) -> Void)? = nil) async throws {
         let baseBody: [String: Any] = ["message": message, "content": contentBase64]
         var lastStatus = 0
         for attempt in 0..<3 {
@@ -344,7 +334,16 @@ final class CatalogStore: ObservableObject {
             request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = bodyData
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response): (Data, URLResponse)
+            if let progress {
+                // 带进度的上传：每次发出数据块都会回传一次已传比例。
+                let delegate = UploadProgressDelegate(handler: progress)
+                let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+                (data, response) = try await session.data(for: request)
+                session.finishTasksAndInvalidate()
+            } else {
+                (data, response) = try await URLSession.shared.data(for: request)
+            }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             lastStatus = status
             if status == 200 || status == 201 { return }
@@ -365,6 +364,22 @@ final class CatalogStore: ObservableObject {
     /// id 转安全文件名：只留字母数字、下划线、横线，其余换成下划线。
     private func safeFileName(for id: String) -> String {
         Self.safeID(from: id) + ".tendies"
+    }
+}
+
+/// 上传进度回调的辅助类：URLSession 每发出一块数据就触发一次，把已传比例交给外面。
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate {
+    private let handler: (Double) -> Void
+
+    init(handler: @escaping (Double) -> Void) {
+        self.handler = handler
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
+                    totalBytesExpectedToSend: Int64) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        handler(min(1, Double(totalBytesSent) / Double(totalBytesExpectedToSend)))
     }
 }
 
