@@ -313,10 +313,10 @@ private struct ImportDetailView: View {
         }
     }
 
-    /// 折叠时框里只显示日志最后 5 行，点展开看全部。
+    /// 折叠时框里只显示日志最后 3 行，点展开看全部。
     private var logPreviewText: String {
         let lines = installLogText.split(separator: "\n", omittingEmptySubsequences: false)
-        return lines.suffix(5).joined(separator: "\n")
+        return lines.suffix(3).joined(separator: "\n")
     }
 
     private func shortTargetDir(_ path: String) -> String {
