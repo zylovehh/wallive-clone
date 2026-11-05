@@ -164,84 +164,113 @@ private struct StatusVPNPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("内置 VPN").font(.headline)
-                HStack {
-                    Text(vpn.statusText).font(.caption)
-                    Spacer()
-                    if vpn.isConnected {
-                        Button("关闭内置 VPN") { vpn.stop() }.buttonStyle(GlassButtonStyle())
-                    } else {
-                        Button("开启内置 VPN") { Task { await vpn.start() } }.buttonStyle(GlassButtonStyle())
-                    }
-                }
-                if !vpn.lastError.isEmpty {
-                    Text(vpn.lastError).font(.caption).foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                Text("第一次开启会弹系统提示，点“允许”。内置 VPN 只连本机（10.7.0.1），流量不出手机。开起来后，下面的检查和配对就能直接用，不用再装 LocalDevVPN。")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                Text("回环 VPN 连通").font(.headline)
-                HStack {
-                    TextField("管家地址", text: $host).textFieldStyle(.roundedBorder)
-                    TextField("端口", text: $portText).textFieldStyle(.roundedBorder)
-                        .keyboardType(.numberPad).frame(width: 90)
-                    Button("检查") {
-                        Task { await check() }
-                    }.buttonStyle(GlassButtonStyle())
-                }
-                if checking { ProgressView() }
-                if !vpnResult.isEmpty {
-                    Text(vpnResult).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Text("配对").font(.headline)
-                // 两个配对按钮并排、等宽，排版对齐。
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await generate() }
-                    } label: {
-                        Text("生成配对文件").frame(maxWidth: .infinity)
-                    }
-                    .disabled(generating)
-                    Button {
-                        Task { await checkPairing() }
-                    } label: {
-                        Text("检查配对状态").frame(maxWidth: .infinity)
-                    }
-                    .disabled(pairingChecking)
-                }.buttonStyle(GlassButtonStyle())
-                if generating || pairingChecking { ProgressView() }
-                if pairingHost.running {
-                    Button("取消") { pairingHost.softCancel() }.buttonStyle(GlassButtonStyle())
-                }
-                if let pin = pairingHost.pairingPIN {
-                    Text("配对 PIN：\(pin)")
-                        .font(.title2.bold())
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                    Text("去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输入上面这串数字。")
+                // 卡片 1：内置 VPN
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("内置 VPN").font(.headline)
+                    Text(vpn.statusText).font(.caption).foregroundStyle(.secondary)
+                    Text("第一次开启会弹系统提示，点“允许”。内置 VPN 只连本机（10.7.0.1），流量不出手机。开起来后，下面的检查和配对就能直接用，不用再装 LocalDevVPN。")
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                    if vpn.isConnected {
+                        Button { vpn.stop() } label: {
+                            Text("关闭内置 VPN").frame(maxWidth: .infinity)
+                        }.buttonStyle(GlassButtonStyle())
+                    } else {
+                        Button { Task { await vpn.start() } } label: {
+                            Text("开启内置 VPN").frame(maxWidth: .infinity)
+                        }.buttonStyle(GlassButtonStyle())
+                    }
+                    if !vpn.lastError.isEmpty {
+                        Text(vpn.lastError).font(.caption).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
                 }
-                if !pairingHost.pairingStatus.isEmpty && pairingHost.pairingStatus != "未开始" {
-                    Text(pairingHost.pairingStatus).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                .padding()
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                // 卡片 2：回环 VPN 连通
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("回环 VPN 连通").font(.headline)
+                    HStack(spacing: 10) {
+                        TextField("管家地址", text: $host)
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                        TextField("端口", text: $portText)
+                            .keyboardType(.numberPad).frame(width: 90)
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    Button { Task { await check() } } label: {
+                        Text("检查").frame(maxWidth: .infinity)
+                    }.buttonStyle(GlassButtonStyle())
+                    if checking {
+                        ProgressView().frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    if !vpnResult.isEmpty {
+                        Text(vpnResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                if !generateResult.isEmpty {
-                    Text(generateResult).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                .padding()
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                // 卡片 3：配对
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("配对").font(.headline)
+                    // 两个配对按钮并排、等宽，排版对齐。
+                    HStack(spacing: 12) {
+                        Button {
+                            Task { await generate() }
+                        } label: {
+                            Text("生成配对文件").frame(maxWidth: .infinity)
+                        }
+                        .disabled(generating)
+                        Button {
+                            Task { await checkPairing() }
+                        } label: {
+                            Text("检查配对状态").frame(maxWidth: .infinity)
+                        }
+                        .disabled(pairingChecking)
+                    }.buttonStyle(GlassButtonStyle())
+                    if generating || pairingChecking {
+                        ProgressView().frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    if pairingHost.running {
+                        Button { pairingHost.softCancel() } label: {
+                            Text("取消").frame(maxWidth: .infinity)
+                        }.buttonStyle(GlassButtonStyle())
+                    }
+                    if let pin = pairingHost.pairingPIN {
+                        Text("配对 PIN：\(pin)")
+                            .font(.title2.bold())
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        Text("去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输入上面这串数字。")
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if !pairingHost.pairingStatus.isEmpty && pairingHost.pairingStatus != "未开始" {
+                        Text(pairingHost.pairingStatus).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if !generateResult.isEmpty {
+                        Text(generateResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if !pairingCheckResult.isEmpty {
+                        Text(pairingCheckResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
                 }
-                if !pairingCheckResult.isEmpty {
-                    Text(pairingCheckResult).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
+                .padding()
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
             }
             .padding()
             .navigationTitle("回环 VPN")
