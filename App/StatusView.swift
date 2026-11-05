@@ -2,6 +2,7 @@
 // 状态：卡片点进二级页看详情（回环 VPN、配对记录、已安装记录、诊断日志），主页面只做菜单。
 
 import SwiftUI
+import UIKit
 
 /// 高透液态玻璃按钮样式：iOS 26+ 系统玻璃，低版本回退半透明黑胶囊。
 private struct GlassButtonStyle: ButtonStyle {
@@ -242,7 +243,7 @@ private struct StatusPairingPage: View {
                         openURL(url)
                     }
                 }.buttonStyle(GlassButtonStyle())
-                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”，等界面出现 6 位 PIN 后，去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
+                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”，会自动跳到“设置 › 隐私与安全 › 开发者模式”，点“与壁纸安装器配对”，PIN 出现后回本 App 看一眼，再去设置里输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -290,26 +291,45 @@ private struct StatusPairingPage: View {
     }
 
     /// 生成配对文件：先复用检查按钮的 VPN 连通逻辑，没连 VPN 就不配对；
-    /// 连通才启动本机配对主机，界面出现 6 位 PIN 后用户去设置里输 PIN，
-    /// 成功刷新状态，失败报真实原因。
+    /// 连通才启动本机配对主机（后台等握手），同时自动跳到
+    /// “设置 › 隐私与安全 › 开发者模式”，用户点“与壁纸安装器配对”，
+    /// PIN 出现后回本 App 看一眼，再去设置里输 PIN。成功刷新状态，失败报真实原因。
     private func generate() async {
         guard !generating else { return }
         generating = true
-        defer { generating = false }
         generateResult = "正在检查回环 VPN…"
         let port = UInt16(portText) ?? 62078
         let vpnOK = await state.checkVPN(host: host, port: port)
         guard vpnOK else {
+            generating = false
             generateResult = "没连上回环 VPN：请先在上面开启内置 VPN，或连上 LocalDevVPN，再点生成。"
             return
         }
-        generateResult = "正在启动本机配对…随后界面会出现 6 位 PIN。"
-        do {
-            _ = try await pairingHost.startAndWait()
-            state.refreshPairingStatus()
-            generateResult = "生成成功：配对文件已存好，可以去安装了。"
-        } catch {
-            generateResult = "生成失败：\(error.localizedDescription)"
+        generateResult = "正在启动本机配对…马上跳到设置里继续。"
+        Task {
+            do {
+                _ = try await pairingHost.startAndWait()
+                state.refreshPairingStatus()
+                generateResult = "生成成功：配对文件已存好，可以去安装了。"
+            } catch {
+                generateResult = "生成失败：\(error.localizedDescription)"
+            }
+            generating = false
+        }
+        // 配对主机已在后台启动，直接跳设置 → 隐私与安全 → 开发者模式。
+        openDeveloperSettings()
+    }
+
+    /// 自动跳到“设置 → 隐私与安全 → 开发者模式”。
+    /// App-Prefs 是系统设置内部链接，侧载 App 能用（不上 App Store，不用过审）。
+    /// 跳不过去就退到隐私与安全页，用户再点一下开发者模式。
+    private func openDeveloperSettings() {
+        if let url = URL(string: "App-Prefs:root=Privacy&path=DEVELOPER") {
+            UIApplication.shared.open(url, options: [:]) { ok in
+                if !ok, let fallback = URL(string: "App-Prefs:root=Privacy") {
+                    UIApplication.shared.open(fallback)
+                }
+            }
         }
     }
 
