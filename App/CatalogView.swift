@@ -23,6 +23,7 @@ struct CatalogView: View {
     @StateObject private var store = CatalogStore()
     @StateObject private var favorites = FavoritesStore()
     @State private var segment = 0 // 0 发现，1 我的
+    @Namespace private var segmentNS
     @State private var query = ""
     @State private var selectedCategory = "全部"
     @State private var previewItem: CatalogItem?
@@ -82,12 +83,20 @@ struct CatalogView: View {
                             .foregroundStyle(segment == value ? .white : .white.opacity(0.7))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(segment == value ? Color.white.opacity(0.18) : Color.clear, in: Capsule())
+                            .background {
+                                if segment == value {
+                                    Capsule()
+                                        .fill(Color.white.opacity(0.18))
+                                        .matchedGeometryEffect(id: "segmentPill", in: segmentNS)
+                                }
+                            }
                             .buttonStyle(PressBounceButtonStyle())
+                            .contentShape(Capsule())
                     }
                 }
                 .padding(4)
                 .modifier(LiquidGlassSegmented())
+                .animation(.spring(response: 0.35, dampingFraction: 0.7), value: segment)
                 .padding(.horizontal)
 
                 if segment == 0 {
@@ -227,12 +236,12 @@ struct CatalogView: View {
     private func downloadAndInstall(_ item: CatalogItem) async {
         if store.isDownloaded(item),
            let data = try? Data(contentsOf: store.localURL(for: item)) {
-            state.setPackage(data)
+            state.setPackage(data, displayName: item.title)
             state.selectedTab = 1
             return
         }
         if let data = await store.download(item) {
-            state.setPackage(data)
+            state.setPackage(data, displayName: item.title)
             state.selectedTab = 1
         }
     }
@@ -306,7 +315,7 @@ struct CatalogView: View {
                             HStack {
                                 Button("安装") {
                                     if let data = try? Data(contentsOf: store.localURL(for: record)) {
-                                        state.setPackage(data)
+                                        state.setPackage(data, displayName: record.title)
                                         state.selectedTab = 1
                                     }
                                 }
@@ -417,10 +426,8 @@ private struct CatalogCard: View {
                     Button(action: onPreview) {
                         Image(systemName: "play.fill")
                             .foregroundStyle(.white)
-                            .padding(10)
-                            .modifier(LiquidGlassCircle())
                     }
-                    .buttonStyle(PressBounceButtonStyle())
+                    .buttonStyle(RoundGlassButtonStyle())
                 }
                 Spacer()
                 Button {
@@ -428,19 +435,15 @@ private struct CatalogCard: View {
                 } label: {
                     Image(systemName: favorites.isFavorite(item.id) ? "heart.fill" : "heart")
                         .foregroundStyle(.white)
-                        .padding(10)
-                        .modifier(LiquidGlassCircle())
                 }
-                .buttonStyle(PressBounceButtonStyle())
+                .buttonStyle(RoundGlassButtonStyle())
                 // 管理员图钉：同排圆钮，也换高透玻璃，保持一排样式一致。
                 if isAdmin {
                     Button(action: onTogglePin) {
                         Image(systemName: item.pinned ? "pin.fill" : "pin")
                             .foregroundStyle(.white)
-                            .padding(10)
-                            .modifier(LiquidGlassCircle())
                     }
-                    .buttonStyle(PressBounceButtonStyle())
+                    .buttonStyle(RoundGlassButtonStyle())
                     .disabled(adminBusy)
                 }
             }
@@ -589,7 +592,22 @@ private struct LiquidGlassBar: ViewModifier {
 private struct PressBounceButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.93 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.90 : 1.0)
+            .opacity(configuration.isPressed ? 0.65 : 1.0)
+            .animation(.spring(response: 0.35, dampingFraction: 0.55), value: configuration.isPressed)
+    }
+}
+
+/// 圆钮：玻璃 + 点动合一，直接当 buttonStyle 用。
+/// 玻璃不套在 label 里层（之前那样点按没反应），44pt 实心命中区。
+private struct RoundGlassButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+            .modifier(LiquidGlassCircle())
+            .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
+            .opacity(configuration.isPressed ? 0.65 : 1.0)
             .animation(.spring(response: 0.35, dampingFraction: 0.55), value: configuration.isPressed)
     }
 }

@@ -167,9 +167,28 @@ private struct ImportDetailView: View {
     @State private var installReport: InstallReport?
     @State private var installLogText = ""
     @State private var showFullLog = false
+    @State private var showFullResult = false
+    @State private var showFullVerify = false
+    @State private var installStep = "正在安装…"
+    @State private var installProgress = 0.0
 
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
+
+    /// 核对区折叠时只显示的一行摘要：描述符短号 + 注入/偏好/登记/刷新各一词。
+    private var verifySummaryLine: String {
+        guard let report = installReport else { return "尚未安装，暂无核对结果。" }
+        let inject = report.injectResults.allSatisfy(\.ok) ? "注入成功" : "注入有失败"
+        let prefs = report.preferencesWritten ? "偏好成功" : "偏好未写入"
+        let reg = report.registration.map { "登记 \($0.remoteRecords)/\($0.packageRecords)/\($0.names)" } ?? "登记未执行"
+        let refresh: String
+        if let r = report.refresh {
+            refresh = r.confirmed ? "刷新已确认" : "刷新未确认"
+        } else {
+            refresh = "刷新未执行"
+        }
+        return "描述符 \(String(report.descriptorUUID.prefix(8))) · \(inject) · \(prefs) · \(reg) · \(refresh)"
+    }
 
     var body: some View {
         ScrollView {
@@ -213,13 +232,36 @@ private struct ImportDetailView: View {
                             .disabled(state.packageData == nil || !state.pairingLoaded || installing)
                         Spacer()
                     }
-                    if !installResult.isEmpty { Text(installResult).font(.caption) }
+                    if !installResult.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("安装结果").font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Button(showFullResult ? "收起" : "展开全部") { showFullResult.toggle() }
+                                    .font(.caption)
+                            }
+                            Text(installResult)
+                                .font(.caption)
+                                .lineLimit(showFullResult ? nil : 1)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(12)
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
+                    }
                     if !state.statusMessage.isEmpty {
                         Text(state.statusMessage).foregroundStyle(.red).font(.caption)
                             .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("核对已安装").font(.headline)
+                        HStack {
+                            Text("核对已安装").font(.headline)
+                            Spacer()
+                            Button(showFullVerify ? "收起" : "展开全部") { showFullVerify.toggle() }
+                                .font(.caption)
+                        }
+                        if showFullVerify {
                         if let report = installReport {
                             Text("描述符：\(report.descriptorUUID)").font(.caption).textSelection(.enabled)
                             ForEach(report.injectResults.indices, id: \.self) { index in
@@ -277,6 +319,9 @@ private struct ImportDetailView: View {
                         } else {
                             Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出。").font(.caption).foregroundStyle(.secondary)
                         }
+                        } else {
+                            Text(verifySummaryLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
                     Text("去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
                         .font(.caption).foregroundStyle(.secondary)
@@ -287,14 +332,18 @@ private struct ImportDetailView: View {
             }
             .padding()
         }
+        .background(AppBackgroundView())
         .navigationTitle("壁纸包详情")
         .overlay {
             if installing {
                 ZStack {
                     Color.black.opacity(0.4).ignoresSafeArea()
                     VStack(spacing: 12) {
-                        ProgressView()
-                        Text("正在安装…")
+                        ProgressView(value: installProgress)
+                            .frame(width: 200)
+                        Text(installStep)
+                        Text("\(Int(installProgress * 100))%")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text("请稍等，不要退出").font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(28)
@@ -314,9 +363,23 @@ private struct ImportDetailView: View {
         }
     }
 
+    /// 名称行：目录下载的包直接显示中文名；直接导入的文件，清理包里的技术名再显示。
     private func value(_ info: TendiesPackageInfo) -> String {
-        let name = (info.wallpaperDirectory as NSString).lastPathComponent
-        return name.hasSuffix(".wallpaper") ? String(name.dropLast(".wallpaper".count)) : name
+        if let name = state.packageDisplayName, !name.isEmpty { return name }
+        var name = (info.wallpaperDirectory as NSString).lastPathComponent
+        if name.hasSuffix(".wallpaper") { name = String(name.dropLast(".wallpaper".count)) }
+        // 去编号前缀：7926.SpiderManDepth-... -> SpiderManDepth-...
+        if let dot = name.firstIndex(of: ".") {
+            let head = name[name.startIndex..<dot]
+            if head.allSatisfy({ $0.isNumber }) { name = String(name[name.index(after: dot)...]) }
+        }
+        // 去尺寸后缀：-390w-844h@3x~iphone
+        if let range = name.range(of: "-\\d+w-\\d+h@\\dx~iphone$", options: .regularExpression) {
+            name.removeSubrange(range)
+        }
+        // 去深景后缀：SpiderManDepth -> SpiderMan
+        if name.hasSuffix("Depth") { name = String(name.dropLast("Depth".count)) }
+        return name.isEmpty ? info.descriptorUUID : name
     }
 
     private func sizeText() -> String {
@@ -338,11 +401,18 @@ private struct ImportDetailView: View {
     /// 有缺失时，第二档不出现，页面如实写通道不可用或缺失。
     private func runInstall() async {
         installing = true
+        installStep = "正在准备安装包…"
+        installProgress = 0
         installResult = ""
         installReport = nil
         installLogText = ""
         defer { installing = false }
-        if let report = await state.installWithReport(host: "10.7.0.1") {
+        if let report = await state.installWithReport(host: "10.7.0.1", onProgress: { step, fraction in
+            Task { @MainActor in
+                installStep = step
+                installProgress = fraction
+            }
+        }) {
             installReport = report
             installLogText = InstallLog.shared.tail(60)
             let dirLines = report.injectResults.map { result in

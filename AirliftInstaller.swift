@@ -232,12 +232,14 @@ public enum AirliftInstaller {
         descriptorUUID: String,
         pairingPath: String,
         targetHost: String = "10.7.0.1",
-        forceRefresh: Bool = true
+        forceRefresh: Bool = true,
+        onProgress: ((String, Double) -> Void)? = nil
     ) async throws -> InstallReport {
         InstallLog.shared.clear()
         // 0. 装前先检查（只读不写）：配对不通就直接报错，不写盘。
         // checkPairing 只设目标主机并找容器，不写任何文件。
         let container = try await checkPairing(pairingPath: pairingPath, targetHost: targetHost)
+        onProgress?("正在检查配对…", 0.10)
         // 1. 设目标主机（AirCard 里也是忽略返回值，只当提示）。
         targetHost.withCString { _ = al_set_target_host($0) }
 
@@ -278,6 +280,7 @@ public enum AirliftInstaller {
             "\(container)/Library/Application Support/PRBPosterExtensionDataStore/\(structVersion)/Extensions/\($0)/descriptors"
         }
         var injectResults: [InjectResult] = []
+        onProgress?("正在写入描述符…", 0.15)
         for (index, targetParent) in targets.enumerated() {
             do {
                 try await injectFolder(
@@ -290,6 +293,7 @@ public enum AirliftInstaller {
                 }
                 injectResults.append(InjectResult(targetParentDir: targetParent, ok: false, error: "\(error)"))
             }
+            onProgress?("正在写入描述符…", 0.15 + 0.175 * Double(index + 1))
         }
 
         // 6. 写偏好，让 PosterBoard 重载描述符、重置文件保护（键与路径均不动）。
@@ -300,14 +304,17 @@ public enum AirliftInstaller {
         if forceRefresh {
             try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
         }
+        onProgress?("正在写入偏好…", 0.60)
 
         // 8. 读回核对（阶段 A）：对每个注入目标各调一次 al_verify_descriptor，
         //    结果进报告。核对失败不抛错、不影响“已写入设备”的结论，只如实记录；
         //    通道不可用时结果里 channel 记 unavailable，页面不得写成“描述符缺失”。
         var verifyResults: [VerifyResult] = []
-        for targetParent in targets {
+        onProgress?("正在读回核对…", 0.65)
+        for (index, targetParent) in targets.enumerated() {
             verifyResults.append(await verifyDescriptor(
                 targetParentDir: targetParent, destName: destUUID, pairingPath: pairingPath))
+            onProgress?("正在读回核对…", 0.65 + 0.05 * Double(index + 1))
         }
 
         // 9. 登记（阶段 C）：把这次安装记进 App 自己的 ManagedPosterBoard 账本。
@@ -321,11 +328,13 @@ public enum AirliftInstaller {
             installedPaths: installedPaths,
             packageKey: wallpaperName,
             wallpaperName: wallpaperName)
+        onProgress?("正在登记…", 0.80)
 
         // 10. 进程刷新（阶段 D）：给 PosterBoard 进程发信号 9（SIGKILL），
         //     等它重启、重读扩展目录，再重连验证。刷新失败只记进报告、不抛错；
         //     图库里有没有壁纸，仍要去锁屏图库看（wallpaper_visible 永远是
         //     unverified）。只杀 PosterBoard 一个进程，不重启桌面、不重启设备。
+        onProgress?("正在刷新 PosterBoard…", 0.85)
         let refresh = await posterboardRefresh(pairingPath: pairingPath)
 
         // 11. 到此为止，直接返回报告，绝不要在这里重启设备，更不要重启手机。
@@ -333,6 +342,7 @@ public enum AirliftInstaller {
         // 它实际是向 diagnostics_relay 发 Restart，等于整机重启，
         // 会把安装在完成前打断——每次安装都白苹果重启、壁纸进不去。
         // 桌面重启（只重启桌面）是另外一步，不在这里做，也绝不能调整机重启。
+        onProgress?("安装完成", 1.0)
         return InstallReport(
             descriptorUUID: destUUID,
             injectResults: injectResults,

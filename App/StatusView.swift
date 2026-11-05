@@ -32,7 +32,6 @@ struct StatusView: View {
     @State private var host = "10.7.0.1"
     @State private var portText = "62078"
     // QQ 卡渐变文字：细体，从左往右流动循环。
-    @State private var qqGradientX: CGFloat = 0
 
     var body: some View {
         NavigationStack {
@@ -107,17 +106,18 @@ struct StatusView: View {
                                     openURL(url)
                                 }
                             } label: {
-                                Text("进群领取视频教程")
-                                    .font(.headline.weight(.light))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [.cyan, .blue, .purple, .pink, .orange, .cyan, .blue, .purple, .pink, .orange, .cyan],
-                                            startPoint: UnitPoint(x: qqGradientX, y: 0.5),
-                                            endPoint: UnitPoint(x: qqGradientX + 2, y: 0.5)
+                                TimelineView(.animation) { timeline in
+                                    let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
+                                    Text("进群领取视频教程")
+                                        .font(.headline.weight(.light))
+                                        .foregroundStyle(
+                                            LinearGradient(
+                                                colors: [.cyan, .blue, .purple, .pink, .orange, .cyan, .blue, .purple, .pink, .orange, .cyan],
+                                                startPoint: UnitPoint(x: phase, y: 0.5),
+                                                endPoint: UnitPoint(x: phase + 2, y: 0.5)
+                                            )
                                         )
-                                    )
-                                    .animation(.linear(duration: 3).repeatForever(autoreverses: false), value: qqGradientX)
-                                    .onAppear { qqGradientX = 1 }
+                                }
                             }
                             .buttonStyle(.plain)
                             Button("加入 QQ 群") {

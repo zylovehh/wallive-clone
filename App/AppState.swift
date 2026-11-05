@@ -14,6 +14,8 @@ final class AppState: ObservableObject {
     @Published var packageInfo: TendiesPackageInfo?
     @Published var packageImportedAt: Date?
     @Published var packageError: String?
+    /// 目录下载时带来的中文名（如“蜘蛛侠 2”）；直接导入文件时为空，详情页改显示清理过的包名。
+    @Published var packageDisplayName: String?
     @Published var pairingLoaded = false
     @Published var pairingDescription = "未导入"
     @Published var installHistory: [String] = []
@@ -33,8 +35,10 @@ final class AppState: ObservableObject {
     }
 
     /// 设当前包并做检查（WALLIVE1 加密包先解密再校验结构）。
-    func setPackage(_ data: Data) {
+    /// displayName：目录下载时传条目标题；直接导入文件时不传。
+    func setPackage(_ data: Data, displayName: String? = nil) {
         packageData = data
+        packageDisplayName = displayName
         packageImportedAt = Date()
         do {
             packageInfo = try TendiesPackage.inspect(data, zip: zip)
@@ -100,14 +104,16 @@ final class AppState: ObservableObject {
     /// 与旧 install() 的区别：逐目录结果记进 installReports，诊断页可显示；
     /// 暂存步骤与旧入口相同（DescriptorInstaller.stage），不改写盘逻辑、
     /// 配对、偏好键与路径、结构版本映射、标识策略。
-    func installWithReport(host: String, forceRefresh: Bool = true) async -> InstallReport? {
+    func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async -> InstallReport? {
         guard let data = packageData, hasPairingFile else { return nil }
         do {
+            onProgress?("正在准备安装包…", 0.05)
             let installer = DescriptorInstaller(zip: zip)
             let (stage, descriptorUUID) = try installer.stage(data)
             let report = try await AirliftInstaller.installWithReport(
                 stagedDirectory: stage, descriptorUUID: descriptorUUID,
-                pairingPath: pairingFileURL.path, targetHost: host, forceRefresh: forceRefresh)
+                pairingPath: pairingFileURL.path, targetHost: host, forceRefresh: forceRefresh,
+                onProgress: onProgress)
             installHistory.append(report.descriptorUUID)
             installReports.append(report)
             return report
