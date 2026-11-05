@@ -156,6 +156,7 @@ private struct ImportDetailView: View {
     @State private var installResult = ""
     @State private var installReport: InstallReport?
     @State private var installLogText = ""
+    @State private var showFullLog = false
 
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
@@ -216,10 +217,21 @@ private struct ImportDetailView: View {
                             Text("偏好写入：\(report.preferencesWritten ? "成功" : "未写入")").font(.caption)
                             Text("尚未核对目标落地（读回接口未就位，写盘成功不代表图库已列出）。").font(.caption).foregroundStyle(.secondary)
                             if !installLogText.isEmpty {
-                                DisclosureGroup("安装日志（可长按复制）") {
-                                    Text(installLogText).font(.caption).textSelection(.enabled)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("安装日志（可长按复制）").font(.caption).foregroundStyle(.secondary)
+                                        Spacer()
+                                        Button(showFullLog ? "收起" : "展开全部") { showFullLog.toggle() }
+                                            .font(.caption)
+                                    }
+                                    Text(showFullLog ? installLogText : logPreviewText)
+                                        .font(.caption)
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
-                                .font(.caption)
+                                .padding(12)
+                                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
                             }
                         } else {
                             Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出，目标落地尚未核对（读回接口未就位）。").font(.caption).foregroundStyle(.secondary)
@@ -299,6 +311,12 @@ private struct ImportDetailView: View {
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
         }
+    }
+
+    /// 折叠时框里只显示日志最后 5 行，点展开看全部。
+    private var logPreviewText: String {
+        let lines = installLogText.split(separator: "\n", omittingEmptySubsequences: false)
+        return lines.suffix(5).joined(separator: "\n")
     }
 
     private func shortTargetDir(_ path: String) -> String {
