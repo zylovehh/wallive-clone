@@ -198,10 +198,6 @@ private struct StatusVPNPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text("配对").font(.headline)
-                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 点下面的“生成配对文件”，会自动跳到“设置 › 隐私与安全 › 开发者模式”，点“与壁纸安装器配对”，PIN 出现后回本 App 看一眼，再去设置里输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
                 HStack {
                     Button("生成配对文件") {
                         Task { await generate() }
