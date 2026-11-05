@@ -17,6 +17,9 @@ private struct GlassButtonStyle: ButtonStyle {
                     Capsule().fill(.white.opacity(0.06))
                 }
             }
+            // 点动特效：点下缩一点、松开弹簧弹回，跟底部 dock 栏的点动一样。
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .animation(.spring(response: 0.35, dampingFraction: 0.55), value: configuration.isPressed)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
 }
@@ -168,7 +171,7 @@ private struct StatusVPNPage: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("内置 VPN").font(.headline)
                     Text(vpn.statusText).font(.caption).foregroundStyle(.secondary)
-                    Text("第一次开启会弹系统提示，点“允许”。内置 VPN 只连本机（10.7.0.1），流量不出手机。开起来后，下面的检查和配对就能直接用，不用再装 LocalDevVPN。")
+                    Text("第一次开启会弹系统提示，点“允许”。内置 VPN 只连本机（10.7.0.1），流量不出手机。开起来后，下面的检查和配对就能直接用。")
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)

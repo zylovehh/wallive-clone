@@ -23,6 +23,15 @@ private extension View {
     func glassCapsule() -> some View { modifier(LiquidGlassCapsule()) }
 }
 
+/// 点动特效：点下缩一点、松开弹簧弹回，跟底部 dock 栏的点动一样。
+private struct PressBounceButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.93 : 1.0)
+            .animation(.spring(response: 0.35, dampingFraction: 0.55), value: configuration.isPressed)
+    }
+}
+
 struct ImportView: View {
     @EnvironmentObject private var state: AppState
     @State private var showPicker = false
@@ -41,6 +50,7 @@ struct ImportView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 28).padding(.vertical, 12)
                         .glassCapsule()
+                        .buttonStyle(PressBounceButtonStyle())
                     Spacer()
                 }
                 .listRowBackground(Color.clear)
@@ -191,6 +201,7 @@ private struct ImportDetailView: View {
                         Button("制作深景包") { state.selectedTab = 2 }
                             .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .frame(width: buttonWidth).padding(.vertical, 12).glassCapsule()
+                            .buttonStyle(PressBounceButtonStyle())
                         Spacer()
                     }
                     HStack {
@@ -198,6 +209,7 @@ private struct ImportDetailView: View {
                         Button("安装壁纸") { Task { await runInstall() } }
                             .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .frame(width: buttonWidth).padding(.vertical, 12).glassCapsule()
+                            .buttonStyle(PressBounceButtonStyle())
                             .disabled(state.packageData == nil || !state.pairingLoaded || installing)
                         Spacer()
                     }

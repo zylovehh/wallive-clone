@@ -18,6 +18,9 @@ private struct GlassButtonStyle: ButtonStyle {
                     Capsule().fill(.white.opacity(0.06))
                 }
             }
+            // 点动特效：点下缩一点、松开弹簧弹回，跟底部 dock 栏的点动一样。
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .animation(.spring(response: 0.35, dampingFraction: 0.55), value: configuration.isPressed)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
 }

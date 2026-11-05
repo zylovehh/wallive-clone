@@ -83,6 +83,7 @@ struct CatalogView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                             .background(segment == value ? Color.white.opacity(0.18) : Color.clear, in: Capsule())
+                            .buttonStyle(PressBounceButtonStyle())
                     }
                 }
                 .padding(4)
@@ -364,7 +365,7 @@ private struct CatalogCard: View {
     let onTogglePin: () -> Void
     let onDelete: () -> Void
 
-    /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封面播。
+    /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封��播。
     private var coverVideoURL: URL? {
         if Self.isVideoPath(item.thumbnailURL), let url = URL(string: item.thumbnailURL) {
             return url
@@ -419,6 +420,7 @@ private struct CatalogCard: View {
                             .padding(10)
                             .modifier(LiquidGlassCircle())
                     }
+                    .buttonStyle(PressBounceButtonStyle())
                 }
                 Spacer()
                 Button {
@@ -429,6 +431,7 @@ private struct CatalogCard: View {
                         .padding(10)
                         .modifier(LiquidGlassCircle())
                 }
+                .buttonStyle(PressBounceButtonStyle())
                 // 管理员图钉：同排圆钮，也换高透玻璃，保持一排样式一致。
                 if isAdmin {
                     Button(action: onTogglePin) {
@@ -437,6 +440,7 @@ private struct CatalogCard: View {
                             .padding(10)
                             .modifier(LiquidGlassCircle())
                     }
+                    .buttonStyle(PressBounceButtonStyle())
                     .disabled(adminBusy)
                 }
             }
@@ -480,6 +484,7 @@ private struct CatalogCard: View {
                     .padding(.vertical, 10)
                     .modifier(LiquidGlassBar())
                 }
+                .buttonStyle(PressBounceButtonStyle())
                 .disabled(downloading)
                 // 管理员删除：只从目录表里删条目（只有登入的管理员能看到）。
                 if isAdmin {
@@ -544,43 +549,48 @@ private struct InlineVideoCover: UIViewRepresentable {
     }
 }
 
-/// 高透液态玻璃圆钮：播放、收藏、图钉共用，tint 尽量淡。
+/// 液态透明圆钮：播放、收藏、图钉共用。
 private struct LiquidGlassCircle: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular.tint(.white.opacity(0.08)), in: Circle())
+            content.glassEffect(.clear, in: Circle())
         } else {
-            content.background(.black.opacity(0.12)).clipShape(Circle())
+            content.background(.white.opacity(0.06)).clipShape(Circle())
         }
     }
 }
 
-/// 高透液态玻璃分段条外框：发现 / 我的共用。
+/// 液态透明分段条外框：发现 / 我的共用。
 private struct LiquidGlassSegmented: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular.tint(.white.opacity(0.08)), in: Capsule())
+            content.glassEffect(.clear, in: Capsule())
         } else {
-            content.background(.black.opacity(0.12)).clipShape(Capsule())
+            content.background(.white.opacity(0.06)).clipShape(Capsule())
         }
     }
 }
 
-/// 液态玻璃条：iOS 26+ 用系统液态玻璃，低版本回退到半透明黑条，
-/// 视觉上仍是同一条玻璃下载条，不会因系统版本编译不过或显示断层。
-/// 形状是两头全圆的胶囊，高透：tint 尽量淡，让底下的壁纸透出来。
+/// 液态透明条：iOS 26+ 用透明系统液态玻璃，低版本回退半透明白条。
+/// 形状是两头全圆的胶囊，玻璃透明，让底下的壁纸透出来。
 private struct LiquidGlassBar: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(
-                .regular.tint(.white.opacity(0.08)),
-                in: Capsule()
-            )
+            content.glassEffect(.clear, in: Capsule())
         } else {
             content
-                .background(.black.opacity(0.12))
+                .background(.white.opacity(0.06))
                 .clipShape(Capsule())
         }
+    }
+}
+
+/// 点动特效：点下缩一点、松开弹簧弹回，跟底部 dock 栏的点动一样。
+private struct PressBounceButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.93 : 1.0)
+            .animation(.spring(response: 0.35, dampingFraction: 0.55), value: configuration.isPressed)
     }
 }
 
