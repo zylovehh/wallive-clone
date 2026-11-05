@@ -94,33 +94,36 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // QQ 群：企鹅图标去掉，左边是渐变文字，右边是加入 QQ 群按钮（绿色去掉），点哪边都进群领视频教程。
+                    // QQ 群：企鹅图标去掉，左边渐变文字、右边加入 QQ 群按钮（绿色去掉），两个挨在一起放中间，点哪边都进群领视频教程。
                     HStack {
-                        Button {
-                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                openURL(url)
-                            }
-                        } label: {
-                            Text("进群领取视频教程")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [.cyan, .blue, .purple, .pink, .orange, .cyan],
-                                        startPoint: qqGradientPhase ? .topLeading : .bottomTrailing,
-                                        endPoint: qqGradientPhase ? .bottomTrailing : .topLeading
-                                    )
-                                )
-                                .animation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true), value: qqGradientPhase)
-                                .onAppear { qqGradientPhase = true }
-                        }
-                        .buttonStyle(.plain)
                         Spacer()
-                        Button("加入 QQ 群") {
-                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                openURL(url)
+                        HStack(spacing: 8) {
+                            Button {
+                                if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                                    openURL(url)
+                                }
+                            } label: {
+                                Text("进群领取视频教程")
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(
+                                        LinearGradient(
+                                            colors: [.cyan, .blue, .purple, .pink, .orange, .cyan],
+                                            startPoint: qqGradientPhase ? .topLeading : .bottomTrailing,
+                                            endPoint: qqGradientPhase ? .bottomTrailing : .topLeading
+                                        )
+                                    )
+                                    .animation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true), value: qqGradientPhase)
+                                    .onAppear { qqGradientPhase = true }
                             }
+                            .buttonStyle(.plain)
+                            Button("加入 QQ 群") {
+                                if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                                    openURL(url)
+                                }
+                            }
+                            .buttonStyle(GlassButtonStyle())
                         }
-                        .buttonStyle(GlassButtonStyle())
+                        Spacer()
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
