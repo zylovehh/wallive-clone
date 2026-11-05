@@ -1,0 +1,30 @@
+# 复刻版 App 壳：Codemagic 编未签名 IPA（用户自己签名安装），与 GitHub Actions 工作流同步骤。
+workflows:
+  ios-unsigned:
+    name: WalliveClone unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Show Xcode version
+        script: xcodebuild -version
+      - name: Unpack rust-core
+        script: unzip -o rust-core.zip && ls rust-core
+      - name: Build AirliftFFI (device only)
+        script: bash build-airlift.sh
+      - name: Resolve package dependencies
+        script: xcodebuild -resolvePackageDependencies -project WalliveClone.xcodeproj -scheme WalliveClone
+      - name: Archive (unsigned)
+        script: xcodebuild archive -project WalliveClone.xcodeproj -scheme WalliveClone -configuration Release -destination "generic/platform=iOS" -archivePath build/WalliveClone.xcarchive CODE_SIGNING_ALLOWED=NO
+      - name: Package unsigned IPA
+        script: |
+          APP_PATH="build/WalliveClone.xcarchive/Products/Applications/WalliveClone.app"
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload WalliveClone-unsigned.ipa
+          ls -l WalliveClone-unsigned.ipa
+    artifacts:
+      - WalliveClone-unsigned.ipa
