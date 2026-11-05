@@ -11,11 +11,12 @@
 //   3. 把暂存的描述符目录注入容器里的扩展数据存储
 //      （…/PRBPosterExtensionDataStore/<版本>/Extensions/<扩展>/descriptors/<新 UUID>）；
 //   4. 写 PosterBoard 偏好（让系统重载描述符、重置文件保护）；
-//   5. 返回安装报告（描述符 UUID + 逐目录结果 + 偏好结果），不再只返回 UUID。
-//      注意：报告只代表写盘函数返回的结果，不代表图库已列出；目标落地
-//      是否真的在设备上，必须等读回接口就位后核对，在此之前不得断言图库可见。
-//      不做对账、不做登记、不做进程刷新（格式需逆向确认，本补丁不硬编）；
-//      不重启设备、不调任何重启接口、不做桌面重启冒充。
+//   5. 返回安装报告（描述符 UUID + 逐目录结果 + 偏好结果 + 读回核对 +
+//      登记 + 进程刷新），不再只返回 UUID。注意：写盘结果只代表写盘函数
+//      返回成功，不代表图库已列出；目标落地是否真的在设备上，看报告里的
+//      读回核对结果；进程刷新只代表 PosterBoard 进程已重启重读，图库里
+//      有没有仍要去锁屏图库看。对账（阶段 B）等逆向确认 x0 后再接，
+//      确认前不硬编；不重启设备、不调任何重启接口、不做桌面重启冒充。
 // 标识处理照 AirCard 的规矩：如果包里有建议元数据（suggestionMetadata），
 // 标识保持原样不动（乱改会让系统查不到）；否则生成新 UUID 并同步改掉
 // 描述符里的数字标识，避免重复安装撞标识。
@@ -64,13 +65,104 @@ public struct InjectResult {
     public let error: String?
 }
 
-/// 安装报告：描述符 UUID + 逐目录注入结果 + 偏好写入结果。
-/// 注意：这只代表写盘函数返回的结果，不代表图库已列出；目标落地是否
-/// 真的在设备上，必须等读回接口就位后核对，在此之前不得断言图库可见。
+/// 单个目标目录的读回核对结果（诊断用，不许合并成一个布尔值）。
+/// channel 为 "house_arrest" 时表示读回通道已通，逐项结果可信；
+/// 为 "unavailable" 时表示通道没通（系统不放行容器直读），逐项结果
+/// 不可信，页面必须写“读回通道不可用”，不许写成“描述符缺失”。
+public struct VerifyResult {
+    public let targetParentDir: String
+    public let channel: String
+    public let descriptorDirExists: Bool
+    public let descriptorDirEntries: Int?
+    public let wallpaperPlistExists: Bool
+    public let wallpaperPlistSize: Int?
+    public let wallpaperName: String?
+    public let identifierExists: Bool
+    public let identifierSize: Int?
+    public let identifierContent: String?
+    public let error: String?
+
+    /// 三项全在（且通道通）才算核对到。
+    public var allPresent: Bool {
+        channel == "house_arrest" && descriptorDirExists && wallpaperPlistExists && identifierExists
+    }
+    /// 通道没通，逐项结果不可信。
+    public var channelUnavailable: Bool { channel != "house_arrest" }
+
+    /// 从 Rust 返回的 JSON 组装；JSON 为空（通道失败）时记 unavailable。
+    init(targetParentDir: String, jsonString: String?, error: String?) {
+        self.targetParentDir = targetParentDir
+        self.error = error
+        if let jsonString, let data = jsonString.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            channel = obj["channel"] as? String ?? "unavailable"
+            descriptorDirExists = obj["descriptor_dir_exists"] as? Bool ?? false
+            descriptorDirEntries = obj["descriptor_dir_entries"] as? Int
+            wallpaperPlistExists = obj["wallpaper_plist_exists"] as? Bool ?? false
+            wallpaperPlistSize = obj["wallpaper_plist_size"] as? Int
+            wallpaperName = obj["wallpaper_name"] as? String
+            identifierExists = obj["identifier_exists"] as? Bool ?? false
+            identifierSize = obj["identifier_size"] as? Int
+            identifierContent = obj["identifier_content"] as? String
+        } else {
+            channel = "unavailable"
+            descriptorDirExists = false
+            descriptorDirEntries = nil
+            wallpaperPlistExists = false
+            wallpaperPlistSize = nil
+            wallpaperName = nil
+            identifierExists = false
+            identifierSize = nil
+            identifierContent = nil
+        }
+    }
+}
+
+/// 单次进程刷新的结果（阶段 D，诊断用）。
+/// confirmed 为真表示：发信号后看到了新 pid，且重连验证也看到了
+/// PosterBoard 进程。wallpaperVisible 永远是 "unverified"——图库里有没有，
+/// 只能去锁屏图库看，设备侧验不出来（原版自己的日志也是这么记的）。
+/// 刷新失败只记进报告、不抛错：写盘与登记已成功，刷新是事后触发。
+public struct RefreshResult {
+    public let confirmed: Bool
+    public let wallpaperVisible: String
+    public let oldPid: Int?
+    public let newPid: Int?
+    public let verifiedPid: Int?
+    public let error: String?
+
+    /// 从 Rust 返回的 JSON 组装（宽松解析：只读 refresh_confirmed 与
+    /// wallpaper_visible 这两个键，其余键没有也不影响结论）。
+    init(jsonString: String?, error: String?) {
+        self.error = error
+        if let jsonString, let data = jsonString.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            confirmed = obj["refresh_confirmed"] as? Bool ?? false
+            wallpaperVisible = obj["wallpaper_visible"] as? String ?? "unverified"
+            oldPid = obj["old_pid"] as? Int
+            newPid = obj["new_pid"] as? Int
+            verifiedPid = obj["verified_pid"] as? Int
+        } else {
+            confirmed = false
+            wallpaperVisible = "unverified"
+            oldPid = nil
+            newPid = nil
+            verifiedPid = nil
+        }
+    }
+}
+
+/// 安装报告：描述符 UUID + 逐目录注入结果 + 偏好写入结果 + 读回核对 + 登记 + 进程刷新。
+/// 注意：写盘结果只代表写盘函数返回成功，不代表图库已列出；目标落地是否
+/// 真的在设备上，看 verifyResults（读回核对）；登记只记 App 自己的账本；
+/// 进程刷新只代表 PosterBoard 进程已重启重读，图库里有没有仍要去锁屏图库看。
 public struct InstallReport {
     public let descriptorUUID: String
     public let injectResults: [InjectResult]
     public let preferencesWritten: Bool
+    public let verifyResults: [VerifyResult]
+    public let registration: RegistrationResult?
+    public let refresh: RefreshResult?
 }
 
 /// 经配对隧道安装描述符：暂存目录 + 配对文件路径 → 实际装上的描述符 UUID。
@@ -126,10 +218,14 @@ public enum AirliftInstaller {
 
     /// 诊断版入口：返回报告，不只返回 UUID。
     /// 流程与旧入口相同（配对检查、结构版本 59/61 映射、偏好键与两处路径均不动，
-    /// 标识策略也不动：有建议元数据的包保持原 UUID、不改标识），唯一改动：
+    /// 标识策略也不动：有建议元数据的包保持原 UUID、不改标识），改动：
     /// 双写改成无条件双向，现代/补充目录失败不再用 try? 吞掉，而是逐目标
     /// 收集进报告；主目录（清单第一项）注入失败仍抛错。
-    /// 不做对账、不做登记、不做进程刷新（格式需逆向确认，本补丁不硬编）；
+    /// 之后依次做：读回核对（阶段 A，每个目标各调一次 al_verify_descriptor，
+    /// 失败只记进报告、不抛错）→ 登记（阶段 C，写 App 自己的 ManagedPosterBoard
+    /// 账本）→ 进程刷新（阶段 D，给 PosterBoard 发信号 9、等重启、重连验证，
+    /// 失败只记进报告、不抛错）。对账（阶段 B）还没接：reconcile 的 x0 身份
+    /// 未证实，等逆向定下来再接，确认前不硬编。
     /// 不重启设备、不调任何重启接口、不做桌面重启冒充。
     public static func installWithReport(
         stagedDirectory: URL,
@@ -205,7 +301,34 @@ public enum AirliftInstaller {
             try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
         }
 
-        // 8. 到此为止，直接返回报告，绝不要在这里重启设备，更不要重启手机。
+        // 8. 读回核对（阶段 A）：对每个注入目标各调一次 al_verify_descriptor，
+        //    结果进报告。核对失败不抛错、不影响“已写入设备”的结论，只如实记录；
+        //    通道不可用时结果里 channel 记 unavailable，页面不得写成“描述符缺失”。
+        var verifyResults: [VerifyResult] = []
+        for targetParent in targets {
+            verifyResults.append(await verifyDescriptor(
+                targetParentDir: targetParent, destName: destUUID, pairingPath: pairingPath))
+        }
+
+        // 9. 登记（阶段 C）：把这次安装记进 App 自己的 ManagedPosterBoard 账本。
+        //    只写本 App 的 UserDefaults，不碰系统文件；失败只记进报告，不抛错。
+        //    显示名从暂存的 contents 目录里找 <名>.wallpaper，找不到就用描述符 UUID。
+        //    paths 记两个目标目录的完整落地路径（目标父目录 + 描述符 UUID）。
+        let wallpaperName = discoverWallpaperName(in: descriptorFolder) ?? destUUID
+        let installedPaths = targets.map { "\($0)/\(destUUID)" }
+        let registration = ManagedPosterBoard.recordInstallation(
+            descriptorUUID: destUUID,
+            installedPaths: installedPaths,
+            packageKey: wallpaperName,
+            wallpaperName: wallpaperName)
+
+        // 10. 进程刷新（阶段 D）：给 PosterBoard 进程发信号 9（SIGKILL），
+        //     等它重启、重读扩展目录，再重连验证。刷新失败只记进报告、不抛错；
+        //     图库里有没有壁纸，仍要去锁屏图库看（wallpaper_visible 永远是
+        //     unverified）。只杀 PosterBoard 一个进程，不重启桌面、不重启设备。
+        let refresh = await posterboardRefresh(pairingPath: pairingPath)
+
+        // 11. 到此为止，直接返回报告，绝不要在这里重启设备，更不要重启手机。
         // 教训（2026-11-01 实测）：原来这一步调整机重启接口，
         // 它实际是向 diagnostics_relay 发 Restart，等于整机重启，
         // 会把安装在完成前打断——每次安装都白苹果重启、壁纸进不去。
@@ -213,7 +336,10 @@ public enum AirliftInstaller {
         return InstallReport(
             descriptorUUID: destUUID,
             injectResults: injectResults,
-            preferencesWritten: true)
+            preferencesWritten: true,
+            verifyResults: verifyResults,
+            registration: registration,
+            refresh: refresh)
     }
 
     /// 清除已安装（重索引）：先确认配对通，再重写 PosterBoard 偏好两次，
@@ -284,6 +410,61 @@ public enum AirliftInstaller {
                 throw Error.ffiFailed(step: "注入描述符目录", detail: detail)
             }
         }
+    }
+
+    /// 读回核对一个目标目录（阶段 A）：调 al_verify_descriptor，绝不抛错。
+    /// 通道失败（JSON 为空）时结果里 channel 记 unavailable；
+    /// 通道通但有项缺失时，逐项结果进报告，error 记缺哪几项。
+    private static func verifyDescriptor(
+        targetParentDir: String, destName: String, pairingPath: String
+    ) async -> VerifyResult {
+        // 闭包本身不抛错；try? 只是为了满足 runBlocking 的 throws 签名。
+        let result = try? await runBlocking {
+            var outJSON: UnsafeMutablePointer<CChar>? = nil
+            var outError: UnsafeMutablePointer<CChar>? = nil
+            _ = pairingPath.withCString { pairC in
+                targetParentDir.withCString { parentC in
+                    destName.withCString { destC in
+                        al_verify_descriptor(
+                            pairC, parentC, destC, airliftLogCallback, nil, &outJSON, &outError)
+                    }
+                }
+            }
+            let jsonString: String? = {
+                guard let p = outJSON else { return nil }
+                let s = String(cString: p)
+                al_string_free(p)
+                return s
+            }()
+            let errorString = freeErrorString(&outError)
+            return VerifyResult(
+                targetParentDir: targetParentDir, jsonString: jsonString, error: errorString)
+        }
+        return result ?? VerifyResult(
+            targetParentDir: targetParentDir, jsonString: nil, error: "读回核对未执行")
+    }
+
+    /// 进程刷新一次（阶段 D）：调 al_posterboard_refresh，绝不抛错。
+    /// 刷新跑完（JSON 到了）就按 JSON 组装结果；通道失败（JSON 为空）时
+    /// confirmed 为假，error 记原因。
+    private static func posterboardRefresh(pairingPath: String) async -> RefreshResult {
+        // 闭包本身不抛错；try? 只是为了满足 runBlocking 的 throws 签名。
+        let result = try? await runBlocking {
+            var outJSON: UnsafeMutablePointer<CChar>? = nil
+            var outError: UnsafeMutablePointer<CChar>? = nil
+            _ = pairingPath.withCString { pairC in
+                al_posterboard_refresh(pairC, airliftLogCallback, nil, &outJSON, &outError)
+            }
+            let jsonString: String? = {
+                guard let p = outJSON else { return nil }
+                let s = String(cString: p)
+                al_string_free(p)
+                return s
+            }()
+            let errorString = freeErrorString(&outError)
+            return RefreshResult(jsonString: jsonString, error: errorString)
+        }
+        return result ?? RefreshResult(jsonString: nil, error: "进程刷新未执行")
     }
 
     private static func writeDirectoryTree(
@@ -365,6 +546,20 @@ public enum AirliftInstaller {
         try? await writeDirectoryTree(
             sourceDir: stageDir, targetDir: "/var/mobile/Library/Preferences",
             pairingPath: pairingPath)
+    }
+
+    /// 从暂存的 contents 目录里找 <名>.wallpaper，返回去掉后缀的显示名。
+    /// 登记的 WallpaperNames 用这个名字；找不到就返回 nil（调用方用描述符 UUID）。
+    private static func discoverWallpaperName(in folderURL: URL) -> String? {
+        let contentsURL = folderURL
+            .appendingPathComponent("versions").appendingPathComponent("1")
+            .appendingPathComponent("contents")
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: contentsURL, includingPropertiesForKeys: nil) else { return nil }
+        for entry in entries where entry.lastPathComponent.hasSuffix(".wallpaper") {
+            return String(entry.lastPathComponent.dropLast(".wallpaper".count))
+        }
+        return nil
     }
 
     /// 从建议元数据里找扩展名，找不到就默认 CollectionsPoster（编辑器导出的包都是这族）。

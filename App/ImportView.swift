@@ -3,7 +3,7 @@
 // 列表：已导入壁纸包、右上角清除已安装、＋导入新的壁纸包、左滑删除。
 // 详情：壁纸包信息、图层信息、深景状态、制作深景包、安装壁纸。
 // 安装：装完不重启桌面、不闪屏、不黑屏；写盘返回成功不代表图库已列出，
-// 诊断区显示逐目录结果，目标落地尚未核对（读回接口未就位）。
+// 诊断区显示逐目录结果、读回核对（HouseArrest 通道）、登记条数与进程刷新。
 
 import Foundation
 import SwiftUI
@@ -227,7 +227,36 @@ private struct ImportDetailView: View {
                                 Text("\(shortTargetDir(result.targetParentDir))：\(result.ok ? "成功" : "失败")\(result.error.map { "（\($0)）" } ?? "")").font(.caption).textSelection(.enabled)
                             }
                             Text("偏好写入：\(report.preferencesWritten ? "成功" : "未写入")").font(.caption)
-                            Text("尚未核对目标落地（读回接口未就位，写盘成功不代表图库已列出）。").font(.caption).foregroundStyle(.secondary)
+                            ForEach(report.verifyResults.indices, id: \.self) { index in
+                                let v = report.verifyResults[index]
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("读回核对 \(shortTargetDir(v.targetParentDir))：").font(.caption).textSelection(.enabled)
+                                    if v.channelUnavailable {
+                                        Text("读回通道不可用（系统不放行容器直读），核对不到目标，不代表描述符缺失。\(v.error ?? "")").font(.caption).foregroundStyle(.secondary)
+                                    } else {
+                                        Text("描述符目录：\(v.descriptorDirExists ? "在" : "缺失")\(v.descriptorDirEntries.map { "（\($0) 项）" } ?? "")；Wallpaper.plist：\(v.wallpaperPlistExists ? "在" : "缺失")\(v.wallpaperPlistSize.map { "（\($0) 字节）" } ?? "")；标识文件：\(v.identifierExists ? "在" : "缺失")\(v.identifierContent.map { "（内容 \($0)）" } ?? "")").font(.caption).textSelection(.enabled)
+                                        if let err = v.error {
+                                            Text(err).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
+                            if let reg = report.registration {
+                                Text("登记：远程记录 \(reg.remoteRecords) 条、包记录 \(reg.packageRecords) 条、名称 \(reg.names) 条\(reg.error.map { "（\($0)）" } ?? "")").font(.caption)
+                            }
+                            if let refresh = report.refresh {
+                                if refresh.confirmed {
+                                    Text("进程刷新：已确认 PosterBoard 进程已重启（旧 pid \(refresh.oldPid.map { "\($0)" } ?? "?") → 新 pid \(refresh.newPid.map { "\($0)" } ?? "?")，重连验证 pid \(refresh.verifiedPid.map { "\($0)" } ?? "?")）。").font(.caption)
+                                } else {
+                                    Text("进程刷新：未确认\(refresh.error.map { "（\($0)）" } ?? "")").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Text("图库里有没有：未验证——去锁屏长按进图库看，出现后再点设为墙纸组合。").font(.caption).foregroundStyle(.secondary)
+                            }
+                            if !report.verifyResults.isEmpty && report.verifyResults.allSatisfy({ $0.allPresent }) {
+                                Text("已在设备上核对到：每个目标的描述符目录、Wallpaper.plist、标识文件均在。").font(.caption)
+                            } else if report.verifyResults.contains(where: { !$0.channelUnavailable }) {
+                                Text("读回核对有缺失：写盘成功不代表图库已列出，缺失项见上面。").font(.caption).foregroundStyle(.secondary)
+                            }
                             if !installLogText.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
@@ -246,7 +275,7 @@ private struct ImportDetailView: View {
                                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
                             }
                         } else {
-                            Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出，目标落地尚未核对（读回接口未就位）。").font(.caption).foregroundStyle(.secondary)
+                            Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出。").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     Text("去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
@@ -305,7 +334,8 @@ private struct ImportDetailView: View {
 
     /// 详情页直接安装：装完不重启桌面、不闪屏、不黑屏；返回成功只代表
     /// 写盘函数返回成功，不代表图库已列出。成功文案分两档：第一档是写盘结果，
-    /// 第二档（目标落地已核对）在读回接口就位之前不得出现。
+    /// 第二档（目标落地已核对）只有读回核对全部通过时才出现；通道不可用或
+    /// 有缺失时，第二档不出现，页面如实写通道不可用或缺失。
     private func runInstall() async {
         installing = true
         installResult = ""
@@ -319,7 +349,28 @@ private struct ImportDetailView: View {
                 let short = shortTargetDir(result.targetParentDir)
                 return result.ok ? "\(short)：成功" : "\(short)：失败（\(result.error ?? "未知错误")）"
             }.joined(separator: "；")
-            installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。尚未核对目标落地（读回接口未就位）。"
+            let verifySummary: String
+            if report.verifyResults.isEmpty {
+                verifySummary = "读回核对未执行。"
+            } else if report.verifyResults.allSatisfy({ $0.allPresent }) {
+                verifySummary = "已在设备上核对到：每个目标的描述符目录、Wallpaper.plist、标识文件均在。"
+            } else if report.verifyResults.contains(where: { $0.channelUnavailable }) {
+                verifySummary = "读回通道不可用（系统不放行容器直读），核对不到目标，不代表描述符缺失。"
+            } else {
+                let missing = report.verifyResults.filter { !$0.allPresent }.map { shortTargetDir($0.targetParentDir) }.joined(separator: "、")
+                verifySummary = "读回核对有缺失（\(missing)），写盘成功不代表图库已列出。"
+            }
+            let refreshSummary: String
+            if let refresh = report.refresh {
+                if refresh.confirmed {
+                    refreshSummary = "进程刷新：已确认 PosterBoard 进程已重启（旧 pid \(refresh.oldPid.map { "\($0)" } ?? "?") → 新 pid \(refresh.newPid.map { "\($0)" } ?? "?")）。"
+                } else {
+                    refreshSummary = "进程刷新：未确认\(refresh.error.map { "（\($0)）" } ?? ""}。"
+                }
+            } else {
+                refreshSummary = "进程刷新：未执行。"
+            }
+            installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。\(verifySummary) \(refreshSummary)"
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
         }
