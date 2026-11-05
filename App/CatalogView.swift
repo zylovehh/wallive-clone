@@ -960,7 +960,11 @@ private struct AddWallpaperView: View {
                 previewURL: previewURL,
                 packageURL: CatalogStore.wallpapersRawBase + "\(id).tendies",
                 pinned: false, downloads: 0)
-            try await store.pushCatalog(store.items + [newItem], token: token)
+            // 新传的放第一个非置顶位置（置顶后面、其他旧条目前面），不再追加到最后。
+            var updatedItems = store.items
+            let insertAt = updatedItems.firstIndex(where: { !$0.pinned }) ?? updatedItems.endIndex
+            updatedItems.insert(newItem, at: insertAt)
+            try await store.pushCatalog(updatedItems, token: token)
             onAdded()
         } catch {
             fail("没推上去，请点“复制错误代码”发给灵光。", code: "E-304 上传目录-失败", detail: String(describing: error))
