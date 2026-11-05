@@ -1,4 +1,5 @@
 # 复刻版 App 壳：Codemagic 编未签名 IPA（用户自己签名安装），与 GitHub Actions 工作流同步骤。
+# 注意：Codemagic 的 Mac mini M2 镜像自带 Xcode 但不带 Rust，编 AirliftFFI 之前必须先装 rustup。
 workflows:
   ios-unsigned:
     name: WalliveClone unsigned IPA
@@ -12,6 +13,13 @@ workflows:
         script: xcodebuild -version
       - name: Unpack rust-core
         script: unzip -o rust-core.zip && ls rust-core
+      - name: Install Rust toolchain
+        script: |
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+          source "$HOME/.cargo/env" || true
+          rustup target add aarch64-apple-ios
       - name: Build AirliftFFI (device only)
         script: bash build-airlift.sh
       - name: Resolve package dependencies
