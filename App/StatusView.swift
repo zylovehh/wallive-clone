@@ -4,7 +4,7 @@
 import SwiftUI
 import UIKit
 
-/// 高透液态玻璃按钮样式：iOS 26+ 系统玻璃，低版本回退半透明黑胶囊。
+/// 液态透明按钮样式：iOS 26+ 用透明系统玻璃，低版本回退半透明白胶囊。
 private struct GlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -12,9 +12,9 @@ private struct GlassButtonStyle: ButtonStyle {
             .padding(.horizontal, 20).padding(.vertical, 10)
             .background {
                 if #available(iOS 26.0, *) {
-                    Capsule().glassEffect(.regular.tint(.white.opacity(0.08)))
+                    Capsule().glassEffect(.clear)
                 } else {
-                    Capsule().fill(.black.opacity(0.12))
+                    Capsule().fill(.white.opacity(0.06))
                 }
             }
             .opacity(configuration.isPressed ? 0.7 : 1.0)

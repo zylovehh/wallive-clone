@@ -8,13 +8,13 @@
 import Foundation
 import SwiftUI
 
-/// 高透液态玻璃胶囊：iOS 26+ 用系统玻璃，低版本回退半透明黑。
+/// 液态透明胶囊：iOS 26+ 用透明系统玻璃，低版本回退半透明白。
 private struct LiquidGlassCapsule: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular.tint(.white.opacity(0.08)), in: Capsule())
+            content.glassEffect(.clear, in: Capsule())
         } else {
-            content.background(.black.opacity(0.12)).clipShape(Capsule())
+            content.background(.white.opacity(0.06)).clipShape(Capsule())
         }
     }
 }
