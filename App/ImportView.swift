@@ -216,8 +216,10 @@ private struct ImportDetailView: View {
                             Text("偏好写入：\(report.preferencesWritten ? "成功" : "未写入")").font(.caption)
                             Text("尚未核对目标落地（读回接口未就位，写盘成功不代表图库已列出）。").font(.caption).foregroundStyle(.secondary)
                             if !installLogText.isEmpty {
-                                Text("安装日志（可长按复制）：").font(.caption).foregroundStyle(.secondary)
-                                Text(installLogText).font(.caption).textSelection(.enabled)
+                                DisclosureGroup("安装日志（可长按复制）") {
+                                    Text(installLogText).font(.caption).textSelection(.enabled)
+                                }
+                                .font(.caption)
                             }
                         } else {
                             Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出，目标落地尚未核对（读回接口未就位）。").font(.caption).foregroundStyle(.secondary)
