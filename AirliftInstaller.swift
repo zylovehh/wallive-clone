@@ -56,19 +56,21 @@ func airliftLogCallback(_ ctx: UnsafeMutableRawPointer?, _ msg: UnsafePointer<CC
 }
 
 /// 单个目标目录的注入结果（诊断用，不许合并成一个布尔值）。
-struct InjectResult {
-    let targetParentDir: String
-    let ok: Bool
-    let error: String?
+/// 必须是公开类型：公开的 installWithReport 以它作返回类型的一部分，
+/// 内部类型会让编译报错（公开方法不能用内部类型）。
+public struct InjectResult {
+    public let targetParentDir: String
+    public let ok: Bool
+    public let error: String?
 }
 
 /// 安装报告：描述符 UUID + 逐目录注入结果 + 偏好写入结果。
 /// 注意：这只代表写盘函数返回的结果，不代表图库已列出；目标落地是否
 /// 真的在设备上，必须等读回接口就位后核对，在此之前不得断言图库可见。
-struct InstallReport {
-    let descriptorUUID: String
-    let injectResults: [InjectResult]
-    let preferencesWritten: Bool
+public struct InstallReport {
+    public let descriptorUUID: String
+    public let injectResults: [InjectResult]
+    public let preferencesWritten: Bool
 }
 
 /// 经配对隧道安装描述符：暂存目录 + 配对文件路径 → 实际装上的描述符 UUID。
