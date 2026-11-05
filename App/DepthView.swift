@@ -34,6 +34,8 @@ struct DepthView: View {
     @State private var message = ""
     @State private var installing = false
     @State private var installMessage = ""
+    // QQ 卡渐变文字动画开关：出现即开始来回流动。
+    @State private var qqGradientPhase = false
 
     var body: some View {
         NavigationStack {
@@ -75,16 +77,32 @@ struct DepthView: View {
                     Text(message).foregroundStyle(.red).font(.caption)
                 }
                 Spacer()
-                HStack(spacing: 16) {
-                    Text("🐧").font(.largeTitle)
-                    Button("加入 QQ 群") {
-                        if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                            openURL(url)
-                        }
-                    }.buttonStyle(GlassButtonStyle())
-                    .foregroundStyle(.green)
-                    Spacer()
+                // QQ 群：企鹅图标和绿色加入按钮都去掉，右边只留渐变文字，点整行进群领视频教程。
+                Button {
+                    if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                        openURL(url)
+                    }
+                } label: {
+                    HStack {
+                        Spacer()
+                        Text("进群领取视频教程")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.cyan, .blue, .purple, .pink, .orange, .cyan],
+                                    startPoint: qqGradientPhase ? .topLeading : .bottomTrailing,
+                                    endPoint: qqGradientPhase ? .bottomTrailing : .topLeading
+                                )
+                            )
+                            .animation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true), value: qqGradientPhase)
+                            .onAppear { qqGradientPhase = true }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding()
                 }
+                .buttonStyle(.plain)
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
             }
             .padding()
             .background(AppBackgroundView())

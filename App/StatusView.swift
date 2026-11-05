@@ -27,6 +27,8 @@ struct StatusView: View {
     @StateObject private var vpn = VPNManager()
     @State private var host = "10.7.0.1"
     @State private var portText = "62078"
+    // QQ 卡渐变文字动画开关：出现即开始来回流动。
+    @State private var qqGradientPhase = false
 
     var body: some View {
         NavigationStack {
@@ -92,20 +94,30 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // QQ 群：标题和群号都去掉，左边是 QQ 企鹅图标，右边只留加入按钮。
-                    HStack(spacing: 16) {
-                        Text("🐧").font(.largeTitle)
-                        Button("加入 QQ 群") {
-                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                openURL(url)
-                            }
+                    // QQ 群：企鹅图标和绿色加入按钮都去掉，右边只留渐变文字，点整行进群领视频教程。
+                    Button {
+                        if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                            openURL(url)
                         }
-                        .buttonStyle(GlassButtonStyle())
-                        .foregroundStyle(.green)
-                        Spacer()
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Text("进群领取视频教程")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(
+                                    LinearGradient(
+                                        colors: [.cyan, .blue, .purple, .pink, .orange, .cyan],
+                                        startPoint: qqGradientPhase ? .topLeading : .bottomTrailing,
+                                        endPoint: qqGradientPhase ? .bottomTrailing : .topLeading
+                                    )
+                                )
+                                .animation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true), value: qqGradientPhase)
+                                .onAppear { qqGradientPhase = true }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding()
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
+                    .buttonStyle(.plain)
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     Text("说明：本 App 不含广告、不含会员与解锁逻辑；配对记录文件只存在 App 沙盒内，不会发给任何人。")
