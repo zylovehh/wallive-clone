@@ -198,15 +198,25 @@ private struct StatusVPNPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text("配对").font(.headline)
-                HStack {
-                    Button("生成配对文件") {
+                // 两个配对按钮并排、等宽，排版对齐。
+                HStack(spacing: 12) {
+                    Button {
                         Task { await generate() }
-                    }.disabled(generating)
-                    if generating { ProgressView() }
-                    if pairingHost.running {
-                        Button("取消") { pairingHost.softCancel() }
+                    } label: {
+                        Text("生成配对文件").frame(maxWidth: .infinity)
                     }
+                    .disabled(generating)
+                    Button {
+                        Task { await checkPairing() }
+                    } label: {
+                        Text("检查配对状态").frame(maxWidth: .infinity)
+                    }
+                    .disabled(pairingChecking)
                 }.buttonStyle(GlassButtonStyle())
+                if generating || pairingChecking { ProgressView() }
+                if pairingHost.running {
+                    Button("取消") { pairingHost.softCancel() }.buttonStyle(GlassButtonStyle())
+                }
                 if let pin = pairingHost.pairingPIN {
                     Text("配对 PIN：\(pin)")
                         .font(.title2.bold())
@@ -227,12 +237,6 @@ private struct StatusVPNPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-                HStack {
-                    Button("检查配对状态") {
-                        Task { await checkPairing() }
-                    }.disabled(pairingChecking)
-                    if pairingChecking { ProgressView() }
-                }.buttonStyle(GlassButtonStyle())
                 if !pairingCheckResult.isEmpty {
                     Text(pairingCheckResult).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
