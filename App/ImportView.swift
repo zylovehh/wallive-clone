@@ -365,7 +365,8 @@ private struct ImportDetailView: View {
                 if refresh.confirmed {
                     refreshSummary = "进程刷新：已确认 PosterBoard 进程已重启（旧 pid \(refresh.oldPid.map { "\($0)" } ?? "?") → 新 pid \(refresh.newPid.map { "\($0)" } ?? "?")）。"
                 } else {
-                    refreshSummary = "进程刷新：未确认\(refresh.error.map { "（\($0)）" } ?? ""}。"
+                    let refreshErrorText = refresh.error.map { "（\($0)）" } ?? ""
+                    refreshSummary = "进程刷新：未确认\(refreshErrorText)。"
                 }
             } else {
                 refreshSummary = "进程刷新：未执行。"
