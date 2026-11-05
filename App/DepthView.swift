@@ -61,7 +61,8 @@ struct DepthView: View {
                             }
                             Button("设为当前包并去安装") {
                                 if let data = depthData {
-                                    state.setPackage(data)
+                                    // 深景包沿用原包名，不然名称行会被清空回技术名。
+                                    state.setPackage(data, displayName: state.packageDisplayName)
                                     state.selectedTab = 1
                                 }
                             }
@@ -93,10 +94,12 @@ struct DepthView: View {
                                 Text("进群领取视频教程")
                                     .font(.headline.weight(.light))
                                     .foregroundStyle(
+                                        // 无缝循环渐变：色序首尾是同一个青色、渐变正好跨一个字宽，
+                                        // phase 从 1 回到 0 时颜色完全接上，没有跳变；色阶排密一点，过渡更柔。
                                         LinearGradient(
-                                            colors: [.cyan, .blue, .purple, .pink, .orange, .cyan, .blue, .purple, .pink, .orange, .cyan],
+                                            colors: [.cyan, .teal, .blue, .indigo, .purple, .pink, .red, .orange, .yellow, .green, .cyan],
                                             startPoint: UnitPoint(x: phase, y: 0.5),
-                                            endPoint: UnitPoint(x: phase + 2, y: 0.5)
+                                            endPoint: UnitPoint(x: phase + 1, y: 0.5)
                                         )
                                     )
                             }
@@ -163,7 +166,7 @@ struct DepthView: View {
         installing = true
         installMessage = ""
         defer { installing = false }
-        state.setPackage(data)
+        state.setPackage(data, displayName: state.packageDisplayName)
         if let uuid = await state.install(host: "10.7.0.1") {
             installMessage = "安装完成，描述符：\(uuid)。已导入图库，去锁屏长按进图库，找到新壁纸，点设为墙纸组合。"
         } else if !state.statusMessage.isEmpty {

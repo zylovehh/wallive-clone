@@ -34,9 +34,10 @@ struct CatalogView: View {
     @State private var showingAdd = false
     @State private var itemToDelete: CatalogItem?
 
+    /// 自适应列数：手机两列，iPad 横屏 6 列、竖屏 4 列，卡片不再一张占满屏。
+    /// 固定两列时 iPad 上一张卡能占半个屏还多，又高又空。
     private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
+        GridItem(.adaptive(minimum: 165, maximum: 230), spacing: 12),
     ]
 
     /// 全部分类：全部 + 目录里出现过的标签。
@@ -83,6 +84,9 @@ struct CatalogView: View {
                             .foregroundStyle(segment == value ? .white : .white.opacity(0.7))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
+                            // 选中那段放大一下再弹回：回弹要看得见，不能只靠药丸滑动。
+                            .scaleEffect(segment == value ? 1.1 : 1.0)
+                            .animation(.spring(response: 0.5, dampingFraction: 0.4), value: segment)
                             .background {
                                 if segment == value {
                                     Capsule()
@@ -96,8 +100,11 @@ struct CatalogView: View {
                 }
                 .padding(4)
                 .modifier(LiquidGlassSegmented())
-                .animation(.spring(response: 0.35, dampingFraction: 0.7), value: segment)
+                // 回弹要明显：弹簧放慢、阻尼放小，药丸滑过去带一点过冲。
+                .animation(.spring(response: 0.5, dampingFraction: 0.4), value: segment)
                 .padding(.horizontal)
+                // iPad 上分段条不拉满屏：最多 560 宽，居中放。
+                .frame(maxWidth: 560)
 
                 if segment == 0 {
                     discoverView
@@ -155,6 +162,8 @@ struct CatalogView: View {
             .background(.quaternary)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .padding(.horizontal)
+            // iPad 上搜索框不拉满屏：最多 560 宽，居中放。
+            .frame(maxWidth: 560)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -434,7 +443,7 @@ private struct CatalogCard: View {
                     favorites.toggle(item.id)
                 } label: {
                     Image(systemName: favorites.isFavorite(item.id) ? "heart.fill" : "heart")
-                        .foregroundStyle(.white)
+                        .foregroundStyle(favorites.isFavorite(item.id) ? .red : .white)
                 }
                 .buttonStyle(RoundGlassButtonStyle())
                 // 管理员图钉：同排圆钮，也换高透玻璃，保持一排样式一致。
@@ -524,6 +533,10 @@ private struct InlineVideoCover: UIViewRepresentable {
         queuePlayer.isMuted = true
         let item = AVPlayerItem(url: url)
         context.coordinator.looper = AVPlayerLooper(player: queuePlayer, templateItem: item)
+        context.coordinator.player = queuePlayer
+        // App 切到后台（锁屏也算）就停播，回来再播：封面视频不能在后台还占着播放器，
+        // 不然锁屏上会冒出一个“未在播放”的播放器。
+        context.coordinator.observeBackground(queuePlayer)
         queuePlayer.play()
         let layer = AVPlayerLayer(player: queuePlayer)
         layer.videoGravity = .resizeAspectFill
@@ -539,6 +552,23 @@ private struct InlineVideoCover: UIViewRepresentable {
 
     final class Coordinator {
         var looper: AVPlayerLooper?
+        var player: AVQueuePlayer?
+        private var observers: [NSObjectProtocol] = []
+
+        /// 后台停播、回前台续播（只管自己的播放器）。
+        func observeBackground(_ player: AVQueuePlayer) {
+            guard observers.isEmpty else { return }
+            observers.append(NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+            ) { _ in player.pause() })
+            observers.append(NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+            ) { _ in player.play() })
+        }
+
+        deinit {
+            for o in observers { NotificationCenter.default.removeObserver(o) }
+        }
     }
 
     /// 容器视图：铺满父视图时同步把播放层也铺满。
@@ -1017,6 +1047,12 @@ private struct PreviewPlayerView: View {
             } else {
                 Text("预览暂不可用").foregroundStyle(.secondary)
             }
+        }
+        // 关掉预览就把播放器彻底放掉：只暂停不释放，锁屏上还会留一个“未在播放”的播放器。
+        .onDisappear {
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+            player = nil
         }
         .onAppear {
             if let url = URL(string: item.previewURL) {

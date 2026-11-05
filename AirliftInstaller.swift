@@ -133,8 +133,10 @@ public struct RefreshResult {
 
     /// 从 Rust 返回的 JSON 组装（宽松解析：只读 refresh_confirmed 与
     /// wallpaper_visible 这两个键，其余键没有也不影响结论）。
+    /// 注意：刷新跑完但未确认时 Rust 返回 0、out_error 为空，原因在 JSON 的
+    /// "error" 键里；只读参数 error 会把原因丢掉，页面只剩一句“未确认”。
     init(jsonString: String?, error: String?) {
-        self.error = error
+        var jsonError: String?
         if let jsonString, let data = jsonString.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             confirmed = obj["refresh_confirmed"] as? Bool ?? false
@@ -142,6 +144,7 @@ public struct RefreshResult {
             oldPid = obj["old_pid"] as? Int
             newPid = obj["new_pid"] as? Int
             verifiedPid = obj["verified_pid"] as? Int
+            jsonError = obj["error"] as? String
         } else {
             confirmed = false
             wallpaperVisible = "unverified"
@@ -149,6 +152,7 @@ public struct RefreshResult {
             newPid = nil
             verifiedPid = nil
         }
+        self.error = error ?? jsonError
     }
 }
 

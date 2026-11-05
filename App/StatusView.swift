@@ -111,10 +111,12 @@ struct StatusView: View {
                                     Text("进群领取视频教程")
                                         .font(.headline.weight(.light))
                                         .foregroundStyle(
+                                            // 无缝循环渐变：色序首尾是同一个青色、渐变正好跨一个字宽，
+                                            // phase 从 1 回到 0 时颜色完全接上，没有跳变；色阶排密一点，过渡更柔。
                                             LinearGradient(
-                                                colors: [.cyan, .blue, .purple, .pink, .orange, .cyan, .blue, .purple, .pink, .orange, .cyan],
+                                                colors: [.cyan, .teal, .blue, .indigo, .purple, .pink, .red, .orange, .yellow, .green, .cyan],
                                                 startPoint: UnitPoint(x: phase, y: 0.5),
-                                                endPoint: UnitPoint(x: phase + 2, y: 0.5)
+                                                endPoint: UnitPoint(x: phase + 1, y: 0.5)
                                             )
                                         )
                                 }
@@ -320,12 +322,31 @@ private struct StatusVPNPage: View {
 
     /// 自动跳到“设置 → 隐私与安全 → 开发者模式”。
     /// App-Prefs 是系统设置内部链接，侧载 App 能用（不上 App Store，不用过审）。
-    /// 跳不过去就退到隐私与安全页，用户再点一下开发者模式。
+    /// 两个教训：open 必须在主线程调（后台线程调了没反应）；只试一个链接不够，
+    /// 按顺序挨个试，哪个通了就停，全不通才告诉用户手动去。
     private func openDeveloperSettings() {
-        if let url = URL(string: "App-Prefs:root=Privacy&path=DEVELOPER") {
-            UIApplication.shared.open(url, options: [:]) { ok in
-                if !ok, let fallback = URL(string: "App-Prefs:root=Privacy") {
-                    UIApplication.shared.open(fallback)
+        let candidates = [
+            "App-Prefs:root=Privacy&path=DEVELOPER",
+            "prefs:root=Privacy&path=DEVELOPER",
+            "App-Prefs:root=Privacy",
+            "prefs:root=Privacy",
+        ]
+        Task { @MainActor in
+            tryOpenSettings(candidates: candidates, index: 0)
+        }
+    }
+
+    /// 按顺序试设置链接：打不开就试下一个，全打不开就告诉用户手动去哪。
+    @MainActor
+    private func tryOpenSettings(candidates: [String], index: Int) {
+        guard index < candidates.count, let url = URL(string: candidates[index]) else {
+            generateResult = "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸安装器配对”输 PIN。"
+            return
+        }
+        UIApplication.shared.open(url, options: [:]) { ok in
+            if !ok {
+                Task { @MainActor in
+                    self.tryOpenSettings(candidates: candidates, index: index + 1)
                 }
             }
         }

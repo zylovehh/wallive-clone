@@ -117,7 +117,9 @@ struct ImportView: View {
                     Task { @MainActor in
                         do {
                             let data = try Data(contentsOf: url)
-                            state.setPackage(data)
+                            // 名称行显示用户选的文件名（去后缀），不是包里的技术名。
+                            let fileName = url.deletingPathExtension().lastPathComponent
+                            state.setPackage(data, displayName: fileName.isEmpty ? nil : fileName)
                         } catch {
                             message = "读文件失败：\(error.localizedDescription)"
                         }
@@ -128,6 +130,8 @@ struct ImportView: View {
     }
 
     private func packageName(from info: TendiesPackageInfo) -> String {
+        // 目录下载的中文名 / 直接导入的文件名优先，包里的技术名只做兜底。
+        if let name = state.packageDisplayName, !name.isEmpty { return name }
         let dir = info.wallpaperDirectory
         let name = (dir as NSString).lastPathComponent
         return name.hasSuffix(".wallpaper") ? String(name.dropLast(".wallpaper".count)) : name
