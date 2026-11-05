@@ -94,14 +94,20 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // QQ 群：企鹅图标和绿色加入按钮都去掉，右边只留渐变文字，点整行进群领视频教程。
-                    Button {
-                        if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                            openURL(url)
+                    // QQ 群：企鹅图标去掉，加入 QQ 群按钮保留、绿色去掉，右边是渐变文字，点哪边都进群领视频教程。
+                    HStack {
+                        Button("加入 QQ 群") {
+                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                                openURL(url)
+                            }
                         }
-                    } label: {
-                        HStack {
-                            Spacer()
+                        .buttonStyle(GlassButtonStyle())
+                        Spacer()
+                        Button {
+                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                                openURL(url)
+                            }
+                        } label: {
                             Text("进群领取视频教程")
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(
@@ -114,10 +120,10 @@ struct StatusView: View {
                                 .animation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true), value: qqGradientPhase)
                                 .onAppear { qqGradientPhase = true }
                         }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .padding()
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     Text("说明：本 App 不含广告、不含会员与解锁逻辑；配对记录文件只存在 App 沙盒内，不会发给任何人。")
