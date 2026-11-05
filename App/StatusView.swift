@@ -50,7 +50,7 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    NavigationLink(destination: StatusPairingPage(host: $host, portText: $portText)) {
+                    NavigationLink(destination: StatusPairingPage()) {
                         HStack {
                             Image(systemName: "key").foregroundStyle(.blue).font(.title3)
                             VStack(alignment: .leading, spacing: 4) {
@@ -154,6 +154,12 @@ private struct StatusVPNPage: View {
     @Binding var portText: String
     @State private var vpnResult = ""
     @State private var checking = false
+    // 配对操作从配对记录页移过来：先连通 VPN 才能配对，放一页顺手。
+    @ObservedObject private var pairingHost = PairingHost.shared
+    @State private var generating = false
+    @State private var generateResult = ""
+    @State private var pairingCheckResult = ""
+    @State private var pairingChecking = false
 
     var body: some View {
         ScrollView {
@@ -191,59 +197,8 @@ private struct StatusVPNPage: View {
                     Text(vpnResult).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            .padding()
-            .navigationTitle("回环 VPN")
-        }
-    }
-
-    private func check() async {
-        checking = true
-        defer { checking = false }
-        let port = UInt16(portText) ?? 62078
-        let ok = await state.checkVPN(host: host, port: port)
-        vpnResult = ok ? "通：管家地址可达。" : "不通：请先确认回环 VPN 已安装并连接。"
-    }
-}
-
-private struct StatusPairingPage: View {
-    @EnvironmentObject private var state: AppState
-    @Environment(\.openURL) private var openURL
-    @ObservedObject private var pairingHost = PairingHost.shared
-    @Binding var host: String
-    @Binding var portText: String
-    @State private var showPairingPicker = false
-    @State private var generating = false
-    @State private var generateResult = ""
-    @State private var pairingCheckResult = ""
-    @State private var pairingChecking = false
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(state.pairingDescription).font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Button("导入配对记录文件") { showPairingPicker = true }
-                    Button("删除") { state.removePairingFile() }
-                }.buttonStyle(GlassButtonStyle())
-                HStack {
-                    Button("检查配对状态") {
-                        Task { await checkPairing() }
-                    }.disabled(pairingChecking)
-                    if pairingChecking { ProgressView() }
-                }.buttonStyle(GlassButtonStyle())
-                if !pairingCheckResult.isEmpty {
-                    Text(pairingCheckResult).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                Button("下载 LocalDevVPN") {
-                    if let url = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044") {
-                        openURL(url)
-                    }
-                }.buttonStyle(GlassButtonStyle())
-                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 回来点下面的“生成配对文件”，会自动跳到“设置 › 隐私与安全 › 开发者模式”，点“与壁纸安装器配对”，PIN 出现后回本 App 看一眼，再去设置里输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
+                Text("配对").font(.headline)
+                Text("三步走：1. 先装 LocalDevVPN App；2. 打开它点 Connect；3. 点下面的“生成配对文件”，会自动跳到“设置 › 隐私与安全 › 开发者模式”，点“与壁纸安装器配对”，PIN 出现后回本 App 看一眼，再去设置里输 PIN。注意：中国区 App Store 没有这个 App，中国区新人得走侧载重签路线。")
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -276,18 +231,29 @@ private struct StatusPairingPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-            }
-            .padding()
-            .navigationTitle("配对记录")
-            .sheet(isPresented: $showPairingPicker) {
-                DocumentPicker(contentTypes: [.propertyList]) { url in
-                    showPairingPicker = false
-                    Task { @MainActor in
-                        state.importPairingFile(from: url)
-                    }
+                HStack {
+                    Button("检查配对状态") {
+                        Task { await checkPairing() }
+                    }.disabled(pairingChecking)
+                    if pairingChecking { ProgressView() }
+                }.buttonStyle(GlassButtonStyle())
+                if !pairingCheckResult.isEmpty {
+                    Text(pairingCheckResult).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
             }
+            .padding()
+            .navigationTitle("回环 VPN")
         }
+    }
+
+    private func check() async {
+        checking = true
+        defer { checking = false }
+        let port = UInt16(portText) ?? 62078
+        let ok = await state.checkVPN(host: host, port: port)
+        vpnResult = ok ? "通：管家地址可达。" : "不通：请先确认回环 VPN 已安装并连接。"
     }
 
     /// 生成配对文件：先复用检查按钮的 VPN 连通逻辑，没连 VPN 就不配对；
@@ -349,6 +315,40 @@ private struct StatusPairingPage: View {
             pairingCheckResult = "配对有效：能连上管家服务并找到 PosterBoard 容器。"
         } catch {
             pairingCheckResult = "配对无效：\(error.localizedDescription)"
+        }
+    }
+}
+
+private struct StatusPairingPage: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.openURL) private var openURL
+    @State private var showPairingPicker = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(state.pairingDescription).font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("导入配对记录文件") { showPairingPicker = true }
+                    Button("删除") { state.removePairingFile() }
+                }.buttonStyle(GlassButtonStyle())
+                Button("下载 LocalDevVPN") {
+                    if let url = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044") {
+                        openURL(url)
+                    }
+                }.buttonStyle(GlassButtonStyle())
+            }
+            .padding()
+            .navigationTitle("配对记录")
+            .sheet(isPresented: $showPairingPicker) {
+                DocumentPicker(contentTypes: [.propertyList]) { url in
+                    showPairingPicker = false
+                    Task { @MainActor in
+                        state.importPairingFile(from: url)
+                    }
+                }
+            }
         }
     }
 }
