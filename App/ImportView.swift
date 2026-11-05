@@ -2,7 +2,8 @@
 // V6 导入安装合并页：列表页 + 详情二级页，不再单独占安装页签。
 // 列表：已导入壁纸包、右上角清除已安装、＋导入新的壁纸包、左滑删除。
 // 详情：壁纸包信息、图层信息、深景状态、制作深景包、安装壁纸。
-// 安装：装完不重启桌面、不闪屏、不黑屏，只导入图库，用户去图库手动设。
+// 安装：装完不重启桌面、不闪屏、不黑屏；写盘返回成功不代表图库已列出，
+// 诊断区显示逐目录结果，目标落地尚未核对（读回接口未就位）。
 
 import Foundation
 import SwiftUI
@@ -153,6 +154,8 @@ private struct ImportDetailView: View {
     @EnvironmentObject private var state: AppState
     @State private var installing = false
     @State private var installResult = ""
+    @State private var installReport: InstallReport?
+    @State private var installLogText = ""
 
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
@@ -202,7 +205,25 @@ private struct ImportDetailView: View {
                         Text(state.statusMessage).foregroundStyle(.red).font(.caption)
                             .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                     }
-                    Text("去锁屏长按进图库，找到新壁纸，点设为墙纸组合。")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("核对已安装").font(.headline)
+                        if let report = installReport {
+                            Text("描述符：\(report.descriptorUUID)").font(.caption).textSelection(.enabled)
+                            ForEach(report.injectResults.indices, id: \.self) { index in
+                                let result = report.injectResults[index]
+                                Text("\(shortTargetDir(result.targetParentDir))：\(result.ok ? "成功" : "失败")\(result.error.map { "（\($0)）" } ?? "")").font(.caption).textSelection(.enabled)
+                            }
+                            Text("偏好写入：\(report.preferencesWritten ? "成功" : "未写入")").font(.caption)
+                            Text("尚未核对目标落地（读回接口未就位，写盘成功不代表图库已列出）。").font(.caption).foregroundStyle(.secondary)
+                            if !installLogText.isEmpty {
+                                Text("安装日志（可长按复制）：").font(.caption).foregroundStyle(.secondary)
+                                Text(installLogText).font(.caption).textSelection(.enabled)
+                            }
+                        } else {
+                            Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出，目标落地尚未核对（读回接口未就位）。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -256,15 +277,32 @@ private struct ImportDetailView: View {
         return f.string(from: date)
     }
 
-    /// 详情页直接安装：装完不重启桌面、不闪屏、不黑屏，只导入图库。
+    /// 详情页直接安装：装完不重启桌面、不闪屏、不黑屏；返回成功只代表
+    /// 写盘函数返回成功，不代表图库已列出。成功文案分两档：第一档是写盘结果，
+    /// 第二档（目标落地已核对）在读回接口就位之前不得出现。
     private func runInstall() async {
         installing = true
         installResult = ""
+        installReport = nil
+        installLogText = ""
         defer { installing = false }
-        if let uuid = await state.install(host: "10.7.0.1") {
-            installResult = "安装完成，描述符：\(uuid)。已导入图库，去锁屏长按进图库，找到新壁纸，点设为墙纸组合。"
+        if let report = await state.installWithReport(host: "10.7.0.1") {
+            installReport = report
+            installLogText = InstallLog.shared.tail(60)
+            let dirLines = report.injectResults.map { result in
+                let short = shortTargetDir(result.targetParentDir)
+                return result.ok ? "\(short)：成功" : "\(short)：失败（\(result.error ?? "未知错误")）"
+            }.joined(separator: "；")
+            installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。尚未核对目标落地（读回接口未就位）。"
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
         }
+    }
+
+    private func shortTargetDir(_ path: String) -> String {
+        if let range = path.range(of: "Extensions/") {
+            return String(path[range.lowerBound...])
+        }
+        return path
     }
 }

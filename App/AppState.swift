@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
     @Published var pairingLoaded = false
     @Published var pairingDescription = "未导入"
     @Published var installHistory: [String] = []
+    @Published var installReports: [InstallReport] = []
     @Published var statusMessage = ""
 
     private let zip = ZipFoundationAdapter()
@@ -89,6 +90,27 @@ final class AppState: ObservableObject {
                 pairingPath: pairingFileURL.path, targetHost: host, forceRefresh: forceRefresh)
             installHistory.append(uuid)
             return uuid
+        } catch {
+            statusMessage = "安装失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// 诊断版安装：本地暂存 → 经配对隧道写盘，返回完整报告。
+    /// 与旧 install() 的区别：逐目录结果记进 installReports，诊断页可显示；
+    /// 暂存步骤与旧入口相同（DescriptorInstaller.stage），不改写盘逻辑、
+    /// 配对、偏好键与路径、结构版本映射、标识策略。
+    func installWithReport(host: String, forceRefresh: Bool = true) async -> InstallReport? {
+        guard let data = packageData, hasPairingFile else { return nil }
+        do {
+            let installer = DescriptorInstaller(zip: zip)
+            let (stage, descriptorUUID) = try installer.stage(data)
+            let report = try await AirliftInstaller.installWithReport(
+                stagedDirectory: stage, descriptorUUID: descriptorUUID,
+                pairingPath: pairingFileURL.path, targetHost: host, forceRefresh: forceRefresh)
+            installHistory.append(report.descriptorUUID)
+            installReports.append(report)
+            return report
         } catch {
             statusMessage = "安装失败：\(error.localizedDescription)"
             return nil

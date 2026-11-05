@@ -11,7 +11,11 @@
 //   3. 把暂存的描述符目录注入容器里的扩展数据存储
 //      （…/PRBPosterExtensionDataStore/<版本>/Extensions/<扩展>/descriptors/<新 UUID>）；
 //   4. 写 PosterBoard 偏好（让系统重载描述符、重置文件保护）；
-//   5. 返回描述符 UUID，安装完成（不要在这里重启设备，见第 8 步注释）。
+//   5. 返回安装报告（描述符 UUID + 逐目录结果 + 偏好结果），不再只返回 UUID。
+//      注意：报告只代表写盘函数返回的结果，不代表图库已列出；目标落地
+//      是否真的在设备上，必须等读回接口就位后核对，在此之前不得断言图库可见。
+//      不做对账、不做登记、不做进程刷新（格式需逆向确认，本补丁不硬编）；
+//      不重启设备、不调任何重启接口、不做桌面重启冒充。
 // 标识处理照 AirCard 的规矩：如果包里有建议元数据（suggestionMetadata），
 // 标识保持原样不动（乱改会让系统查不到）；否则生成新 UUID 并同步改掉
 // 描述符里的数字标识，避免重复安装撞标识。
@@ -51,6 +55,22 @@ func airliftLogCallback(_ ctx: UnsafeMutableRawPointer?, _ msg: UnsafePointer<CC
     }
 }
 
+/// 单个目标目录的注入结果（诊断用，不许合并成一个布尔值）。
+struct InjectResult {
+    let targetParentDir: String
+    let ok: Bool
+    let error: String?
+}
+
+/// 安装报告：描述符 UUID + 逐目录注入结果 + 偏好写入结果。
+/// 注意：这只代表写盘函数返回的结果，不代表图库已列出；目标落地是否
+/// 真的在设备上，必须等读回接口就位后核对，在此之前不得断言图库可见。
+struct InstallReport {
+    let descriptorUUID: String
+    let injectResults: [InjectResult]
+    let preferencesWritten: Bool
+}
+
 /// 经配对隧道安装描述符：暂存目录 + 配对文件路径 → 实际装上的描述符 UUID。
 public enum AirliftInstaller {
 
@@ -59,12 +79,36 @@ public enum AirliftInstaller {
         case ffiFailed(step: String, detail: String)
     }
 
+    /// 无条件双向扩展名清单（Collections / Mercury 两家族）。
+    /// 不论描述符原来的扩展名是旧版还是新版，同一 UUID、同一内容两边都写。
+    /// Kaleidoscope / Unity 类不在清单里，先不动，等核对图库读哪边再定。
+    static func dualExtensions(for ext: String) -> [String] {
+        switch ext {
+        case "com.apple.WallpaperKit.CollectionsPoster":
+            return ["com.apple.WallpaperKit.CollectionsPoster",
+                    "com.apple.Posters.CollectionsPosterApp"]
+        case "com.apple.Posters.CollectionsPosterApp":
+            return ["com.apple.Posters.CollectionsPosterApp",
+                    "com.apple.WallpaperKit.CollectionsPoster"]
+        case "com.apple.MercuryPoster":
+            return ["com.apple.MercuryPoster",
+                    "com.apple.Posters.MercuryPosterApp"]
+        case "com.apple.Posters.MercuryPosterApp":
+            return ["com.apple.Posters.MercuryPosterApp",
+                    "com.apple.MercuryPoster"]
+        default:
+            return [ext]
+        }
+    }
+
     /// - Parameters:
     ///   - stagedDirectory: DescriptorInstaller.stage 解出的暂存目录。
     ///   - descriptorUUID: 包里原来的描述符 UUID。
     ///   - pairingPath: 配对文件路径（Rust 配对主机写出的文件）。
     ///   - targetHost: 回环 VPN 的设备 IP，默认 10.7.0.1。
     /// - Returns: 实际装上的描述符 UUID（有建议元数据时等于原 UUID，否则是新 UUID）。
+    /// 旧入口（兼容保留）：只返回描述符 UUID，逐目录结果丢弃。
+    /// 诊断页必须走 installWithReport，不要走这个入口。
     public static func install(
         stagedDirectory: URL,
         descriptorUUID: String,
@@ -72,6 +116,26 @@ public enum AirliftInstaller {
         targetHost: String = "10.7.0.1",
         forceRefresh: Bool = true
     ) async throws -> String {
+        let report = try await installWithReport(
+            stagedDirectory: stagedDirectory, descriptorUUID: descriptorUUID,
+            pairingPath: pairingPath, targetHost: targetHost, forceRefresh: forceRefresh)
+        return report.descriptorUUID
+    }
+
+    /// 诊断版入口：返回报告，不只返回 UUID。
+    /// 流程与旧入口相同（配对检查、结构版本 59/61 映射、偏好键与两处路径均不动，
+    /// 标识策略也不动：有建议元数据的包保持原 UUID、不改标识），唯一改动：
+    /// 双写改成无条件双向，现代/补充目录失败不再用 try? 吞掉，而是逐目标
+    /// 收集进报告；主目录（清单第一项）注入失败仍抛错。
+    /// 不做对账、不做登记、不做进程刷新（格式需逆向确认，本补丁不硬编）；
+    /// 不重启设备、不调任何重启接口、不做桌面重启冒充。
+    public static func installWithReport(
+        stagedDirectory: URL,
+        descriptorUUID: String,
+        pairingPath: String,
+        targetHost: String = "10.7.0.1",
+        forceRefresh: Bool = true
+    ) async throws -> InstallReport {
         InstallLog.shared.clear()
         // 0. 装前先检查（只读不写）：配对不通就直接报错，不写盘。
         // checkPairing 只设目标主机并找容器，不写任何文件。
@@ -108,63 +172,46 @@ public enum AirliftInstaller {
             randomizeIdentifiers(in: descriptorFolder)
         }
 
-        // 5. 注入主扩展目录。
-        let primaryParent = "\(container)/Library/Application Support/PRBPosterExtensionDataStore/\(structVersion)/Extensions/\(ext)/descriptors"
-        try await injectFolder(
-            folderURL: descriptorFolder, targetParentDir: primaryParent,
-            destName: destUUID, pairingPath: pairingPath)
-
-        // 6. iOS 18+ 再双写一份到现代扩展目录（AirCard 的做法，失败不算错）。
-        if majorVersion >= 18 {
-            let modernExt: String?
-            if ext == "com.apple.WallpaperKit.CollectionsPoster" {
-                modernExt = "com.apple.Posters.CollectionsPosterApp"
-            } else if ext == "com.apple.MercuryPoster" {
-                modernExt = "com.apple.Posters.MercuryPosterApp"
-            } else {
-                modernExt = nil
-            }
-            if let modernExt = modernExt {
-                let modernParent = "\(container)/Library/Application Support/PRBPosterExtensionDataStore/\(structVersion)/Extensions/\(modernExt)/descriptors"
-                try? await injectFolder(
-                    folderURL: descriptorFolder, targetParentDir: modernParent,
+        // 5. 双写：清单第一项就是原来的主目录，失败仍抛错（保持原行为）；
+        // 其余目标逐个收集结果，失败进报告、不抛错、不吞掉。
+        // 原第 6 步、第 8 步那种“现代目录再写一次”的重复写法，已被本双写取代，
+        // 每个目标只写一次，不再重复写同一目录。
+        let targets = dualExtensions(for: ext).map {
+            "\(container)/Library/Application Support/PRBPosterExtensionDataStore/\(structVersion)/Extensions/\($0)/descriptors"
+        }
+        var injectResults: [InjectResult] = []
+        for (index, targetParent) in targets.enumerated() {
+            do {
+                try await injectFolder(
+                    folderURL: descriptorFolder, targetParentDir: targetParent,
                     destName: destUUID, pairingPath: pairingPath)
+                injectResults.append(InjectResult(targetParentDir: targetParent, ok: true, error: nil))
+            } catch {
+                if index == 0 {
+                    throw error
+                }
+                injectResults.append(InjectResult(targetParentDir: targetParent, ok: false, error: "\(error)"))
             }
         }
 
-        // 7. 写偏好，让 PosterBoard 重载描述符、重置文件保护。
+        // 6. 写偏好，让 PosterBoard 重载描述符、重置文件保护（键与路径均不动）。
+        // 失败抛错，与原行为一致；能走到返回处，说明偏好已写入。
         try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
 
-        // 8. 补齐兼容目录：现代扩展目录再写一次（与第 6 步同一映射）。
-        // 主目录已写好，这里只是补漏，失败不算错，不影响主目录。
-        if majorVersion >= 18 {
-            let supplementExt: String?
-            if ext == "com.apple.WallpaperKit.CollectionsPoster" {
-                supplementExt = "com.apple.Posters.CollectionsPosterApp"
-            } else if ext == "com.apple.MercuryPoster" {
-                supplementExt = "com.apple.Posters.MercuryPosterApp"
-            } else {
-                supplementExt = nil
-            }
-            if let supplementExt = supplementExt {
-                let supplementParent = "\(container)/Library/Application Support/PRBPosterExtensionDataStore/\(structVersion)/Extensions/\(supplementExt)/descriptors"
-                try? await injectFolder(
-                    folderURL: descriptorFolder, targetParentDir: supplementParent,
-                    destName: destUUID, pairingPath: pairingPath)
-            }
-        }
-
-        // 9. 强制刷新缓存：开关开着时，再写一次偏好，让系统立刻重新索引壁纸。
+        // 7. 强制刷新缓存：开关开着时，再写一次偏好，让系统立刻重新索引壁纸。
         if forceRefresh {
             try await writePosterBoardPreferences(containerPath: container, pairingPath: pairingPath)
         }
 
-        // 10. 到此为止，直接返回，绝不要在这里重启设备，更不要重启手机。
-        // 教训（2026-11-01 实测）：原来这一步调 al_device_respring，
+        // 8. 到此为止，直接返回报告，绝不要在这里重启设备，更不要重启手机。
+        // 教训（2026-11-01 实测）：原来这一步调整机重启接口，
         // 它实际是向 diagnostics_relay 发 Restart，等于整机重启，
         // 会把安装在完成前打断——每次安装都白苹果重启、壁纸进不去。
         // 桌面重启（只重启桌面）是另外一步，不在这里做，也绝不能调整机重启。
-        return destUUID
+        return InstallReport(
+            descriptorUUID: destUUID,
+            injectResults: injectResults,
+            preferencesWritten: true)
     }
 
     /// 清除已安装（重索引）：先确认配对通，再重写 PosterBoard 偏好两次，
