@@ -70,11 +70,23 @@ enum BackupInstallFlow {
 
             // 2. Rust 只备 PosterBoard 一个容器。
             onProgress?("正在取 PosterBoard 备份…", 0.10)
+            let fetchStart = Date()
+            var lastBytes: UInt64 = 0
+            var lastTick = fetchStart
             let fetch = try await BackupFFI.fetchPosterBoard(
                 pairingPath: pairingPath, backupRoot: backupRoot, log: log
-            ) { percent in
-                guard percent >= 0 else { return }
-                onProgress?("正在取 PosterBoard 备份…", 0.10 + 0.35 * percent / 100.0)
+            ) { detail in
+                guard detail.percent >= 0 else { return }
+                let now = Date()
+                let elapsed = now.timeIntervalSince(fetchStart)
+                let delta = detail.bytesDone >= lastBytes ? detail.bytesDone - lastBytes : 0
+                let dt = now.timeIntervalSince(lastTick)
+                let speed = dt > 0 ? Double(delta) / dt : 0
+                lastBytes = detail.bytesDone
+                lastTick = now
+                let step = "正在取备份… \(detail.filesDone) 个文件 · \(byteText(detail.bytesDone)) · \(speedText(speed))"
+                onProgress?(step, 0.10 + 0.35 * detail.percent / 100.0)
+                log("取备份 \(Int(detail.percent))%：\(detail.filesDone) 个文件，\(byteText(detail.bytesDone))，\(speedText(speed))，已用 \(Int(elapsed)) 秒")
             }
             log("取回备份：留了 \(fetch.keptFiles) 个文件，筛掉 \(fetch.discardedFiles) 个")
 
@@ -155,10 +167,27 @@ enum BackupInstallFlow {
         } catch let error as BackupError {
             // 已经是中文的步骤错误，原样抛，调用方直接显示。
             throw error
+        } catch is CancellationError {
+            // 用户点了停止：原样往上抛，别包成"备份安装失败"。
+            throw CancellationError()
         } catch {
             // 非 BackupError 的错误（解包、文件读写等）没有中文说明，
             // 在这里补一句，免得用户只看到系统英文。
             throw BackupError("备份安装失败：\(error.localizedDescription)")
         }
+    }
+
+    /// 字节数写成 "12.3 MB" / "45 KB" / "900 字节"。
+    private static func byteText(_ bytes: UInt64) -> String {
+        if bytes >= 1_000_000 { return String(format: "%.1f MB", Double(bytes) / 1_000_000.0) }
+        if bytes >= 1_000 { return String(format: "%.0f KB", Double(bytes) / 1_000.0) }
+        return "\(bytes) 字节"
+    }
+
+    /// 速度写成 "45 KB/s" / "1.2 MB/s"。
+    private static func speedText(_ bytesPerSecond: Double) -> String {
+        if bytesPerSecond >= 1_000_000 { return String(format: "%.1f MB/s", bytesPerSecond / 1_000_000.0) }
+        if bytesPerSecond >= 1_000 { return String(format: "%.0f KB/s", bytesPerSecond / 1_000.0) }
+        return String(format: "%.0f B/s", bytesPerSecond)
     }
 }

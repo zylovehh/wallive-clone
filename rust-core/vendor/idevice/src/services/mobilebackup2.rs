@@ -106,7 +106,8 @@ pub trait BackupDelegate: Send + Sync {
     /// - `bytes_total`: total expected bytes for this batch (0 if unknown)
     /// - `overall_progress`: device-reported overall progress percentage (0.0–100.0),
     ///   or negative if not yet reported
-    fn on_progress(&self, _bytes_done: u64, _bytes_total: u64, _overall_progress: f64) {}
+    /// - `files_done`: files received so far in this upload batch
+    fn on_progress(&self, _bytes_done: u64, _bytes_total: u64, _overall_progress: f64, _files_done: u32) {}
 
     /// Decide whether an uploaded file should be preserved during backup.
     ///
@@ -1292,7 +1293,7 @@ impl MobileBackup2Client {
 
             file_count += 1;
             delegate.on_file_received(&fname, file_count);
-            delegate.on_progress(bytes_done, bytes_total, overall_progress);
+            delegate.on_progress(bytes_done, bytes_total, overall_progress, file_count);
 
             // Handle trailing error/status message
             if nlen > 0 && code != DL_CODE_FILE_DATA && code != DL_CODE_SUCCESS {

@@ -281,7 +281,7 @@ impl BackupDelegate for Mobilebackup2BackupDelegateFFI {
         Box::pin(async { Ok(Vec::new()) })
     }
 
-    fn on_progress(&self, bytes_done: u64, bytes_total: u64, overall_progress: f64) {
+    fn on_progress(&self, bytes_done: u64, bytes_total: u64, overall_progress: f64, _files_done: u32) {
         if let Some(cb) = self.on_progress {
             cb(bytes_done, bytes_total, overall_progress, self.context);
         }

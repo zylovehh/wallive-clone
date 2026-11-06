@@ -43,6 +43,15 @@ enum BackupFFI {
         let deviceName: String
     }
 
+    /// 取备份/还原的实时进度：百分比 + 累计字节/文件数（跨 DL 批次累计）。
+    /// `bytesTotal` 是当前这批的预期总量（不知道时为 0）。
+    struct ProgressDetail {
+        let percent: Double
+        let bytesDone: UInt64
+        let bytesTotal: UInt64
+        let filesDone: UInt32
+    }
+
     // MARK: - 设备身份
 
     // MARK: - 取表
@@ -51,45 +60,60 @@ enum BackupFFI {
     /// `PosterBoardBackup.prepareFetchDirectory` 把目录备好。
     static func fetchPosterBoard(pairingPath: String, backupRoot: URL,
                                  log: @escaping BackupLog = { _ in },
-                                 onProgress: ((Double) -> Void)? = nil) async throws -> FetchResult {
+                                 onProgress: ((ProgressDetail) -> Void)? = nil) async throws -> FetchResult {
         let box = CallbackBox(log: log, onProgress: onProgress)
         let ctx = Unmanaged.passRetained(box).toOpaque()
-        defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result: Result<FetchResult, Error> = pairingPath.withCString { pairingC in
-                    backupRoot.path.withCString { rootC in
-                        var outJSON: UnsafeMutablePointer<CChar>?
-                        var outError: UnsafeMutablePointer<CChar>?
-                        let rc = al_backup_fetch_posterboard(
-                            pairingC, rootC, logCallback, progressCallback, ctx,
-                            &outJSON, &outError)
-                        guard rc == 0 else {
-                            return .failure(BackupError(
-                                "取 PosterBoard 备份失败：\(errorString(outError))"))
-                        }
-                        do {
-                            let json = try jsonDictionary(outJSON)
-                            guard let udid = json["udid"] as? String,
-                                  let backupDir = json["backup_dir"] as? String else {
-                                return .failure(BackupError("取备份的结果缺字段，读不懂。"))
+        // 盒子不能用 defer 放：任务被取消时这个函数先返回了，Rust 还在
+        // 后台读数据、还会调回调；盒子必须活到 Rust 调用真正回来那一刻，
+        // 在派发的块里放掉（见下面）。
+        let resumeBox = ResumeBox<FetchResult>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                resumeBox.set(continuation)
+                if Task.isCancelled {
+                    // 还没开始就被取消了：不调 FFI，直接把盒子放掉。
+                    Unmanaged<CallbackBox>.fromOpaque(ctx).release()
+                    resumeBox.cancel()
+                    return
+                }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let result: Result<FetchResult, Error> = pairingPath.withCString { pairingC in
+                        backupRoot.path.withCString { rootC in
+                            var outJSON: UnsafeMutablePointer<CChar>?
+                            var outError: UnsafeMutablePointer<CChar>?
+                            let rc = al_backup_fetch_posterboard(
+                                pairingC, rootC, logCallback, progressCallback, ctx,
+                                &outJSON, &outError)
+                            guard rc == 0 else {
+                                return .failure(BackupError(
+                                    "取 PosterBoard 备份失败：\(errorString(outError))"))
                             }
-                            return .success(FetchResult(
-                                udid: udid,
-                                backupDir: URL(fileURLWithPath: backupDir),
-                                isEncrypted: json["is_encrypted"] as? Bool ?? false,
-                                keptFiles: json["kept_files"] as? Int ?? 0,
-                                discardedFiles: json["discarded_files"] as? Int ?? 0,
-                                lastProgress: json["last_progress"] as? Double ?? -1,
-                                manifestDBBytes: json["manifest_db_bytes"] as? Int ?? 0,
-                                finalResponse: json["final_response"] as? [String: Any]))
-                        } catch {
-                            return .failure(error)
+                            do {
+                                let json = try jsonDictionary(outJSON)
+                                guard let udid = json["udid"] as? String,
+                                      let backupDir = json["backup_dir"] as? String else {
+                                    return .failure(BackupError("取备份的结果缺字段，读不懂。"))
+                                }
+                                return .success(FetchResult(
+                                    udid: udid,
+                                    backupDir: URL(fileURLWithPath: backupDir),
+                                    isEncrypted: json["is_encrypted"] as? Bool ?? false,
+                                    keptFiles: json["kept_files"] as? Int ?? 0,
+                                    discardedFiles: json["discarded_files"] as? Int ?? 0,
+                                    lastProgress: json["last_progress"] as? Double ?? -1,
+                                    manifestDBBytes: json["manifest_db_bytes"] as? Int ?? 0,
+                                    finalResponse: json["final_response"] as? [String: Any]))
+                            } catch {
+                                return .failure(error)
+                            }
                         }
                     }
+                    Unmanaged<CallbackBox>.fromOpaque(ctx).release()
+                    resumeBox.resume(with: result)
                 }
-                continuation.resume(with: result)
             }
+        } onCancel: {
+            resumeBox.cancel()
         }
     }
 
@@ -99,39 +123,51 @@ enum BackupFFI {
     /// 调用方在还原成功后另外重启（GoldenNugget 手机版也一样）。
     static func restore(pairingPath: String, backupRoot: URL, reboot: Bool = false,
                         log: @escaping BackupLog = { _ in },
-                        onProgress: ((Double) -> Void)? = nil) async throws -> RestoreResult {
+                        onProgress: ((ProgressDetail) -> Void)? = nil) async throws -> RestoreResult {
         let box = CallbackBox(log: log, onProgress: onProgress)
         let ctx = Unmanaged.passRetained(box).toOpaque()
-        defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
+        // 盒子不能用 defer 放：原因同 fetchPosterBoard，见那里。
+        let resumeBox = ResumeBox<RestoreResult>()
         let options = "{\"reboot\":\(reboot ? "true" : "false")}"
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result: Result<RestoreResult, Error> = pairingPath.withCString { pairingC in
-                    backupRoot.path.withCString { rootC in
-                        options.withCString { optionsC in
-                            var outJSON: UnsafeMutablePointer<CChar>?
-                            var outError: UnsafeMutablePointer<CChar>?
-                            let rc = al_backup_restore(
-                                pairingC, rootC, optionsC, logCallback, progressCallback, ctx,
-                                &outJSON, &outError)
-                            guard rc == 0 else {
-                                return .failure(BackupError(
-                                    "还原失败：\(errorString(outError))"))
-                            }
-                            do {
-                                let json = try jsonDictionary(outJSON)
-                                return .success(RestoreResult(
-                                    completed: json["completed"] as? Bool ?? false,
-                                    lastProgress: json["last_progress"] as? Double ?? -1,
-                                    finalResponse: json["final_response"] as? [String: Any]))
-                            } catch {
-                                return .failure(error)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                resumeBox.set(continuation)
+                if Task.isCancelled {
+                    Unmanaged<CallbackBox>.fromOpaque(ctx).release()
+                    resumeBox.cancel()
+                    return
+                }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let result: Result<RestoreResult, Error> = pairingPath.withCString { pairingC in
+                        backupRoot.path.withCString { rootC in
+                            options.withCString { optionsC in
+                                var outJSON: UnsafeMutablePointer<CChar>?
+                                var outError: UnsafeMutablePointer<CChar>?
+                                let rc = al_backup_restore(
+                                    pairingC, rootC, optionsC, logCallback, progressCallback, ctx,
+                                    &outJSON, &outError)
+                                guard rc == 0 else {
+                                    return .failure(BackupError(
+                                        "还原失败：\(errorString(outError))"))
+                                }
+                                do {
+                                    let json = try jsonDictionary(outJSON)
+                                    return .success(RestoreResult(
+                                        completed: json["completed"] as? Bool ?? false,
+                                        lastProgress: json["last_progress"] as? Double ?? -1,
+                                        finalResponse: json["final_response"] as? [String: Any]))
+                                } catch {
+                                    return .failure(error)
+                                }
                             }
                         }
                     }
+                    Unmanaged<CallbackBox>.fromOpaque(ctx).release()
+                    resumeBox.resume(with: result)
                 }
-                continuation.resume(with: result)
             }
+        } onCancel: {
+            resumeBox.cancel()
         }
     }
 
@@ -220,11 +256,48 @@ enum BackupFFI {
 
     // MARK: - 私有
 
+    /// 只恢复一次的 continuation 盒子：Rust 阻塞调用回来了、或者任务被取消了，
+    /// 两边都可能来恢复，先到的那次生效，另一边不再碰。
+    /// `set` 时如果已经取消了，立刻用取消错误恢复，不等 Rust。
+    private final class ResumeBox<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T, Error>?
+        private var resumed = false
+        private var cancelled = false
+
+        func set(_ continuation: CheckedContinuation<T, Error>) {
+            lock.lock(); defer { lock.unlock() }
+            if cancelled {
+                resumed = true
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            self.continuation = continuation
+        }
+
+        func resume(with result: Result<T, Error>) {
+            lock.lock(); defer { lock.unlock() }
+            guard !resumed, let continuation else { return }
+            resumed = true
+            self.continuation = nil
+            continuation.resume(with: result)
+        }
+
+        func cancel() {
+            lock.lock(); defer { lock.unlock() }
+            cancelled = true
+            guard !resumed, let continuation else { return }
+            resumed = true
+            self.continuation = nil
+            continuation.resume(throwing: CancellationError())
+        }
+    }
+
     /// 装日志和进度闭包的盒子，经 `ctx` 传给 Rust。
     private final class CallbackBox: @unchecked Sendable {
         let log: BackupLog
-        var onProgress: ((Double) -> Void)?
-        init(log: @escaping BackupLog, onProgress: ((Double) -> Void)? = nil) {
+        var onProgress: ((ProgressDetail) -> Void)?
+        init(log: @escaping BackupLog, onProgress: ((ProgressDetail) -> Void)? = nil) {
             self.log = log
             self.onProgress = onProgress
         }
@@ -238,13 +311,13 @@ enum BackupFFI {
             .log(String(cString: msg))
     }
 
-    /// Rust 进度回调：`ALBackupProgressCallback(ctx, percent)`，
-    /// percent 在 [0, 100]，-1 表示不知道。
+    /// Rust 进度回调：`ALBackupProgressCallback(ctx, percent, bytes_done, bytes_total, files_done)`，
+    /// percent 在 [0, 100]，-1 表示不知道；字节/文件数是跨 DL 批次累计的。
     private static let progressCallback: @convention(c) (UnsafeMutableRawPointer?,
-                                                         Double) -> Void = { ctx, percent in
+                                                         Double, UInt64, UInt64, UInt32) -> Void = { ctx, percent, bytesDone, bytesTotal, filesDone in
         guard let ctx else { return }
         Unmanaged<CallbackBox>.fromOpaque(ctx).takeUnretainedValue()
-            .onProgress?(percent)
+            .onProgress?(ProgressDetail(percent: percent, bytesDone: bytesDone, bytesTotal: bytesTotal, filesDone: filesDone))
     }
 
     /// `out_json` 指针对应的字典，用完释放。

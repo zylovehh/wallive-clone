@@ -38,7 +38,12 @@ use crate::ffi_util::{cstr, opt_str};
 pub const POSTERBOARD_BUNDLE: &str = "com.apple.PosterBoard";
 
 /// Progress callback: percent in [0, 100], or -1 when unknown.
-pub type ALBackupProgressCallback = Option<extern "C" fn(ctx: *mut c_void, percent: f64)>;
+/// `bytes_done`/`files_done` are cumulative across DL batches (the device
+/// resets the per-batch counters each batch); `bytes_total` is the current
+/// batch's expected total, 0 if unknown.
+pub type ALBackupProgressCallback = Option<
+    extern "C" fn(ctx: *mut c_void, percent: f64, bytes_done: u64, bytes_total: u64, files_done: u32),
+>;
 
 // ---------------------------------------------------------------------------
 // Upload filter: keep PosterBoard + backup metadata, drain everything else
@@ -80,6 +85,13 @@ struct FilteringDelegate {
     discarded: AtomicU32,
     last_progress: AtomicU64,
     last_reported_step: AtomicU64,
+    /// Cumulative bytes/files across DL batches (the device resets the
+    /// per-batch counters each batch; these keep a running total).
+    cum_bytes: AtomicU64,
+    cum_files: AtomicU32,
+    /// Last per-batch counters seen, to detect a batch reset.
+    last_batch_bytes: AtomicU64,
+    last_batch_files: AtomicU32,
     /// Backup root for 0-byte placeholders (backup only). `None` on the
     /// restore path, where nothing is ever turned into a placeholder.
     backup_root: Option<PathBuf>,
@@ -105,6 +117,10 @@ impl FilteringDelegate {
             discarded: AtomicU32::new(0),
             last_progress: AtomicU64::new((-1.0f64).to_bits()),
             last_reported_step: AtomicU64::new(u64::MAX),
+            cum_bytes: AtomicU64::new(0),
+            cum_files: AtomicU32::new(0),
+            last_batch_bytes: AtomicU64::new(0),
+            last_batch_files: AtomicU32::new(0),
             backup_root,
             placeholders: Mutex::new(HashSet::new()),
             placeholder_count: AtomicU32::new(0),
@@ -345,7 +361,21 @@ impl BackupDelegate for FilteringDelegate {
         keep
     }
 
-    fn on_progress(&self, bytes_done: u64, bytes_total: u64, overall_progress: f64) {
+    fn on_progress(&self, bytes_done: u64, bytes_total: u64, overall_progress: f64, files_done: u32) {
+        // The device resets the per-batch counters each DL batch; keep a
+        // running total so the UI shows cumulative files/bytes. A drop in
+        // the per-batch counter can only mean a new batch (within a batch
+        // both counters only grow).
+        let prev_bytes = self.last_batch_bytes.swap(bytes_done, Ordering::Relaxed);
+        if bytes_done < prev_bytes {
+            self.cum_bytes.fetch_add(prev_bytes, Ordering::Relaxed);
+        }
+        let prev_files = self.last_batch_files.swap(files_done, Ordering::Relaxed);
+        if files_done < prev_files {
+            self.cum_files.fetch_add(prev_files, Ordering::Relaxed);
+        }
+        let cum_bytes = self.cum_bytes.load(Ordering::Relaxed) + bytes_done;
+        let cum_files = self.cum_files.load(Ordering::Relaxed) + files_done;
         let pct = if overall_progress >= 0.0 {
             overall_progress
         } else if bytes_total > 0 {
@@ -360,7 +390,7 @@ impl BackupDelegate for FilteringDelegate {
             let step = pct.floor() as u64;
             if self.last_reported_step.swap(step, Ordering::Relaxed) != step {
                 if let Some(cb) = self.progress_cb {
-                    cb(self.progress_ctx as *mut c_void, pct);
+                    cb(self.progress_ctx as *mut c_void, pct, cum_bytes, bytes_total, cum_files);
                 }
             }
         }

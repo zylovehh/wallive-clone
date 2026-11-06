@@ -18,9 +18,9 @@ enum RestoreRunner {
         var lastLoggedStep = -1
         let result = try await BackupFFI.restore(
             pairingPath: pairingPath, backupRoot: backupRoot, reboot: false, log: log
-        ) { percent in
-            guard percent >= 0 else { return }
-            let step = Int(percent / 5) * 5
+        ) { detail in
+            guard detail.percent >= 0 else { return }
+            let step = Int(detail.percent / 5) * 5
             guard step != lastLoggedStep else { return }
             lastLoggedStep = step
             log("还原进度 \(step)%")

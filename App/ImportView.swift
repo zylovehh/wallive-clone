@@ -175,6 +175,8 @@ private struct ImportDetailView: View {
     @State private var showFullVerify = false
     @State private var installStep = "正在安装…"
     @State private var installProgress = 0.0
+    /// 正在跑的安装任务，进度框里的"停止"按钮用它取消。
+    @State private var installTask: Task<Void, Never>?
 
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
@@ -266,7 +268,7 @@ private struct ImportDetailView: View {
                     }
                     HStack {
                         Spacer()
-                        Button("安装壁纸") { Task { await runInstall() } }
+                        Button("安装壁纸") { installTask = Task { await runInstall() } }
                             .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .frame(width: buttonWidth).padding(.vertical, 12).glassCapsule()
                             .buttonStyle(PressBounceButtonStyle())
@@ -396,6 +398,9 @@ private struct ImportDetailView: View {
                         Text("\(Int(installProgress * 100))%")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("请稍等，不要退出").font(.caption).foregroundStyle(.secondary)
+                        Button("停止") { installTask?.cancel() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                     }
                     .padding(28)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
@@ -458,7 +463,7 @@ private struct ImportDetailView: View {
         installReport = nil
         installLogText = ""
         defer { installing = false }
-        if let report = await state.installWithReport(host: "10.7.0.1", onProgress: { step, fraction in
+        if let report = try? await state.installWithReport(host: "10.7.0.1", onProgress: { step, fraction in
             Task { @MainActor in
                 installStep = step
                 installProgress = fraction
@@ -500,6 +505,10 @@ private struct ImportDetailView: View {
                 }
                 installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。\(verifySummary) \(refreshSummary)"
                 }
+        } else if Task.isCancelled {
+            // 用户点了停止（`try?` 把取消错误吞成了 nil）。
+            installResult = "已停止取备份。下次取备份如果一直连不上，重启手机一次再试。"
+            installLogText = InstallLog.shared.tail(60)
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
         }
