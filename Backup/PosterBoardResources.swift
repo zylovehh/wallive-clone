@@ -91,3 +91,4 @@ enum PosterBoardResources {
             AAiZ
             """),
     ]
+}
