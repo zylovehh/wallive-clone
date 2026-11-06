@@ -673,12 +673,19 @@ async fn fetch_posterboard_inner(
             )
         }
     }
-    // FactoryInfo is the same Applications table the device just handed
-    // us, plus the installed-apps list beside it (reference: GoldenNugget
-    // Mobile `factoryInfo` + pymobiledevice3 `_add_posterboard_container`).
+    // FactoryInfo decides what the device uploads: the PosterBoard
+    // table must sit under the "Applications" key, with the installed-apps
+    // list beside it (reference: GoldenNugget Mobile `factoryInfo`).
+    // A flat table (PosterBoard at the top level, no "Applications" key)
+    // is ignored by the device and it backs up the whole phone instead
+    // (seen on #29: 10/10 files were non-PosterBoard, 103 s for 1 file).
     // It rides the Backup message as a top-level sibling of Options; a
     // Backup request without it is refused by the device.
-    let mut factory_info = applications.clone();
+    let mut factory_info = plist::Dictionary::new();
+    factory_info.insert(
+        "Applications".to_string(),
+        plist::Value::Dictionary(applications.clone()),
+    );
     factory_info.insert(
         "Installed Applications".to_string(),
         plist::Value::Array(vec![plist::Value::String(

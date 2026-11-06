@@ -345,25 +345,25 @@ private struct ImportDetailView: View {
                             } else if report.verifyResults.contains(where: { !$0.channelUnavailable }) {
                                 Text("读回核对有缺失：写盘成功不代表图库已列出，缺失项见上面。").font(.caption).foregroundStyle(.secondary)
                             }
-                            if !installLogText.isEmpty {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text("安装日志（可长按复制）").font(.caption).foregroundStyle(.secondary)
-                                        Spacer()
-                                        Button(showFullLog ? "收起" : "展开全部") { showFullLog.toggle() }
-                                            .font(.caption)
-                                    }
-                                    Text(showFullLog ? installLogText : logPreviewText)
-                                        .font(.caption)
-                                        .textSelection(.enabled)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .padding(12)
-                                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
-                            }
                         } else {
                             Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出。").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if !installLogText.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("安装日志（可长按复制）").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button(showFullLog ? "收起" : "展开全部") { showFullLog.toggle() }
+                                        .font(.caption)
+                                }
+                                Text(showFullLog ? installLogText : logPreviewText)
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(12)
+                            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
                         }
                         } else {
                             Text(verifySummaryLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
