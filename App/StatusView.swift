@@ -326,14 +326,16 @@ private struct StatusVPNPage: View {
     /// 按顺序挨个试，哪个通了就停，全不通才告诉用户手动去。
     /// 27.2 实测教训：iOS 27 改了设置内部链接，旧 prefs 写法在 27.2 上落到
     /// 设置 → App 列表，到不了开发者模式；新写法 settings-navigation:// 打头，
-    /// 旧写法留着当后备。子页名该写 DEVELOPER_MODE（按“开发者模式”直译），
-    /// DEVELOPER 是开完之后才出现的顶层“开发者”栏目，在隐私页下没有这一项。
+    /// 旧写法留着当后备。25 号真机验：Privacy 根名是错的，只跳到设置主页；
+    /// 26.2 链接表里隐私与安全的根是 PrivacyAndSecurity，且表里根本没有
+    /// “开发者模式”这一项，所以只跳隐私与安全页、不带子路径，落到那页滑
+    /// 到底点开发者模式。DEVELOPER 是开完之后才出现的顶层“开发者”栏目，
+    /// 在隐私页下没有这一项。
     /// open 回 true 只代表设置打开了，不代表落到了那栏，所以打开成功后的指引
     /// 写成落地无关的版本：不管停在哪一页，都从设置主页找隐私与安全。
     private func openDeveloperSettings() {
         let candidates = [
-            "settings-navigation://com.apple.Settings.Privacy/DEVELOPER_MODE",
-            "settings-navigation://com.apple.Settings.Privacy",
+            "settings-navigation://com.apple.Settings.PrivacyAndSecurity",
             "App-Prefs:root=Privacy&path=DEVELOPER_MODE",
             "prefs:root=Privacy&path=DEVELOPER_MODE",
             "App-Prefs:root=Privacy&path=DEVELOPER",
