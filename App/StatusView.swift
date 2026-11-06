@@ -331,10 +331,20 @@ private struct StatusVPNPage: View {
     /// “开发者模式”这一项，所以只跳隐私与安全页、不带子路径，落到那页滑
     /// 到底点开发者模式。DEVELOPER 是开完之后才出现的顶层“开发者”栏目，
     /// 在隐私页下没有这一项。
+    /// 26 号真机验：光跳隐私与安全页也落到设置主页（27.0.1 上这条也不通）；
+    /// Safari 里粘 settings-navigation 链接会报“网址无效”，Safari 认不出这
+    /// 种系统链接，不能用 Safari 试，只能从 App 里调 open 来验。
+    /// 27 号改法：按锁定模式那栏的写法类推（26.2 表里锁定模式是
+    /// PrivacyAndSecurity#LOCKDOWN_MODE#LOCKDOWN_MODE，开发者模式就在它下
+    /// 面同一栏），先试锚点式 #DEVELOPER_MODE#DEVELOPER_MODE，再试子路径式
+    /// /DEVELOPER_MODE，最后才是光跳隐私与安全页。两条都不行就说明 27 上没
+    /// 这条深链，不再为跳转单独编版。
     /// open 回 true 只代表设置打开了，不代表落到了那栏，所以打开成功后的指引
     /// 写成落地无关的版本：不管停在哪一页，都从设置主页找隐私与安全。
     private func openDeveloperSettings() {
         let candidates = [
+            "settings-navigation://com.apple.Settings.PrivacyAndSecurity#DEVELOPER_MODE#DEVELOPER_MODE",
+            "settings-navigation://com.apple.Settings.PrivacyAndSecurity/DEVELOPER_MODE",
             "settings-navigation://com.apple.Settings.PrivacyAndSecurity",
             "App-Prefs:root=Privacy&path=DEVELOPER_MODE",
             "prefs:root=Privacy&path=DEVELOPER_MODE",
