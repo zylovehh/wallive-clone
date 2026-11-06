@@ -35,7 +35,7 @@ enum PosterBoardBackup {
         try FileManager.default.createDirectory(at: deviceDir, withIntermediateDirectories: true)
         // Applications 是空字典：设备跳过所有 App 容器，只备 PosterBoard。
         try HostManifests.ensure(deviceDir: deviceDir, udid: udid, ios27: true,
-                                 applications: nil, isFullBackup: true)
+                                 isFullBackup: true, applications: nil)
         try HostManifests.writeSQLiteManifest(deviceDir: deviceDir, ios27: true)
         log("取表目录已备好（\(deviceDir.path)）：占位 Manifest.db + "
             + "Status.plist（满备份）+ 空 Manifest.plist")
