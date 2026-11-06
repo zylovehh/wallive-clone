@@ -167,6 +167,30 @@ public struct InstallReport {
     public let verifyResults: [VerifyResult]
     public let registration: RegistrationResult?
     public let refresh: RefreshResult?
+    /// 这次安装实际走的路。直写路默认 `.airlift`（老构造不用改）；
+    /// 备份路由 `AppState.installWithReportBackup` 填 `.backup`。
+    public let mode: PosterBoardApplyMode
+    /// 备份路才有：一句话结果（载荷数、商店摘要、"要重启手机"）。
+    /// 直写路是 nil，界面不显示这行。
+    public let backupSummary: String?
+
+    public init(descriptorUUID: String,
+                injectResults: [InjectResult],
+                preferencesWritten: Bool,
+                verifyResults: [VerifyResult],
+                registration: RegistrationResult?,
+                refresh: RefreshResult?,
+                mode: PosterBoardApplyMode = .airlift,
+                backupSummary: String? = nil) {
+        self.descriptorUUID = descriptorUUID
+        self.injectResults = injectResults
+        self.preferencesWritten = preferencesWritten
+        self.verifyResults = verifyResults
+        self.registration = registration
+        self.refresh = refresh
+        self.mode = mode
+        self.backupSummary = backupSummary
+    }
 }
 
 /// 经配对隧道安装描述符：暂存目录 + 配对文件路径 → 实际装上的描述符 UUID。

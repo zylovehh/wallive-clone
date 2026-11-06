@@ -21,6 +21,27 @@ final class AppState: ObservableObject {
     @Published var installHistory: [String] = []
     @Published var installReports: [InstallReport] = []
     @Published var statusMessage = ""
+    /// 安装方式三选一（自动 / 直写 / 备份还原），存 UserDefaults，默认自动。
+    /// "自动"走 `PosterBoardApplyModeSettings.resolved()`：直写被藏时自动切备份。
+    @Published var applyChoice = ApplyModeChoice.current {
+        didSet { ApplyModeChoice.current = applyChoice }
+    }
+    /// 这台设备的身份（UDID、iOS 版本、build）。读不到时为 nil，
+    /// 界面显示"设备版本读不到"，安装按 fail closed 走备份路。
+    @Published var deviceInfo: BackupFFI.DeviceInfo?
+
+    /// 读一次设备身份（只读不写）。隧道/配对不通就置空，不抛错——
+    /// 调用方按"读不到"处理，不拿旧值冒充。
+    func refreshDeviceInfo() async {
+        guard hasPairingFile else { deviceInfo = nil; return }
+        do {
+            deviceInfo = try await BackupFFI.deviceInfo(
+                pairingPath: pairingFileURL.path,
+                log: { InstallLog.shared.append($0) })
+        } catch {
+            deviceInfo = nil
+        }
+    }
 
     private let zip = ZipFoundationAdapter()
 
@@ -104,8 +125,21 @@ final class AppState: ObservableObject {
     /// 与旧 install() 的区别：逐目录结果记进 installReports，诊断页可显示；
     /// 暂存步骤与旧入口相同（DescriptorInstaller.stage），不改写盘逻辑、
     /// 配对、偏好键与路径、结构版本映射、标识策略。
+    /// 先读设备身份、按三态选择定模式：直写走下面原有流程一字不动；
+    /// 备份走 `BackupInstallFlow`（取表 → 改表 → 编包 → 还原），装完要重启手机。
     func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async -> InstallReport? {
         guard let data = packageData, hasPairingFile else { return nil }
+        // 安装开始先读一次设备身份（只读不写）。读不到就用缓存的，
+        // 连缓存都没有就按空版本算——`resolved()` 会 fail closed 走备份路，
+        // 不猜版本走直写。
+        onProgress?("正在读设备版本…", 0.02)
+        await refreshDeviceInfo()
+        let version = deviceInfo?.productVersion ?? ""
+        let build = deviceInfo?.buildVersion ?? ""
+        let mode = applyChoice.resolvedMode(deviceVersion: version, buildVersion: build)
+        if mode == .backup {
+            return await installWithReportBackup(data: data, onProgress: onProgress)
+        }
         do {
             onProgress?("正在准备安装包…", 0.05)
             let installer = DescriptorInstaller(zip: zip)
@@ -119,6 +153,47 @@ final class AppState: ObservableObject {
             return report
         } catch {
             statusMessage = "安装失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// 备份路安装：取表 → 改表 → 编包 → 还原。结果同样记进 installReports，
+    /// 报告里 `mode` 是 `.backup`，`backupSummary` 写清"要重启手机"。
+    /// 直写路的读回核对 / 登记 / 进程刷新这条路没有：还原的 `completed`
+    /// 就是验真，偏好不写、进程不刷，壁纸进图库靠重启手机。
+    private func installWithReportBackup(data: Data,
+                                         onProgress: ((String, Double) -> Void)? = nil) async -> InstallReport? {
+        guard let info = deviceInfo else {
+            statusMessage = "备份安装没法开始：读不到设备身份（UDID、iOS 版本），"
+                + "请确认回环 VPN 已连接、配对记录已导入，再试一次。"
+            return nil
+        }
+        do {
+            InstallLog.shared.clear()
+            let outcome = try await BackupInstallFlow.install(
+                packageData: data, zip: zip,
+                pairingPath: pairingFileURL.path, deviceInfo: info,
+                log: { InstallLog.shared.append($0) },
+                onProgress: onProgress)
+            let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
+                + "Extensions/\(outcome.extensionID)/configurations"
+            let report = InstallReport(
+                descriptorUUID: outcome.descriptorUUID,
+                injectResults: [InjectResult(targetParentDir: configurationsDir,
+                                             ok: true, error: nil)],
+                preferencesWritten: false,
+                verifyResults: [],
+                registration: nil,
+                refresh: nil,
+                mode: .backup,
+                backupSummary: "备份还原已完成（\(outcome.payloadCount) 个载荷，"
+                    + "商店：\(outcome.storeSummary)）。重启手机后去锁屏图库查看，"
+                    + "出现后再点设为墙纸组合。")
+            installHistory.append(report.descriptorUUID)
+            installReports.append(report)
+            return report
+        } catch {
+            statusMessage = "备份安装失败：\(error.localizedDescription)"
             return nil
         }
     }

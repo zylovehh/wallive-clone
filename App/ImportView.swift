@@ -179,9 +179,28 @@ private struct ImportDetailView: View {
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
 
+    /// 这次安装实际走哪条路（按三态选择 + 设备版本解析）。
+    /// 设备版本读不到时按备份算（fail closed），不猜版本走直写。
+    private var effectiveMode: PosterBoardApplyMode {
+        state.applyChoice.resolvedMode(
+            deviceVersion: state.deviceInfo?.productVersion ?? "",
+            buildVersion: state.deviceInfo?.buildVersion ?? "")
+    }
+
+    /// 模式提示行：这次实际会用的模式 + 为什么。
+    private var modeHintText: String {
+        state.applyChoice.hintText(
+            deviceVersion: state.deviceInfo?.productVersion ?? "",
+            buildVersion: state.deviceInfo?.buildVersion ?? "")
+    }
+
     /// 核对区折叠时只显示的一行摘要：描述符短号 + 注入/偏好/登记/刷新各一词。
+    /// 备份路没有读回核对 / 登记 / 进程刷新那几项，折叠行只写模式 + 重启提醒。
     private var verifySummaryLine: String {
         guard let report = installReport else { return "尚未安装，暂无核对结果。" }
+        if report.mode == .backup {
+            return "描述符 \(String(report.descriptorUUID.prefix(8))) · 备份还原 · 需重启手机"
+        }
         let inject = report.injectResults.allSatisfy(\.ok) ? "注入成功" : "注入有失败"
         let prefs = report.preferencesWritten ? "偏好成功" : "偏好未写入"
         let reg = report.registration.map { "登记 \($0.remoteRecords)/\($0.packageRecords)/\($0.names)" } ?? "登记未执行"
@@ -227,6 +246,24 @@ private struct ImportDetailView: View {
                             .buttonStyle(PressBounceButtonStyle())
                         Spacer()
                     }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("安装方式").font(.headline)
+                        Picker("安装方式", selection: $state.applyChoice) {
+                            ForEach(ApplyModeChoice.allCases) { choice in
+                                Text(choice.title).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(installing)
+                        Text(modeHintText)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if effectiveMode == .backup {
+                            Text("备份还原最后要重启手机，装之前会先做一份保护性备份。")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     HStack {
                         Spacer()
                         Button("安装壁纸") { Task { await runInstall() } }
@@ -268,6 +305,9 @@ private struct ImportDetailView: View {
                         if showFullVerify {
                         if let report = installReport {
                             Text("描述符：\(report.descriptorUUID)").font(.caption).textSelection(.enabled)
+                            if let summary = report.backupSummary {
+                                Text(summary).font(.caption).foregroundStyle(.secondary)
+                            }
                             ForEach(report.injectResults.indices, id: \.self) { index in
                                 let result = report.injectResults[index]
                                 Text("\(shortTargetDir(result.targetParentDir))：\(result.ok ? "成功" : "失败")\(result.error.map { "（\($0)）" } ?? "")").font(.caption).textSelection(.enabled)
@@ -327,9 +367,15 @@ private struct ImportDetailView: View {
                             Text(verifySummaryLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
-                    Text("去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if installReport?.mode == .backup {
+                        Text("备份还原装完先重启手机，再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text("还没选包：先回列表导入一个包。").foregroundStyle(.secondary)
                 }
@@ -338,6 +384,7 @@ private struct ImportDetailView: View {
         }
         .background(AppBackgroundView())
         .navigationTitle("壁纸包详情")
+        .task { await state.refreshDeviceInfo() }
         .overlay {
             if installing {
                 ZStack {
@@ -419,33 +466,40 @@ private struct ImportDetailView: View {
         }) {
             installReport = report
             installLogText = InstallLog.shared.tail(60)
-            let dirLines = report.injectResults.map { result in
-                let short = shortTargetDir(result.targetParentDir)
-                return result.ok ? "\(short)：成功" : "\(short)：失败（\(result.error ?? "未知错误")）"
-            }.joined(separator: "；")
-            let verifySummary: String
-            if report.verifyResults.isEmpty {
-                verifySummary = "读回核对未执行。"
-            } else if report.verifyResults.allSatisfy({ $0.allPresent }) {
-                verifySummary = "已在设备上核对到：每个目标的描述符目录、Wallpaper.plist、标识文件均在。"
-            } else if report.verifyResults.contains(where: { $0.channelUnavailable }) {
-                verifySummary = "读回通道不可用（系统不放行容器直读），核对不到目标，不代表描述符缺失。"
+            if report.mode == .backup {
+                // 备份路没有读回核对 / 登记 / 进程刷新那几项：还原的 completed
+                // 就是验真，偏好不写、进程不刷，壁纸进图库靠重启手机。
+                installResult = (report.backupSummary ?? "备份还原已完成。")
+                    + "描述符 \(report.descriptorUUID)。"
             } else {
-                let missing = report.verifyResults.filter { !$0.allPresent }.map { shortTargetDir($0.targetParentDir) }.joined(separator: "、")
-                verifySummary = "读回核对有缺失（\(missing)），写盘成功不代表图库已列出。"
-            }
-            let refreshSummary: String
-            if let refresh = report.refresh {
-                if refresh.confirmed {
-                    refreshSummary = "进程刷新：已确认 PosterBoard 进程已重启（旧 pid \(refresh.oldPid.map { "\($0)" } ?? "?") → 新 pid \(refresh.newPid.map { "\($0)" } ?? "?")）。"
+                let dirLines = report.injectResults.map { result in
+                    let short = shortTargetDir(result.targetParentDir)
+                    return result.ok ? "\(short)：成功" : "\(short)：失败（\(result.error ?? "未知错误")）"
+                }.joined(separator: "；")
+                let verifySummary: String
+                if report.verifyResults.isEmpty {
+                    verifySummary = "读回核对未执行。"
+                } else if report.verifyResults.allSatisfy({ $0.allPresent }) {
+                    verifySummary = "已在设备上核对到：每个目标的描述符目录、Wallpaper.plist、标识文件均在。"
+                } else if report.verifyResults.contains(where: { $0.channelUnavailable }) {
+                    verifySummary = "读回通道不可用（系统不放行容器直读），核对不到目标，不代表描述符缺失。"
                 } else {
-                    let refreshErrorText = refresh.error.map { "（\($0)）" } ?? ""
-                    refreshSummary = "进程刷新：未确认\(refreshErrorText)。"
+                    let missing = report.verifyResults.filter { !$0.allPresent }.map { shortTargetDir($0.targetParentDir) }.joined(separator: "、")
+                    verifySummary = "读回核对有缺失（\(missing)），写盘成功不代表图库已列出。"
                 }
-            } else {
-                refreshSummary = "进程刷新：未执行。"
-            }
-            installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。\(verifySummary) \(refreshSummary)"
+                let refreshSummary: String
+                if let refresh = report.refresh {
+                    if refresh.confirmed {
+                        refreshSummary = "进程刷新：已确认 PosterBoard 进程已重启（旧 pid \(refresh.oldPid.map { "\($0)" } ?? "?") → 新 pid \(refresh.newPid.map { "\($0)" } ?? "?")）。"
+                    } else {
+                        let refreshErrorText = refresh.error.map { "（\($0)）" } ?? ""
+                        refreshSummary = "进程刷新：未确认\(refreshErrorText)。"
+                    }
+                } else {
+                    refreshSummary = "进程刷新：未执行。"
+                }
+                installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。\(verifySummary) \(refreshSummary)"
+                }
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
         }
