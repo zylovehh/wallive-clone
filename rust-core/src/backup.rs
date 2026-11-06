@@ -631,20 +631,16 @@ async fn fetch_posterboard_inner(
             "installation_proxy entry for PosterBoard has no Container".to_string(),
         );
     }
-    let mut entry = plist::Dictionary::new();
-    entry.insert(
-        "CFBundleIdentifier".to_string(),
-        plist::Value::String(POSTERBOARD_BUNDLE.to_string()),
-    );
-    for key in ["Container", "CFBundleVersion", "ApplicationSINF", "iTunesMetadata"] {
-        if let Some(v) = info_dict.get(key) {
-            entry.insert(key.to_string(), v.clone());
-        }
-    }
+    // 原样转发手机给的 installation_proxy 完整记录（参考 GoldenNugget
+    // `syncAppFactoryEntry`：FactoryInfo 里 Applications 下的条目必须和手机
+    // 刚给的那条一模一样，形状就是手机的约定）。之前只挑 5 个键
+    // （CFBundleIdentifier/Container/CFBundleVersion/ApplicationSINF/
+    // iTunesMetadata）拼一条新的，手机认不出、过滤作废，于是把所有 App
+    // 容器都报出来（#30 真机：1665 个文件、495.7 MB，10% 断 ConnectionReset）。
     let mut applications = plist::Dictionary::new();
     applications.insert(
         POSTERBOARD_BUNDLE.to_string(),
-        plist::Value::Dictionary(entry),
+        plist::Value::Dictionary(info_dict.clone()),
     );
 
     // Prepare the backup directory. The caller (Swift) seeds it first with
@@ -870,10 +866,11 @@ async fn app_factory_entry_inner(
         .ok_or_else(|| format!("app {bundle_id} not found via installation proxy"))?;
     let mut entry = serde_json::Map::new();
     if let Some(d) = info.as_dictionary() {
-        for key in ["Container", "CFBundleVersion", "ApplicationSINF", "iTunesMetadata"] {
-            if let Some(v) = d.get(key) {
-                entry.insert(key.to_string(), plist_to_json(v));
-            }
+        // 原样转发手机给的 installation_proxy 完整记录（同 fetch_posterboard_inner：
+        // FactoryInfo 条目必须和手机刚给的那条一模一样，只挑 5 个键手机认不出、
+        // 过滤作废）。plist_to_json 是逐值转的，整条字典直接传即可。
+        for (k, v) in d.iter() {
+            entry.insert(k.clone(), plist_to_json(v));
         }
     }
     entry.insert(
