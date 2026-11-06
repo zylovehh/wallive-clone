@@ -321,16 +321,19 @@ private struct StatusVPNPage: View {
     }
 
     /// 自动跳到“设置 → 隐私与安全 → 开发者模式”。
-    /// App-Prefs 是系统设置内部链接，侧载 App 能用（不上 App Store，不用过审）。
+    /// 侧载 App 能用系统设置内部链接（不上 App Store，不用过审）。
     /// 两个教训：open 必须在主线程调（后台线程调了没反应）；只试一个链接不够，
     /// 按顺序挨个试，哪个通了就停，全不通才告诉用户手动去。
-    /// 27.2 实测教训：&path= 参数常被系统忽略，只打开隐私与安全页，落不到
-    /// 开发者模式那栏；子页名该写 DEVELOPER_MODE（按“开发者模式”直译），
+    /// 27.2 实测教训：iOS 27 改了设置内部链接，旧 prefs 写法在 27.2 上落到
+    /// 设置 → App 列表，到不了开发者模式；新写法 settings-navigation:// 打头，
+    /// 旧写法留着当后备。子页名该写 DEVELOPER_MODE（按“开发者模式”直译），
     /// DEVELOPER 是开完之后才出现的顶层“开发者”栏目，在隐私页下没有这一项。
-    /// open 回 true 只代表设置打开了，不代表落到了那栏，所以打开成功后也留
-    /// 一句指引，告诉用户在隐私页底点开发者模式。
+    /// open 回 true 只代表设置打开了，不代表落到了那栏，所以打开成功后的指引
+    /// 写成落地无关的版本：不管停在哪一页，都从设置主页找隐私与安全。
     private func openDeveloperSettings() {
         let candidates = [
+            "settings-navigation://com.apple.Settings.Privacy/DEVELOPER_MODE",
+            "settings-navigation://com.apple.Settings.Privacy",
             "App-Prefs:root=Privacy&path=DEVELOPER_MODE",
             "prefs:root=Privacy&path=DEVELOPER_MODE",
             "App-Prefs:root=Privacy&path=DEVELOPER",
@@ -347,15 +350,26 @@ private struct StatusVPNPage: View {
     @MainActor
     private func tryOpenSettings(candidates: [String], index: Int) {
         guard index < candidates.count, let url = URL(string: candidates[index]) else {
-            generateResult = "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸安装器配对”输 PIN。"
+            // 候选全不通，最后兜底：打开本 App 在设置里的页面，至少把设置打开。
+            if let fallback = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(fallback, options: [:]) { ok in
+                    Task { @MainActor in
+                        self.generateResult = ok
+                            ? "已打开设置：去隐私与安全，滑到最底点开发者模式，再点与壁纸安装器配对输 PIN。停在哪一页都没关系，从设置主页找隐私与安全就行。"
+                            : "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸安装器配对”输 PIN。"
+                    }
+                }
+            } else {
+                generateResult = "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸安装器配对”输 PIN。"
+            }
             return
         }
         UIApplication.shared.open(url, options: [:]) { ok in
             if ok {
-                // 设置打开了，但系统不一定落到开发者模式那栏（27.2 上 &path= 常被忽略）。
+                // 设置打开了，但系统不一定落到开发者模式那栏（27.2 上旧写法会落到 App 列表）。
                 // 留一句指引，用户按着点就不会走错。
                 Task { @MainActor in
-                    self.generateResult = "已打开设置：如果停在隐私与安全页，滑到最底下点“开发者模式”，再点“与壁纸安装器配对”输 PIN。"
+                    self.generateResult = "已打开设置：去隐私与安全，滑到最底点开发者模式，再点与壁纸安装器配对输 PIN。停在哪一页都没关系，从设置主页找隐私与安全就行。"
                 }
             } else {
                 Task { @MainActor in

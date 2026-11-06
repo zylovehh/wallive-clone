@@ -24,6 +24,11 @@ workflows:
         script: bash build-airlift.sh
       - name: Resolve package dependencies
         script: xcodebuild -resolvePackageDependencies -project WalliveClone.xcodeproj -scheme WalliveClone
+      - name: Stamp build number into version tag
+        script: |
+          TAG="V6·$(TZ=Asia/Kuala_Lumpur date +%m%d)-${BUILD_NUMBER}号"
+          printf 'import Foundation\n\nenum BuildInfo {\n    static let tag = "%s"\n}\n' "$TAG" > App/BuildInfo.swift
+          cat App/BuildInfo.swift
       - name: Archive (unsigned)
         script: xcodebuild archive -project WalliveClone.xcodeproj -scheme WalliveClone -configuration Release -destination "generic/platform=iOS" -archivePath build/WalliveClone.xcarchive CODE_SIGNING_ALLOWED=NO
       - name: Package unsigned IPA

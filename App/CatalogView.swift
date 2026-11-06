@@ -11,10 +11,12 @@ import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
 
-/// 发版角标：V 号每次发版 +1，日期与说明跟当天对应，用于一眼确认手机上装的是哪个版本。
+/// 发版角标：用于一眼确认手机上装的是哪个版本。tag 来自 BuildInfo，
+/// 编包时由 Codemagic 按“日期-构建号”盖戳（见 codemagic.yaml），
+/// 本地没盖戳时用 BuildInfo.swift 里的 fallback。
 enum AppBuild {
     static let version = "V6"
-    static let tag = "\(version)·1104免重启"
+    static let tag = BuildInfo.tag
 }
 
 struct CatalogView: View {
