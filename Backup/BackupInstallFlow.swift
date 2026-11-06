@@ -48,45 +48,68 @@ enum BackupInstallFlow {
         }
 
         let fm = FileManager.default
-        let backupRoot = fm.temporaryDirectory
-            .appendingPathComponent("wallive-clone-backup-\(UUID().uuidString)")
+        // 29 号：备份目录固定（Documents 下），不再每次新建 UUID 目录。
+        // 失败/取消都留着，下次接着取；真实清单在就不再重置。
+        // work 是每装一次的草稿（取出的商店、缝合的库），每次开头清掉；
+        // 设备目录（<backupRoot>/<udid>/，含清单 + 已取到的文件）是增量
+        // 基线，留着。成功也不清——清单就是下次取表的基线。
+        let backupRoot = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("wallive-clone-backup")
         let workDir = backupRoot.appendingPathComponent("work")
-        // 成功就清掉（里面有设备商店数据库的拷贝）；失败留着，日志里
-        // 写清路径，方便排查。暂存目录（stage）按 AirLift 那路的规矩留着，
-        // 系统自己清 tmp。
-        var didFinish = false
-        defer {
-            // defer 在 return/throw 时都跑——成功才清，失败留着。
-            if didFinish { try? fm.removeItem(at: backupRoot) }
-        }
+        try? fm.removeItem(at: workDir)
+
+        // 连续两次取表失败就强制全量重取（清单可能坏了），成功一次清零。
+        // 用户点的停止不算失败——停了下次还能接着取。
+        let failureKey = "walliveBackupFetchConsecutiveFailures"
+        let failures = UserDefaults.standard.integer(forKey: failureKey)
+        let forceFull = failures >= 2
+        let deviceDir = backupRoot.appendingPathComponent(deviceInfo.udid)
+        let hasReal = !forceFull && HostManifests.hasRealManifest(deviceDir: deviceDir)
 
         do {
-            // 1. 清掉上次的备份目录，重新备好取表目录。
+            // 1. 备好取表目录：有真实清单就接着取（不重置、不写空占位表）；
+            // 没有就全量（重置 + 占位 Manifest.db）。
             onProgress?("正在准备备份目录…", 0.05)
             log("备份目录：\(backupRoot.path)")
-            try HostManifests.reset(backupRoot: backupRoot, udid: deviceInfo.udid)
-            try PosterBoardBackup.prepareFetchDirectory(backupRoot: backupRoot,
-                                                       udid: deviceInfo.udid, log: log)
+            if hasReal {
+                log("已有真实清单，接着上次继续取（不重置）")
+                try HostManifests.ensure(deviceDir: deviceDir, udid: deviceInfo.udid,
+                                         ios27: true, isFullBackup: false, applications: nil)
+            } else {
+                if forceFull { log("已连续失败 \(failures) 次，强制全量重取") }
+                try HostManifests.reset(backupRoot: backupRoot, udid: deviceInfo.udid)
+                try PosterBoardBackup.prepareFetchDirectory(backupRoot: backupRoot,
+                                                           udid: deviceInfo.udid, log: log)
+            }
 
             // 2. Rust 只备 PosterBoard 一个容器。
             onProgress?("正在取 PosterBoard 备份…", 0.10)
             let fetchStart = Date()
             var lastBytes: UInt64 = 0
             var lastTick = fetchStart
-            let fetch = try await BackupFFI.fetchPosterBoard(
-                pairingPath: pairingPath, backupRoot: backupRoot, log: log
-            ) { detail in
-                guard detail.percent >= 0 else { return }
-                let now = Date()
-                let elapsed = now.timeIntervalSince(fetchStart)
-                let delta = detail.bytesDone >= lastBytes ? detail.bytesDone - lastBytes : 0
-                let dt = now.timeIntervalSince(lastTick)
-                let speed = dt > 0 ? Double(delta) / dt : 0
-                lastBytes = detail.bytesDone
-                lastTick = now
-                let step = "正在取备份… \(detail.filesDone) 个文件 · \(byteText(detail.bytesDone)) · \(speedText(speed))"
-                onProgress?(step, 0.10 + 0.35 * detail.percent / 100.0)
-                log("取备份 \(Int(detail.percent))%：\(detail.filesDone) 个文件，\(byteText(detail.bytesDone))，\(speedText(speed))，已用 \(Int(elapsed)) 秒")
+            let fetch: BackupFFI.FetchResult
+            do {
+                fetch = try await BackupFFI.fetchPosterBoard(
+                    pairingPath: pairingPath, backupRoot: backupRoot, log: log
+                ) { detail in
+                    guard detail.percent >= 0 else { return }
+                    let now = Date()
+                    let elapsed = now.timeIntervalSince(fetchStart)
+                    let delta = detail.bytesDone >= lastBytes ? detail.bytesDone - lastBytes : 0
+                    let dt = now.timeIntervalSince(lastTick)
+                    let speed = dt > 0 ? Double(delta) / dt : 0
+                    lastBytes = detail.bytesDone
+                    lastTick = now
+                    let step = "正在取备份… \(detail.filesDone) 个文件 · \(byteText(detail.bytesDone)) · \(speedText(speed))"
+                    onProgress?(step, 0.10 + 0.35 * detail.percent / 100.0)
+                    log("取备份 \(Int(detail.percent))%：\(detail.filesDone) 个文件，\(byteText(detail.bytesDone))，\(speedText(speed))，已用 \(Int(elapsed)) 秒")
+                }
+                UserDefaults.standard.set(0, forKey: failureKey)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                UserDefaults.standard.set(failures + 1, forKey: failureKey)
+                throw error
             }
             log("取回备份：留了 \(fetch.keptFiles) 个文件，筛掉 \(fetch.discardedFiles) 个")
 
@@ -158,7 +181,6 @@ enum BackupInstallFlow {
                                                pairingPath: pairingPath, log: log)
             onProgress?("还原完成", 1.0)
 
-            didFinish = true
             let first = compiled.configs[0]
             return Outcome(descriptorUUID: first.uuid,
                            extensionID: first.extensionID,

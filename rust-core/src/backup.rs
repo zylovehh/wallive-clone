@@ -81,6 +81,10 @@ struct FilteringDelegate {
     inner: FsBackupDelegate,
     progress_cb: ALBackupProgressCallback,
     progress_ctx: usize,
+    /// Log callback for per-file diagnostic lines (fetch path only).
+    /// Mirrors progress_cb/progress_ctx.
+    log_cb: ALLogCallback,
+    log_ctx: usize,
     kept: AtomicU32,
     discarded: AtomicU32,
     last_progress: AtomicU64,
@@ -107,12 +111,16 @@ impl FilteringDelegate {
     fn new(
         progress_cb: ALBackupProgressCallback,
         ctx: *mut c_void,
+        log_cb: ALLogCallback,
+        log_ctx: *mut c_void,
         backup_root: Option<PathBuf>,
     ) -> Self {
         Self {
             inner: FsBackupDelegate,
             progress_cb,
             progress_ctx: ctx as usize,
+            log_cb,
+            log_ctx: log_ctx as usize,
             kept: AtomicU32::new(0),
             discarded: AtomicU32::new(0),
             last_progress: AtomicU64::new((-1.0f64).to_bits()),
@@ -137,6 +145,22 @@ impl FilteringDelegate {
             self.placeholder_count.load(Ordering::Relaxed),
             self.placeholder_failures.load(Ordering::Relaxed),
         )
+    }
+
+    /// Per-file diagnostic line (fetch path only): the device offers a
+    /// file now, its data follows. If the fetch stalls mid-file, the last
+    /// such line names the stuck file. Prefixed "FILE:" so the Swift log
+    /// keeps it out of the on-screen lines (it still lands in the log file).
+    fn log_file(&self, msg: &str) {
+        if self.backup_root.is_none() {
+            return;
+        }
+        if let Some(cb) = self.log_cb {
+            let line = format!("FILE:{msg}");
+            if let Ok(c) = std::ffi::CString::new(line) {
+                cb(self.log_ctx as *mut c_void, c.as_ptr());
+            }
+        }
     }
 
     /// Absolute host path for a device-sent shard path, with `""`/`.`/`..`
@@ -348,6 +372,7 @@ impl BackupDelegate for FilteringDelegate {
 
     fn should_preserve_file(&self, file_name: &str, device_name: &str) -> bool {
         let keep = pb_should_preserve(file_name, device_name);
+        self.log_file(&format!("取文件 {device_name} [{file_name}]"));
         if keep {
             self.kept.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -682,6 +707,8 @@ async fn fetch_posterboard_inner(
     let delegate = FilteringDelegate::new(
         progress_cb,
         ctx_usize as *mut c_void,
+        log_cb,
+        ctx_usize as *mut c_void,
         Some(backup_root.clone()),
     );
     let mut mb2 = tunnel.connect_mobilebackup2(&logger).await?;
@@ -780,7 +807,13 @@ async fn restore_inner(
         }
     }
 
-    let delegate = FilteringDelegate::new(progress_cb, ctx_usize as *mut c_void, None);
+    let delegate = FilteringDelegate::new(
+        progress_cb,
+        ctx_usize as *mut c_void,
+        None,
+        std::ptr::null_mut(),
+        None,
+    );
     logger.log("backup: restoring prepared backup…");
     let final_response = mb2
         .restore_from_path(Path::new(&backup_root), None, Some(opts), &delegate)

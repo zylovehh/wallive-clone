@@ -182,6 +182,28 @@ enum HostManifests {
         }
     }
 
+    /// 备份目录里的 Manifest.db 是不是一份真实清单（有行），而不是占位空表。
+    ///
+    /// 增量取表的前提：只有真实清单才能接着取；占位空表必须走全量。
+    /// 打不开、没表、0 行都算不是。
+    static func hasRealManifest(deviceDir: URL) -> Bool {
+        let url = deviceDir.appendingPathComponent("Manifest.db")
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let db else {
+            sqlite3_close(db)
+            return false
+        }
+        defer { sqlite3_close(db) }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM ManifestEntry", -1, &stmt, nil) == SQLITE_OK,
+              let stmt else { return false }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return false }
+        return sqlite3_column_int(stmt, 0) > 0
+    }
+
     /// sqlite 版 `Manifest.db`，是 iOS 27 向*宿主*要的东西。
     ///
     /// 上面三个 plist 是 iOS 26 上宿主方面的全部故事，写这段时也是

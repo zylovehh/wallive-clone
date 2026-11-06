@@ -27,25 +27,102 @@ import AirliftFFI
 
 /// 安装过程日志：FFI 回调写来的每一行（任意 Rust 线程调，用锁保护）。
 /// 装完在安装页显示，供定位卡在哪一步。
+///
+/// 29 号：日志同时存到 App Documents 下的 install-log.txt，重启手机、
+/// 杀后台都丢不了；启动时读回。`FILE:` 开头的行是逐文件诊断行（备份取
+/// 表时每文件一行），只进文件、不进屏幕那 400 行——屏幕只留计时行和
+/// 结论行，`tail` 会把最近的几条文件行缀在后面，卡在哪一个文件一眼能看到。
 final class InstallLog: @unchecked Sendable {
     static let shared = InstallLog()
     private let lock = NSLock()
     private var lines: [String] = []
+    /// 最近的逐文件诊断行（去掉 "FILE:" 前缀），只留最后 20 条。
+    private var fileLines: [String] = []
+    private var fileHandle: FileHandle?
+
+    private init() {
+        loadFromFile()
+    }
+
+    private static var logFileURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("install-log.txt")
+    }
+
+    /// 启动时把文件里的日志读回内存（屏幕行最多 400，文件行最多 20）。
+    /// 文件超过 2000 行时只留最后 2000 行写回去，免得越长越大。
+    private func loadFromFile() {
+        guard let data = try? Data(contentsOf: Self.logFileURL),
+              let text = String(data: data, encoding: .utf8) else { return }
+        let all = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let kept = all.suffix(2000)
+        for line in kept {
+            if line.hasPrefix("FILE:") {
+                fileLines.append(String(line.dropFirst(5)))
+                if fileLines.count > 20 { fileLines.removeFirst(fileLines.count - 20) }
+            } else {
+                lines.append(line)
+                if lines.count > 400 { lines.removeFirst(lines.count - 400) }
+            }
+        }
+        if all.count > 2000 {
+            try? kept.joined(separator: "\n").write(to: Self.logFileURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func writeToFile(_ line: String) {
+        if fileHandle == nil {
+            let url = Self.logFileURL
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            if let handle = try? FileHandle(forWritingTo: url) {
+                try? handle.seekToEnd()
+                fileHandle = handle
+            }
+        }
+        guard let handle = fileHandle,
+              let data = (line + "\n").data(using: .utf8) else { return }
+        try? handle.write(contentsOf: data)
+    }
 
     func append(_ line: String) {
         lock.withLock {
-            lines.append(line)
-            if lines.count > 400 { lines.removeFirst(lines.count - 400) }
+            if line.hasPrefix("FILE:") {
+                // 逐文件诊断行：只进文件和最近 20 条，不占屏幕的 400 行。
+                writeToFile(line)
+                fileLines.append(String(line.dropFirst(5)))
+                if fileLines.count > 20 { fileLines.removeFirst(fileLines.count - 20) }
+            } else {
+                lines.append(line)
+                if lines.count > 400 { lines.removeFirst(lines.count - 400) }
+                writeToFile(line)
+            }
         }
     }
 
     func clear() {
-        lock.withLock { lines.removeAll() }
+        lock.withLock {
+            lines.removeAll()
+            fileLines.removeAll()
+            try? fileHandle?.close()
+            fileHandle = nil
+            try? FileManager.default.removeItem(at: Self.logFileURL)
+        }
     }
 
-    /// 最后 n 行（安装页显示用）。
+    /// 最后 n 行（安装页显示用）：屏幕行在前、最近的文件行缀在后，
+    /// 卡在哪一个文件一眼能看到；没有文件行时就是最后 n 行屏幕行。
     func tail(_ n: Int) -> String {
-        lock.withLock { lines.suffix(n).joined(separator: "\n") }
+        lock.withLock {
+            guard !fileLines.isEmpty else {
+                return lines.suffix(n).joined(separator: "\n")
+            }
+            let showFile = min(fileLines.count, 10)
+            let showScreen = max(0, n - showFile)
+            return (lines.suffix(showScreen) + fileLines.suffix(showFile))
+                .joined(separator: "\n")
+        }
     }
 }
 
