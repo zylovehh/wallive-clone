@@ -14,11 +14,11 @@ import Foundation
 /// AirLift 是默认。备份路不是更好的一条：它要一次完整的保护性备份加一次
 ///    重启，唯一多出来的本事是商店重置。两条都不想要的用户什么都不用付，
 ///    所以便宜的那条是默认。
-enum PosterBoardApplyMode: String, CaseIterable, Identifiable, Hashable {
+public enum PosterBoardApplyMode: String, CaseIterable, Identifiable, Hashable {
     case backup
     case airlift
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
     var title: String {
         switch self {

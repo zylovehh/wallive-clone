@@ -51,7 +51,7 @@ enum BackupFFI {
     /// `PosterBoardBackup.prepareFetchDirectory` 把目录备好。
     static func fetchPosterBoard(pairingPath: String, backupRoot: URL,
                                  log: @escaping BackupLog = { _ in },
-                                 onProgress: @escaping ((Double) -> Void)? = nil) async throws -> FetchResult {
+                                 onProgress: ((Double) -> Void)? = nil) async throws -> FetchResult {
         let box = CallbackBox(log: log, onProgress: onProgress)
         let ctx = Unmanaged.passRetained(box).toOpaque()
         defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
@@ -99,7 +99,7 @@ enum BackupFFI {
     /// 调用方在还原成功后另外重启（GoldenNugget 手机版也一样）。
     static func restore(pairingPath: String, backupRoot: URL, reboot: Bool = false,
                         log: @escaping BackupLog = { _ in },
-                        onProgress: @escaping ((Double) -> Void)? = nil) async throws -> RestoreResult {
+                        onProgress: ((Double) -> Void)? = nil) async throws -> RestoreResult {
         let box = CallbackBox(log: log, onProgress: onProgress)
         let ctx = Unmanaged.passRetained(box).toOpaque()
         defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
@@ -224,7 +224,7 @@ enum BackupFFI {
     private final class CallbackBox: @unchecked Sendable {
         let log: BackupLog
         var onProgress: ((Double) -> Void)?
-        init(log: @escaping BackupLog, onProgress: @escaping ((Double) -> Void)? = nil) {
+        init(log: @escaping BackupLog, onProgress: ((Double) -> Void)? = nil) {
             self.log = log
             self.onProgress = onProgress
         }

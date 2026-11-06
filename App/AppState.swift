@@ -127,7 +127,7 @@ final class AppState: ObservableObject {
     /// 配对、偏好键与路径、结构版本映射、标识策略。
     /// 先读设备身份、按三态选择定模式：直写走下面原有流程一字不动；
     /// 备份走 `BackupInstallFlow`（取表 → 改表 → 编包 → 还原），装完要重启手机。
-    func installWithReport(host: String, forceRefresh: Bool = true, onProgress: @escaping ((String, Double) -> Void)? = nil) async -> InstallReport? {
+    func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async -> InstallReport? {
         guard let data = packageData, hasPairingFile else { return nil }
         // 安装开始先读一次设备身份（只读不写）。读不到就用缓存的，
         // 连缓存都没有就按空版本算——`resolved()` 会 fail closed 走备份路，
@@ -162,7 +162,7 @@ final class AppState: ObservableObject {
     /// 直写路的读回核对 / 登记 / 进程刷新这条路没有：还原的 `completed`
     /// 就是验真，偏好不写、进程不刷，壁纸进图库靠重启手机。
     private func installWithReportBackup(data: Data,
-                                         onProgress: @escaping ((String, Double) -> Void)? = nil) async -> InstallReport? {
+                                         onProgress: ((String, Double) -> Void)? = nil) async -> InstallReport? {
         guard let info = deviceInfo else {
             statusMessage = "备份安装没法开始：读不到设备身份（UDID、iOS 版本），"
                 + "请确认回环 VPN 已连接、配对记录已导入，再试一次。"
