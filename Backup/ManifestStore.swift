@@ -27,7 +27,7 @@ struct ManifestStore: Sendable {
     /// 诊断日志。调用方传进来（安装页的日志）；不传就不写。
     let log: BackupLog
 
-    init(deviceDir: URL, log: BackupLog = { _ in }) {
+    init(deviceDir: URL, log: @escaping BackupLog = { _ in }) {
         self.deviceDir = deviceDir
         self.log = log
     }

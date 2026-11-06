@@ -52,7 +52,7 @@ enum BackupInjector {
         domain: String,
         relativePath: String,
         contents: Data,
-        log: BackupLog = { _ in }
+        log: @escaping BackupLog = { _ in }
     ) throws {
         let fileID = ManifestStore.fileID(domain: domain, relativePath: relativePath)
         let store = ManifestStore(deviceDir: deviceDir, log: log)
@@ -154,7 +154,7 @@ enum BackupInjector {
     static func inject(into deviceDir: URL, payloads: [BackupPayload],
                        preservedDirectories: Set<String> = [],
                        preservedFileMetadata: [String: Data] = [:],
-                       log: BackupLog = { _ in }) throws -> Report {
+                       log: @escaping BackupLog = { _ in }) throws -> Report {
         let store = ManifestStore(deviceDir: deviceDir, log: log)
         let fm = FileManager.default
         let now = Int(Date().timeIntervalSince1970)
@@ -250,7 +250,7 @@ enum BackupInjector {
         posterBoardSnapshot: URL? = nil,
         prune: Bool = true,
         ios27: Bool = true,
-        log: BackupLog = { _ in }
+        log: @escaping BackupLog = { _ in }
     ) async throws {
         let deviceDir = backupRoot.appendingPathComponent(udid, isDirectory: true)
         let store = ManifestStore(deviceDir: deviceDir, log: log)

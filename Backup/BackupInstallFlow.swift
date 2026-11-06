@@ -35,8 +35,8 @@ enum BackupInstallFlow {
                         zip: ZipEditing,
                         pairingPath: String,
                         deviceInfo: BackupFFI.DeviceInfo,
-                        log: BackupLog = { _ in },
-                        onProgress: ((String, Double) -> Void)? = nil) async throws -> Outcome {
+                        log: @escaping BackupLog = { _ in },
+                        onProgress: @escaping ((String, Double) -> Void)? = nil) async throws -> Outcome {
         // 备份路只支持 iOS 27（占位 Manifest.db、sqlite 清单、WAL 商店
         // 全是 27 的形状）。版本号读不出来也按不支持处理，不猜。
         let major = deviceInfo.productVersion.split(separator: ".").first

@@ -57,7 +57,7 @@ enum PosterBoardBackup {
     /// 只读主文件是拿不到最新数据的：提交过的行可能还在 `-wal` 里，
     /// 主文件还是旧的。不合并就缝合，等于在旧商店上加行。
     static func extractStore(from deviceDir: URL, to workingDirectory: URL,
-                             log: BackupLog = { _ in }) throws -> Fetch {
+                             log: @escaping BackupLog = { _ in }) throws -> Fetch {
         let fm = FileManager.default
         let store = ManifestStore(deviceDir: deviceDir, log: log)
 

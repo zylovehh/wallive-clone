@@ -29,7 +29,7 @@ enum PosterBoardCompiler {
     /// `configs` 为空说明包里一个描述符都没找到，调用方必须报错停下，
     /// 不能拿着空载荷去还原。
     static func compile(stageDirectory: URL, structureVersion: Int,
-                        log: BackupLog = { _ in }) throws
+                        log: @escaping BackupLog = { _ in }) throws
         -> (payloads: [BackupPayload], configs: [PosterBoardConfigItem]) {
         var builder = PosterBoardBuilder(structureVersion: structureVersion, log: log)
         try builder.walk(currentPath: stageDirectory, restorePath: "", isAdding: false)

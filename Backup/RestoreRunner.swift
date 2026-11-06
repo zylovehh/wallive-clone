@@ -11,7 +11,7 @@ enum RestoreRunner {
     /// 还原本体不重启；成功后调用方另外重启手机（备份路的规矩：
     /// 还原完必须重启一次，壁纸才会进图库）。
     static func runRestore(backupRoot: URL, pairingPath: String,
-                           log: BackupLog = { _ in }) async throws {
+                           log: @escaping BackupLog = { _ in }) async throws {
         log("正在还原备份…")
         // 进度按 5% 一档记，太碎了日志没法看。Rust 那边已经按整
         // 百分比节流过一次，这里只做分档。

@@ -50,8 +50,8 @@ enum BackupFFI {
     /// 只备 PosterBoard 一个容器。调之前先用
     /// `PosterBoardBackup.prepareFetchDirectory` 把目录备好。
     static func fetchPosterBoard(pairingPath: String, backupRoot: URL,
-                                 log: BackupLog = { _ in },
-                                 onProgress: ((Double) -> Void)? = nil) async throws -> FetchResult {
+                                 log: @escaping BackupLog = { _ in },
+                                 onProgress: @escaping ((Double) -> Void)? = nil) async throws -> FetchResult {
         let box = CallbackBox(log: log, onProgress: onProgress)
         let ctx = Unmanaged.passRetained(box).toOpaque()
         defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
@@ -98,8 +98,8 @@ enum BackupFFI {
     /// 还原一份备好的备份目录。`reboot` 默认 false：还原本身不重启，
     /// 调用方在还原成功后另外重启（GoldenNugget 手机版也一样）。
     static func restore(pairingPath: String, backupRoot: URL, reboot: Bool = false,
-                        log: BackupLog = { _ in },
-                        onProgress: ((Double) -> Void)? = nil) async throws -> RestoreResult {
+                        log: @escaping BackupLog = { _ in },
+                        onProgress: @escaping ((Double) -> Void)? = nil) async throws -> RestoreResult {
         let box = CallbackBox(log: log, onProgress: onProgress)
         let ctx = Unmanaged.passRetained(box).toOpaque()
         defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
@@ -141,7 +141,7 @@ enum BackupFFI {
     /// 不写盘、不改设备——安装前先调它，定用哪条路（`AirliftAvailability`）、
     /// 拿备目录要的 UDID。失败就是隧道/配对不通，原样报给用户。
     static func deviceInfo(pairingPath: String,
-                           log: BackupLog = { _ in }) async throws -> DeviceInfo {
+                           log: @escaping BackupLog = { _ in }) async throws -> DeviceInfo {
         let box = CallbackBox(log: log)
         let ctx = Unmanaged.passRetained(box).toOpaque()
         defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
@@ -185,7 +185,7 @@ enum BackupFFI {
     /// `Manifest.plist` 的 `Applications` 注册用。
     /// 返回的就是 Rust JSON 里 `entry` 那层字典。
     static func appFactoryEntry(pairingPath: String, bundleID: String,
-                                log: BackupLog = { _ in }) async throws -> [String: Any] {
+                                log: @escaping BackupLog = { _ in }) async throws -> [String: Any] {
         let box = CallbackBox(log: log)
         let ctx = Unmanaged.passRetained(box).toOpaque()
         defer { Unmanaged<CallbackBox>.fromOpaque(ctx).release() }
@@ -224,7 +224,7 @@ enum BackupFFI {
     private final class CallbackBox: @unchecked Sendable {
         let log: BackupLog
         var onProgress: ((Double) -> Void)?
-        init(log: BackupLog, onProgress: ((Double) -> Void)? = nil) {
+        init(log: @escaping BackupLog, onProgress: @escaping ((Double) -> Void)? = nil) {
             self.log = log
             self.onProgress = onProgress
         }
