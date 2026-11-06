@@ -324,8 +324,15 @@ private struct StatusVPNPage: View {
     /// App-Prefs 是系统设置内部链接，侧载 App 能用（不上 App Store，不用过审）。
     /// 两个教训：open 必须在主线程调（后台线程调了没反应）；只试一个链接不够，
     /// 按顺序挨个试，哪个通了就停，全不通才告诉用户手动去。
+    /// 27.2 实测教训：&path= 参数常被系统忽略，只打开隐私与安全页，落不到
+    /// 开发者模式那栏；子页名该写 DEVELOPER_MODE（按“开发者模式”直译），
+    /// DEVELOPER 是开完之后才出现的顶层“开发者”栏目，在隐私页下没有这一项。
+    /// open 回 true 只代表设置打开了，不代表落到了那栏，所以打开成功后也留
+    /// 一句指引，告诉用户在隐私页底点开发者模式。
     private func openDeveloperSettings() {
         let candidates = [
+            "App-Prefs:root=Privacy&path=DEVELOPER_MODE",
+            "prefs:root=Privacy&path=DEVELOPER_MODE",
             "App-Prefs:root=Privacy&path=DEVELOPER",
             "prefs:root=Privacy&path=DEVELOPER",
             "App-Prefs:root=Privacy",
@@ -344,7 +351,13 @@ private struct StatusVPNPage: View {
             return
         }
         UIApplication.shared.open(url, options: [:]) { ok in
-            if !ok {
+            if ok {
+                // 设置打开了，但系统不一定落到开发者模式那栏（27.2 上 &path= 常被忽略）。
+                // 留一句指引，用户按着点就不会走错。
+                Task { @MainActor in
+                    self.generateResult = "已打开设置：如果停在隐私与安全页，滑到最底下点“开发者模式”，再点“与壁纸安装器配对”输 PIN。"
+                }
+            } else {
                 Task { @MainActor in
                     self.tryOpenSettings(candidates: candidates, index: index + 1)
                 }
