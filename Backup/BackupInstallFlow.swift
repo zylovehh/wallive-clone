@@ -53,7 +53,7 @@ enum BackupInstallFlow {
                 isCancelled: { cancelBox.isCancelled })
             outcomeBox.finish(outcome)
         }
-        let outcome: RestoreTest.RestoreOutcome
+        let outcome: RestoreOutcome
         do {
             outcome = try await withTaskCancellationHandler {
                 try await waitForOutcome(outcomeBox)
@@ -85,7 +85,7 @@ enum BackupInstallFlow {
     /// 等后台 runRestore 写结果盒：先看盒里有没有（活刚好干完按成功算），
     /// 没有再查取消、睡 0.2 秒再看；上层 Task 取消（点了停止）就立刻抛，
     /// 不等后台那路回来，弹窗马上关。
-    private static func waitForOutcome(_ box: OutcomeBox) async throws -> RestoreTest.RestoreOutcome {
+    private static func waitForOutcome(_ box: OutcomeBox) async throws -> RestoreOutcome {
         while true {
             if let outcome = box.outcome { return outcome }
             try Task.checkCancellation()
@@ -111,12 +111,12 @@ private final class CancelBox: @unchecked Sendable {
 /// runRestore 的结果盒：后台线程写完、轮询循环读。
 private final class OutcomeBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var _outcome: RestoreTest.RestoreOutcome?
-    var outcome: RestoreTest.RestoreOutcome? {
+    private var _outcome: RestoreOutcome?
+    var outcome: RestoreOutcome? {
         lock.lock(); defer { lock.unlock() }
         return _outcome
     }
-    func finish(_ outcome: RestoreTest.RestoreOutcome) {
+    func finish(_ outcome: RestoreOutcome) {
         lock.lock(); defer { lock.unlock() }
         _outcome = outcome
     }
