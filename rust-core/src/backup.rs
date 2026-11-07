@@ -5,9 +5,11 @@
 //! module only moves bytes between the phone and the backup directory.
 //!
 //! - `al_backup_fetch_posterboard`: targeted backup of the PosterBoard
-//!   container only. Info.plist lists just PosterBoard in `Applications`
-//!   and the upload filter drains every other file mid-stream. Refuses
-//!   encrypted backups (v1: no password support).
+//!   container only. Info.plist lists PosterBoard plus this installer app
+//!   itself as a companion container in `Applications` (#03 experiment:
+//!   make the device honour the list); the upload filter still drains
+//!   every other file mid-stream, so only PosterBoard payloads are kept.
+//!   Refuses encrypted backups (v1: no password support).
 //! - `al_backup_restore`: restore a prepared backup directory.
 //! - `al_backup_app_factory_entry`: InstallationProxy factory entry for one
 //!   bundle id, for Manifest.plist `Applications` registration.
@@ -36,6 +38,13 @@ use crate::exploit::{connect_tunnel, ALLogCallback, Logger};
 use crate::ffi_util::{cstr, opt_str};
 
 pub const POSTERBOARD_BUNDLE: &str = "com.apple.PosterBoard";
+
+/// Bundle id of this installer app itself. #03: listed as a second,
+/// companion container in `Applications` so the device sees a two-entry
+/// list (see `fetch_posterboard_inner`); its files are never kept — the
+/// upload filter (`pb_should_preserve`) only keeps PosterBoard + backup
+/// metadata, so the companion entry carries its path only, no files.
+pub const INSTALLER_BUNDLE: &str = "com.example.walliveclone";
 
 /// Progress callback: percent in [0, 100], or -1 when unknown.
 /// `bytes_done`/`files_done` are cumulative across DL batches (the device
@@ -488,7 +497,9 @@ fn write_plist_xml(path: &Path, value: &plist::Value) -> Result<(), String> {
 }
 
 /// Info.plist for the backup: the `Applications` dict is what tells the
-/// device which app containers to include. Only PosterBoard is listed.
+/// device which app containers to include. PosterBoard plus the installer
+/// app itself as a companion container (#03); `Installed Applications`
+/// lists the same two bundle ids — the two must always match.
 #[allow(clippy::too_many_arguments)]
 fn write_info_plist(
     path: &Path,
@@ -536,9 +547,10 @@ fn write_info_plist(
     );
     dict.insert(
         "Installed Applications".to_string(),
-        plist::Value::Array(vec![plist::Value::String(
-            POSTERBOARD_BUNDLE.to_string(),
-        )]),
+        plist::Value::Array(vec![
+            plist::Value::String(POSTERBOARD_BUNDLE.to_string()),
+            plist::Value::String(INSTALLER_BUNDLE.to_string()),
+        ]),
     );
     dict.insert("GUID".to_string(), plist::Value::Data(guid.to_vec()));
     dict.insert(
@@ -614,10 +626,17 @@ async fn fetch_posterboard_inner(
     }
     drop(lockdown);
 
-    // PosterBoard factory entry via InstallationProxy.
+    // PosterBoard factory entry via InstallationProxy. #03 asks for the
+    // companion container in the same lookup (one call, same channel).
     let mut ip = tunnel.connect_installation_proxy(&logger).await?;
     let apps = ip
-        .get_apps(Some("Any"), Some(vec![POSTERBOARD_BUNDLE.to_string()]))
+        .get_apps(
+            Some("Any"),
+            Some(vec![
+                POSTERBOARD_BUNDLE.to_string(),
+                INSTALLER_BUNDLE.to_string(),
+            ]),
+        )
         .await
         .map_err(|e| format!("installation_proxy lookup failed: {e:?}"))?;
     let pb_info = apps
@@ -642,6 +661,37 @@ async fn fetch_posterboard_inner(
         POSTERBOARD_BUNDLE.to_string(),
         plist::Value::Dictionary(info_dict.clone()),
     );
+
+    // #03 第二容器陪衬实验：Applications 里再加安装器自己——真实存在
+    // 的容器，记录现取、原样转发，只为让手机认这张清单。只给路径、
+    // 不给文件：条目里只有身份信息（Container 路径、包名、签名等），
+    // 没有文件；文件那头过滤器 `pb_should_preserve` 只留 PosterBoard
+    // + 备份元数据，安装器容器的文件一律只排空、不落盘——配对文件和
+    // 备份目录本身都在这个容器里，同样一个都不会写进备份载荷。陪衬
+    // 找不到或没有 Container 时不报错，只记一行日志、退回单条
+    // PosterBoard（= #02），不把安装本身堵死。
+    let mut companion_container: Option<String> = None;
+    if let Some(inst_dict) = apps
+        .get(INSTALLER_BUNDLE)
+        .and_then(|v| v.as_dictionary())
+    {
+        if let Some(plist::Value::String(container)) = inst_dict.get("Container") {
+            companion_container = Some(container.clone());
+            applications.insert(
+                INSTALLER_BUNDLE.to_string(),
+                plist::Value::Dictionary(inst_dict.clone()),
+            );
+        }
+    }
+    match &companion_container {
+        Some(path) => logger.log(&format!(
+            "backup: Applications lists 2 containers: {}, {} (companion Container: {})",
+            POSTERBOARD_BUNDLE, INSTALLER_BUNDLE, path
+        )),
+        None => logger.log(
+            "backup: companion container not found via installation proxy, continuing with PosterBoard only",
+        ),
+    }
 
     // Prepare the backup directory. The caller (Swift) seeds it first with
     // the host-side manifests — most importantly the placeholder sqlite
@@ -669,25 +719,14 @@ async fn fetch_posterboard_inner(
             )
         }
     }
-    // FactoryInfo decides what the device uploads: the PosterBoard
-    // table must sit under the "Applications" key, with the installed-apps
-    // list beside it (reference: GoldenNugget Mobile `factoryInfo`).
-    // A flat table (PosterBoard at the top level, no "Applications" key)
-    // is ignored by the device and it backs up the whole phone instead
-    // (seen on #29: 10/10 files were non-PosterBoard, 103 s for 1 file).
-    // It rides the Backup message as a top-level sibling of Options; a
-    // Backup request without it is refused by the device.
-    let mut factory_info = plist::Dictionary::new();
-    factory_info.insert(
-        "Applications".to_string(),
-        plist::Value::Dictionary(applications.clone()),
-    );
-    factory_info.insert(
-        "Installed Applications".to_string(),
-        plist::Value::Array(vec![plist::Value::String(
-            POSTERBOARD_BUNDLE.to_string(),
-        )]),
-    );
+    // #02 实验 C：定点只靠磁盘上的 Info.plist（下面 write_info_plist 写的
+    // Applications 列 PosterBoard + 安装器自己两条，条目都是手机给的整条
+    // 记录原样转发），手机备份开始后自己下载它来决定备什么。Backup 消息
+    // 本身不再带 FactoryInfo / Options / SourceIdentifier，只发
+    // MessageName + TargetIdentifier（参考 pymobiledevice3 的 backup()）。
+    // 之前 29–31 号把 FactoryInfo 顶层键随消息一起发，手机照样备整台
+    // （#30：1665 个文件、495.7 MB，10% 断）；#02 单变量只改请求形状，
+    // #03 单变量只在清单里加一条陪衬，消息形状和过滤器都不动。
     write_info_plist(
         &device_dir.join("Info.plist"),
         &udid,
@@ -720,14 +759,11 @@ async fn fetch_posterboard_inner(
     // carries no TargetIdentifier and the device drops the channel.
     mb2.idevice.set_udid(udid.clone());
     logger.log("backup: starting targeted PosterBoard backup…");
+    // #02 实验 C：backup_from_path 只发 MessageName + TargetIdentifier
+    // （pm3 原样），不再传 Options / FactoryInfo。set_udid 在上面已调，
+    // TargetIdentifier 一定在；backup_from_path 里没调 set_udid 会直接报错。
     let backup_result = mb2
-        .backup_from_path(
-            &backup_root,
-            Some(&udid),
-            Some(plist::Dictionary::new()),
-            Some(factory_info),
-            &delegate,
-        )
+        .backup_from_path(&backup_root, Some(&udid), &delegate)
         .await;
     // The 0-byte stand-ins for filtered payloads must outlive the whole
     // exchange and are removed only now that it has returned (reference:

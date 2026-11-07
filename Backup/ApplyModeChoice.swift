@@ -20,8 +20,8 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .auto: return "自动"
-        case .airlift: return "直写"
-        case .backup: return "备份还原"
+        case .airlift: return "直写（iOS 27）"
+        case .backup: return "备份还原（iOS 27.2）"
         }
     }
 
@@ -60,22 +60,26 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
         switch (self, mode) {
         case (.auto, .backup):
             if deviceVersion.hasPrefix("27.2") {
-                return "这台设备将用：备份还原（iOS 27.2 beta 3 起直写已堵）。"
+                return "这台设备将用：备份还原（iOS 27.2，27.2 beta 3 起直写已堵）。"
             }
             return "这台设备将用：备份还原（这台设备直写不可用）。"
         case (.auto, .airlift):
-            return "这台设备将用：直写（AirLift）。"
+            return "这台设备将用：直写（iOS 27，适用 iOS 26.2–27.2 beta 2）。"
         case (.airlift, .airlift):
             if AirliftAvailability.isHidden(deviceVersion: deviceVersion, buildVersion: buildVersion) {
-                return "这次将用：直写（AirLift）——但这台设备直写已堵，选了也装不上，建议改自动。"
+                return "这次将用：直写（iOS 27）——但这台设备直写已堵，选了也装不上，建议改自动。"
             }
-            return "这次将用：直写（AirLift）。"
+            return "这次将用：直写（iOS 27，适用 iOS 26.2–27.2 beta 2）。"
         case (.backup, .backup):
-            return "这次将用：备份还原。"
+            if deviceVersion.hasPrefix("27.2") {
+                return "这次将用：备份还原（iOS 27.2）。"
+            }
+            // 27.0.1 上手动选备份：已证实跑不通，提醒只供 27.2 试。
+            return "这次将用：备份还原——注意：备份在 iOS 27.0.1 上已证实跑不通（手机不认只备 PosterBoard），这条路只供 iOS 27.2 试。"
         default:
             // 正常走不到这里（强制选的模式就是返回的模式）；兜底也按
             // 界面上的叫法写，不用 `mode.title`（那是"保护性备份"）。
-            return "这次将用：\(mode == .backup ? "备份还原" : "直写（AirLift）")。"
+            return "这次将用：\(mode == .backup ? "备份还原（iOS 27.2）" : "直写（iOS 27）")。"
         }
     }
 }
