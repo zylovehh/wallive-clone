@@ -35,14 +35,36 @@ enum BackupInstallFlow {
                         pairingPath: String,
                         log: @escaping BackupLog = { _ in },
                         onProgress: ((String, Double) -> Void)? = nil) async throws -> Outcome {
-        onProgress?("正在取表、改表、写回…", 0.10)
+        onProgress?("正在取表…", 0.05)
         log("备份还原：走改表还原（拿表 → 插行 → 写文件 → 写回表 → 写偏好 → 刷新），不用整机备份。")
-        // RestoreTest.runRestore 是同步阻塞的（FFI + SQLite），放后台线程跑；
-        // 取消只能在跑之前和跑完之后响应，跑中间停不下来（阻塞调用中途不停）。
+        // RestoreTest.runRestore 是同步阻塞的（FFI + SQLite），放后台线程跑。
+        // 停止按钮取消的是上层 Task，后台那路看不到取消标记，所以用取消盒
+        // 中转：上层取消时这里的轮询立刻抛取消、关弹窗，不等后台回来；
+        // 后台 runRestore 在下一步边界查到取消标记就自己停。
+        // 进度由 runRestore 按步骤报（拿表 30% → 写文件 50% → 插行 70% →
+        // 写回 85% → 刷新 100%），不在这里写死一个数。
         try Task.checkCancellation()
-        let outcome = await Task.detached(priority: .userInitiated) {
-            RestoreTest.runRestore(packageData: packageData, pairingPath: pairingPath)
-        }.value
+        let cancelBox = CancelBox()
+        let outcomeBox = OutcomeBox()
+        _ = Task.detached(priority: .userInitiated) {
+            let outcome = RestoreTest.runRestore(
+                packageData: packageData, pairingPath: pairingPath,
+                onProgress: onProgress,
+                isCancelled: { cancelBox.isCancelled })
+            outcomeBox.finish(outcome)
+        }
+        let outcome: RestoreTest.RestoreOutcome
+        do {
+            outcome = try await withTaskCancellationHandler {
+                try await waitForOutcome(outcomeBox)
+            } onCancel: {
+                cancelBox.cancel()
+            }
+        } catch {
+            // 取消或等待出错：不等后台回来，直接抛，调用方关弹窗报“已停止”。
+            cancelBox.cancel()
+            throw error
+        }
         try Task.checkCancellation()
         guard outcome.success else {
             throw BackupError(outcome.summary)
@@ -58,5 +80,44 @@ enum BackupInstallFlow {
                        preferencesWritten: outcome.preferencesWritten,
                        refreshConfirmed: outcome.refreshConfirmed,
                        injectResults: outcome.injectResults)
+    }
+
+    /// 等后台 runRestore 写结果盒：先看盒里有没有（活刚好干完按成功算），
+    /// 没有再查取消、睡 0.2 秒再看；上层 Task 取消（点了停止）就立刻抛，
+    /// 不等后台那路回来，弹窗马上关。
+    private static func waitForOutcome(_ box: OutcomeBox) async throws -> RestoreTest.RestoreOutcome {
+        while true {
+            if let outcome = box.outcome { return outcome }
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+}
+
+/// 取消标记盒：上层 Task 取消时置位，后台阻塞调用在步骤之间查。
+private final class CancelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _cancelled = false
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _cancelled
+    }
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        _cancelled = true
+    }
+}
+
+/// runRestore 的结果盒：后台线程写完、轮询循环读。
+private final class OutcomeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _outcome: RestoreTest.RestoreOutcome?
+    var outcome: RestoreTest.RestoreOutcome? {
+        lock.lock(); defer { lock.unlock() }
+        return _outcome
+    }
+    func finish(_ outcome: RestoreTest.RestoreOutcome) {
+        lock.lock(); defer { lock.unlock() }
+        _outcome = outcome
     }
 }

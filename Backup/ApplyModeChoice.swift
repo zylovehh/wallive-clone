@@ -75,7 +75,7 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
                 return "这次将用：备份还原（iOS 27.2）。"
             }
             // 27.0.1 上手动选备份：走改表还原（不用整机备份），不用只等 27.2。
-            return "这次将用：备份还原（改表还原，不用整机备份；刷新确认了不用重启，没确认再重启一次）。"
+            return "这次将用：备份还原（iOS 27.2）。"
         default:
             // 正常走不到这里（强制选的模式就是返回的模式）；兜底也按
             // 界面上的叫法写（带 iOS 版本号），不用 `mode.title`（那是不带版本号的"备份还原"）。

@@ -88,15 +88,106 @@ enum RestoreTest {
 
     // MARK: - 还原测试
 
+    /// 拿表加 30 秒超时：拷回通道等手机回表可能死等（00:37 那次就卡在
+    /// 10% 不动），30 秒没回来就是卡住了，当这次拷回失败——外层会改用
+    /// 已存的表接着做，没已存的表才停下来报。成功的拷回都是很快回来的，
+    /// 超时短一点不影响成功，只是不让用户干等。超时的那次调用还在后台
+    /// 跑，结果丢弃，不阻塞后面的步骤。
+    private static func exportAndSaveTimed(pairingPath: String, stamp: String,
+                                           report: inout [String: Any],
+                                           timeout: TimeInterval = 30) throws
+        -> (savedDB: URL, savedWAL: URL?, container: String) {
+        let box = ExportResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var workerReport: [String: Any] = ["channel": "restore_test"]
+            do {
+                let fresh = try exportAndSave(pairingPath: pairingPath, stamp: stamp, report: &workerReport)
+                box.set(.success((fresh.savedDB, fresh.savedWAL, fresh.container)), report: workerReport)
+            } catch {
+                box.set(.failure(error), report: workerReport)
+            }
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            throw StepError(step: "拿表", detail: "取表超时（\(Int(timeout)) 秒没等到手机回表）。重启手机一次再试。")
+        }
+        // 没超时：把 worker 那边记进 report 的键合回来（失败时也要合，
+        // 兜底要从 report["export"] 里拿容器路径）。
+        for (key, value) in box.report { report[key] = value }
+        guard let result = box.result else {
+            throw StepError(step: "拿表", detail: "取表没回结果。")
+        }
+        switch result {
+        case .success(let fresh): return fresh
+        case .failure(let error): throw error
+        }
+    }
+
+    /// 跨线程传一次拿表结果：写的那边只写一次，读的那边在信号量之后读。
+    private final class ExportResultBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _result: Result<(savedDB: URL, savedWAL: URL?, container: String), Error>?
+        private var _report: [String: Any] = [:]
+        var result: Result<(savedDB: URL, savedWAL: URL?, container: String), Error>? {
+            lock.lock(); defer { lock.unlock() }
+            return _result
+        }
+        var report: [String: Any] {
+            lock.lock(); defer { lock.unlock() }
+            return _report
+        }
+        func set(_ result: Result<(savedDB: URL, savedWAL: URL?, container: String), Error>,
+                 report: [String: Any]) {
+            lock.lock(); defer { lock.unlock() }
+            _result = result
+            _report = report
+        }
+    }
+
+    /// 把刚写回的那张表存成已存表（merged.sqlite3），下次拿表失败时兜底用。
+    /// 只在安装成功时调（写回已成，staged 就是手机上那张最新的表）。
+    /// 拷失败不抛错、不拦安装，只记日志，下次兜底仍用旧表。
+    private static func updateStoredTable(from staged: URL) {
+        let fm = FileManager.default
+        let dest = tableDir.appendingPathComponent("merged.sqlite3")
+        do {
+            try fm.createDirectory(at: tableDir, withIntermediateDirectories: true)
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.copyItem(at: staged, to: dest)
+            // staged 是自带完整数据的单文件（写回时配 0 字节 -wal），
+            // 旁边要是有旧 -wal 残留会误导下次合库，一并清掉。
+            try? fm.removeItem(at: URL(fileURLWithPath: dest.path + "-wal"))
+            InstallLog.shared.append("restore: 已存表已更新成刚写回的那张（merged.sqlite3）。")
+        } catch {
+            InstallLog.shared.append("restore: 已存表更新失败（\(error.localizedDescription)），下次兜底仍用旧表。")
+        }
+    }
+
     /// 跑一次备份还原。调用方必须已经在后台线程（FFI 和 SQLite 都会阻塞）。
     /// packageData：导入页当前选中的那个包；没选中包就直接报，不编默认包。
-    static func runRestore(packageData: Data, pairingPath: String) -> RestoreOutcome {
+    /// onProgress：步骤进度（拿表 30% → 写文件 50% → 插行 70% → 写回 85% →
+    /// 刷新 100%），调用方在主线程更新 UI。isCancelled：步骤之间查取消，
+    /// 用户点了停止就立刻停，不等整轮跑完。
+    static func runRestore(packageData: Data, pairingPath: String,
+                           onProgress: ((String, Double) -> Void)? = nil,
+                           isCancelled: @escaping () -> Bool = { false }) -> RestoreOutcome {
         var report: [String: Any] = ["channel": "restore_test", "success": false]
         do {
-            let outcome = try restore(packageData: packageData, pairingPath: pairingPath, report: &report)
+            let outcome = try restore(packageData: packageData, pairingPath: pairingPath, report: &report,
+                                      onProgress: onProgress, isCancelled: isCancelled)
             report["success"] = true
             InstallLog.shared.append("restore: json=\(jsonString(report))")
             return outcome
+        } catch is CancellationError {
+            // 用户点了停止：不当失败报，调用方按“已停止”关弹窗。
+            InstallLog.shared.append("restore: 已停止（用户点了停止）。")
+            return RestoreOutcome(
+                success: false,
+                summary: "已停止。",
+                descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false,
+                injectResults: [], json: jsonString(report))
         } catch let e as StepError {
             report["step"] = e.step
             report["error"] = e.detail
@@ -119,8 +210,16 @@ enum RestoreTest {
         }
     }
 
+    /// 步骤之间查取消：用户点了停止就立刻停，不等整轮跑完。
+    private static func checkCancelled(_ isCancelled: () -> Bool) throws {
+        if isCancelled() { throw CancellationError() }
+    }
+
     private static func restore(packageData: Data, pairingPath: String,
-                                report: inout [String: Any]) throws -> RestoreOutcome {
+                                report: inout [String: Any],
+                                onProgress: ((String, Double) -> Void)?,
+                                isCancelled: @escaping () -> Bool) throws -> RestoreOutcome {
+        try checkCancelled(isCancelled)
         let fm = FileManager.default
         let stamp = timeStamp()
         let workDir = fm.temporaryDirectory.appendingPathComponent("wallive-clone-restore-\(stamp)")
@@ -134,7 +233,7 @@ enum RestoreTest {
         let savedWAL: URL?
         let container: String
         do {
-            let fresh = try exportAndSave(
+            let fresh = try exportAndSaveTimed(
                 pairingPath: pairingPath, stamp: stamp, report: &report)
             savedDB = fresh.savedDB
             savedWAL = fresh.savedWAL
@@ -158,6 +257,8 @@ enum RestoreTest {
                 + (fallback.savedDate.map { "，存于 \(isoDate($0))" } ?? "")
                 + "；不是刚拷回来的，接着往下做。")
         }
+        try checkCancelled(isCancelled)
+        onProgress?("正在写文件…", 0.30)
 
         // 原表备份：写回之前先把这次用的原表（刚拷回来的，或已存的那份）再存一份，坏了能回来。
         let backupDB = tableDir.appendingPathComponent("backup-原表-\(stamp).sqlite3")
@@ -228,6 +329,8 @@ enum RestoreTest {
             stage: stage, descriptorUUID: descriptorUUID, config: firstConfig,
             container: container, pairingPath: pairingPath)
         report["descriptors"] = descriptorResults
+        try checkCancelled(isCancelled)
+        onProgress?("正在插行…", 0.50)
 
         // 5. 插行：复用备份路的 stitch（金块 update_sqlite 的移植）。
         let stitchDir = workDir.appendingPathComponent("stitch")
@@ -242,6 +345,8 @@ enum RestoreTest {
         let newPosterId = try posterIdOfStitched(staged: staged, uuid: firstConfig.uuid)
         report["poster_id"] = newPosterId
         report["store_after"] = PosterBoardStore.summary(staged)
+        try checkCancelled(isCancelled)
+        onProgress?("正在写回表…", 0.70)
 
         // 6. 写回表：改好的表 + 0 字节 -wal/-shm，走新 FFI 写回商店目录。
         let writebackDir = workDir.appendingPathComponent("writeback")
@@ -266,12 +371,20 @@ enum RestoreTest {
         //    让系统重载描述符、重新索引。容器内那份失败就停，全局那份尽力写。
         try writePosterBoardPreferences(container: container, pairingPath: pairingPath)
         report["preferences_written"] = true
+        try checkCancelled(isCancelled)
+        onProgress?("正在刷新…", 0.85)
 
         // 8. 刷新：调一次 al_posterboard_refresh（杀 PosterBoard、等它重起重读），
         //    结果只记进报告、不抛错；没确认就还是得重启手机再看。
         let refresh = posterboardRefresh(pairingPath: pairingPath)
         report["refresh"] = refresh
         let refreshConfirmed = refresh["confirmed"] as? Bool ?? false
+        onProgress?("刷新完成", 1.0)
+
+        // 已存表更新成刚写回的那张：下次拿表万一拷不回来，兜底用的就是
+        // 最新的表（带这次新插的行），不会拿旧表把上一张顶掉。
+        // 走到这里写回已经成了；拷失败只记日志，不拦安装。
+        updateStoredTable(from: staged)
 
         let usedStored = (report["table_source"] as? String) == "stored"
         let descriptorInjects = descriptorResults.map {

@@ -169,6 +169,9 @@ private struct ImportDetailView: View {
     @State private var installing = false
     @State private var installResult = ""
     @State private var installReport: InstallReport?
+    /// 备份路这次失败的原因（没失败就是 nil）：核对区失败那版用它写，
+    /// 成功那版不沾它。直写那条路不走它，原样不动。
+    @State private var installFailedReason: String?
     @State private var installLogText = ""
     @State private var showFullLog = false
     @State private var showFullResult = false
@@ -261,7 +264,7 @@ private struct ImportDetailView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         if effectiveMode == .backup {
-                            Text("备份还原走改表还原（拿表、插行、写回），不用整机备份；刷新确认了不用重启，没确认再重启一次。")
+                            Text("备份还原走改表还原（拿表、插行、写回），不用整机备份。")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -370,7 +373,11 @@ private struct ImportDetailView: View {
                         }
                     }
                     if installReport?.mode == .backup {
-                        Text("备份还原装完先重启手机，再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
+                        Text("安装成功，再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let reason = installFailedReason {
+                        Text("安装失败：\(reason)。再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
@@ -463,6 +470,7 @@ private struct ImportDetailView: View {
         installProgress = 0
         installResult = ""
         installReport = nil
+        installFailedReason = nil
         installLogText = ""
         defer { installing = false }
         if let report = try? await state.installWithReport(host: "10.7.0.1", onProgress: { step, fraction in
@@ -475,9 +483,9 @@ private struct ImportDetailView: View {
             installLogText = InstallLog.shared.tail(60)
             if report.mode == .backup {
                 // 备份路现在也写偏好、也调刷新（RestoreTest 里做的）；读回核对和
-                // 登记这两项没有，核对看日志框。要不要重启手机看 backupSummary。
-                installResult = (report.backupSummary ?? "备份还原已完成。")
-                    + "描述符 \(report.descriptorUUID)。"
+                // 登记这两项没有，核对看日志框。成功只写四个字，载荷数、行数、
+                // 描述符这些长日志留在日志框里，不显示在结果区。
+                installResult = "安装成功"
             } else {
                 let dirLines = report.injectResults.map { result in
                     let short = shortTargetDir(result.targetParentDir)
@@ -508,8 +516,14 @@ private struct ImportDetailView: View {
                 installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。\(verifySummary) \(refreshSummary)"
                 }
         } else if Task.isCancelled {
-            // 用户点了停止（`try?` 把取消错误吞成了 nil）。
-            installResult = "已停止取备份。下次取备份如果一直连不上，重启手机一次再试。"
+            // 用户点了停止（`try?` 把取消错误吞成了 nil）。备份路只报“已停止”，
+            // 直写那条路的文案不动。
+            installResult = effectiveMode == .backup ? "已停止" : "已停止取备份。下次取备份如果一直连不上，重启手机一次再试。"
+            installLogText = InstallLog.shared.tail(60)
+        } else if effectiveMode == .backup && !state.statusMessage.isEmpty {
+            // 备份路失败：结果区写失败原因，核对区也进失败那版。
+            installResult = state.statusMessage
+            installFailedReason = backupFailureReason(from: state.statusMessage)
             installLogText = InstallLog.shared.tail(60)
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
@@ -520,6 +534,14 @@ private struct ImportDetailView: View {
     private var logPreviewText: String {
         let lines = installLogText.split(separator: "\n", omittingEmptySubsequences: false)
         return lines.suffix(3).joined(separator: "\n")
+    }
+
+    /// 备份路失败原因：statusMessage 是“备份安装失败：<原因>”，核对区只留 <原因>。
+    private func backupFailureReason(from statusMessage: String) -> String {
+        if let range = statusMessage.range(of: "备份安装失败：") {
+            return String(statusMessage[range.upperBound...])
+        }
+        return statusMessage
     }
 
     private func shortTargetDir(_ path: String) -> String {
