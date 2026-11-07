@@ -21,7 +21,7 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
         switch self {
         case .auto: return "自动"
         case .airlift: return "直写（iOS 27）"
-        case .backup: return "备份还原（iOS 27.2）"
+        case .backup: return "iOS 27.2"
         }
     }
 
