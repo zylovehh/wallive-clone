@@ -26,7 +26,9 @@ workflows:
         script: xcodebuild -resolvePackageDependencies -project WalliveClone.xcodeproj -scheme WalliveClone
       - name: Stamp build number into version tag
         script: |
-          TAG="V6·$(TZ=Asia/Kuala_Lumpur date +%m%d)-${BUILD_NUMBER}号"
+          # 序号从 01 重新起：31 号是旧计数最后一版，32 号起新计数 01、02…。
+          SEQ=$(printf "%02d" $((BUILD_NUMBER - 31)))
+          TAG="V6·$(TZ=Asia/Kuala_Lumpur date +%m%d)-${SEQ}号"
           printf 'import Foundation\n\nenum BuildInfo {\n    static let tag = "%s"\n}\n' "$TAG" > App/BuildInfo.swift
           cat App/BuildInfo.swift
       - name: Archive (unsigned)
