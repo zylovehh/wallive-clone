@@ -395,9 +395,11 @@ private struct ImportDetailView: View {
                         ProgressView(value: installProgress)
                             .frame(width: 200)
                         Text(installStep)
+                            .foregroundStyle(.white)
                         Text("\(Int(installProgress * 100))%")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("请稍等，不要退出").font(.caption).foregroundStyle(.secondary)
+                            // #02：弹窗里的百分比和提示原来是次要灰，灰底上看不清，写死浅白字。
+                            .font(.caption).foregroundStyle(.white.opacity(0.85))
+                        Text("请稍等，不要退出").font(.caption).foregroundStyle(.white.opacity(0.85))
                         Button("停止") { installTask?.cancel() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)

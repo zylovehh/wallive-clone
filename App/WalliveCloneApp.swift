@@ -19,6 +19,11 @@ struct WalliveCloneApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
+                // #02：全 App 强制深色。背景是深色涂鸦图（AppBackgroundView），
+                // 浅色模式的黑字/深灰字在黑底上看不见——Duo 截图里标题、次要文字、
+                // 没选中的安装方式、底部页签全是这么糊住的。深色下标题白字、
+                // 次要文字浅灰、玻璃按钮白字，全部可读；系统浅色/深色切换不再影响。
+                .preferredColorScheme(.dark)
         }
     }
 }

@@ -9,6 +9,9 @@ private struct GlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
+            // #02：玻璃胶囊是透明的，字色不写死就是系统默认色，浅色模式下黑字
+            // 在黑底上看不见（QQ 群“加入 QQ 群”按钮就是这么糊住的）。写死白字。
+            .foregroundStyle(.white)
             .padding(.horizontal, 20).padding(.vertical, 10)
             .background {
                 if #available(iOS 26.0, *) {
