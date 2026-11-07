@@ -4,6 +4,8 @@
 // 流程（一步断了就停，不继续往下走）：
 //   1. 拿表：走探针 3 同一条 AirTraffic 拷回通道，把 v61 的表和 -wal
 //      拷回来、存进 Documents/posterboard-table（原表先另存一份备份）。
+//      拷不回来就改用已存的表（先找 merged.sqlite3，没有就找最新存
+//      下来的那份），日志里写明用的是已存的表，不假装刚拷回来。
 //   2. 编包：复用备份路的 PosterBoardCompiler.compile，把选中包编成
 //      configurations/<新 UUID> 的载荷（只走 configurations，不写
 //      descriptors——编包器自己写明了，27.0.1 上 descriptors 双写会逼
@@ -94,11 +96,39 @@ enum RestoreTest {
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
 
-        // 1. 拿表：探针 3 同一条通道，v61 的表 + -wal，存盘并 SHA 校验。
-        let (savedDB, savedWAL, container) = try exportAndSave(
-            pairingPath: pairingPath, stamp: stamp, report: &report)
+        // 1. 拿表：先试探针 3 同一条通道拷回 v61 的表 + -wal、存盘。
+        //    拷不回来就改用手机里已存的那张表接着做，不死等重拷——
+        //    拷回那条路重启后第一次能成，之后再跑就不成。
+        let savedDB: URL
+        let savedWAL: URL?
+        let container: String
+        do {
+            let fresh = try exportAndSave(
+                pairingPath: pairingPath, stamp: stamp, report: &report)
+            savedDB = fresh.savedDB
+            savedWAL = fresh.savedWAL
+            container = fresh.container
+            report["table_source"] = "fresh"
+        } catch {
+            let exportError = (error as? StepError)
+                ?? StepError(step: "拿表", detail: "\(error.localizedDescription)")
+            let fallback = try storedTableFallback(report: &report, exportError: exportError)
+            savedDB = fallback.db
+            savedWAL = fallback.wal
+            container = fallback.container
+            report["table_source"] = "stored"
+            report["stored_db_path"] = fallback.db.path
+            report["stored_db_kind"] = fallback.kind
+            if let d = fallback.savedDate {
+                report["stored_db_saved"] = isoDate(d)
+            }
+            InstallLog.shared.append(
+                "restore: 拷回没成（\(exportError.detail)），这次用的是已存的表：\(fallback.db.lastPathComponent)"
+                + (fallback.savedDate.map { "，存于 \(isoDate($0))" } ?? "")
+                + "；不是刚拷回来的，接着往下做。")
+        }
 
-        // 原表备份：写回之前先把刚拷回来的原表再存一份，坏了能回来。
+        // 原表备份：写回之前先把这次用的原表（刚拷回来的，或已存的那份）再存一份，坏了能回来。
         let backupDB = tableDir.appendingPathComponent("backup-原表-\(stamp).sqlite3")
         try? fm.removeItem(at: backupDB)
         try fm.copyItem(at: savedDB, to: backupDB)
@@ -188,7 +218,8 @@ enum RestoreTest {
                             detail: "写回没成（\(writebackJSON["error"] as? String ?? "原因见日志")）。文件已写进容器，表还是旧的。")
         }
 
-        let summary = "还原测试成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、表已写回。重启手机，再去图库长按看有没有这张壁纸。完整结果见下面日志框。"
+        let usedStored = (report["table_source"] as? String) == "stored"
+        let summary = "还原测试成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。重启手机，再去图库长按看有没有这张壁纸。完整结果见下面日志框。"
         return RestoreOutcome(success: true, summary: summary,
                               descriptorUUID: firstConfig.uuid, posterId: newPosterId,
                               json: jsonString(report))
@@ -219,6 +250,64 @@ enum RestoreTest {
         return (URL(fileURLWithPath: dbPath),
                 walPath.map { URL(fileURLWithPath: $0) },
                 container)
+    }
+
+    /// 兜底：拷回失败时改用手机里已存的表接着做。先找 merged.sqlite3，
+    /// 没有就找最新时间戳的那份 PBF...-*.sqlite3（配同名 -wal）。
+    /// 容器路径从刚失败那次拷回的 JSON 里拿（失败的 JSON 里也有
+    /// container）；表找不到、或者容器路径拿不到，就停下来报真实原因。
+    /// 验库不在这里做，后面合库那步会验（integrity_check 不过就停）。
+    /// 只给 restore() 用，列行按钮那套选表逻辑没动。
+    private static func storedTableFallback(report: inout [String: Any],
+                                            exportError: StepError)
+        throws -> (db: URL, wal: URL?, container: String, kind: String, savedDate: Date?) {
+        let fm = FileManager.default
+        let dir = tableDir
+        var dbURL: URL?
+        var walURL: URL?
+        var kind = ""
+        var savedDate: Date?
+        let merged = dir.appendingPathComponent("merged.sqlite3")
+        if fm.fileExists(atPath: merged.path) {
+            dbURL = merged
+            kind = "merged.sqlite3"
+            savedDate = (try? merged.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? nil
+            // merged.sqlite3 的 -wal 已经合进主库了，不用再配 -wal。
+        } else {
+            let saved = (try? fm.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            let candidates = saved
+                .filter {
+                    $0.lastPathComponent.hasPrefix("PBFPosterExtensionDataStoreSQLiteDatabase-")
+                    && $0.pathExtension == "sqlite3"
+                }
+                .sorted {
+                    let da = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
+                    let db = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
+                    return da > db
+                }
+            if let newest = candidates.first {
+                dbURL = newest
+                kind = newest.lastPathComponent
+                savedDate = (try? newest.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? nil
+                let wal = URL(fileURLWithPath: newest.path + "-wal")
+                if fm.fileExists(atPath: wal.path) { walURL = wal }
+            }
+        }
+        guard let db = dbURL else {
+            throw StepError(step: "拿表",
+                            detail: "拷回没成（\(exportError.detail)），手机里也没存下来的表：先点探针 3 存一张表，再来还原测试。")
+        }
+        var container: String?
+        if let export = report["export"] as? [String: Any],
+           let c = export["container"] as? String, !c.isEmpty {
+            container = c
+        }
+        guard let container else {
+            throw StepError(step: "拿表",
+                            detail: "拷回没成（\(exportError.detail)），已存的表找到了（\(kind)），但拿不到 PosterBoard 容器路径，接着做不了。")
+        }
+        return (db, walURL, container, kind, savedDate)
     }
 
     private static func callSaveFFI(pairingPath: String, destDir: String, stamp: String)
@@ -561,6 +650,13 @@ enum RestoreTest {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmm"
         return f.string(from: Date())
+    }
+
+    /// 给日志看的日期（yyyy-MM-dd HH:mm），只给兜底那句日志用。
+    private static func isoDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f.string(from: date)
     }
 
     private static func jsonString(_ obj: [String: Any]) -> String {
