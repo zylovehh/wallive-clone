@@ -126,6 +126,51 @@ int32_t al_verify_descriptor(const char *pairing_path,
                              char **out_json,
                              char **out_error);
 
+// Read-only HouseArrest probe of the PosterBoard container. BLOCKS — run
+// off the main thread. Vends the container exactly once (no retry) and
+// lists it: container root entries, store version dirs (61 / 62 / ...),
+// the PBFPosterExtensionDataStoreSQLiteDatabase.sqlite3 file (size + first
+// 100 bytes header, SQLite magic checked), and its -wal / -shm companions
+// (sizes only). Writes nothing to the device. Returns 0 with out_json set
+// whenever the vend worked (even when the sqlite file was not found — the
+// JSON tells the truth); 1 with out_error on channel failure (tunnel /
+// HouseArrest connect / vend), with the device's own error text verbatim.
+// out_json format:
+//   {"channel": "house_arrest", "vend_ok": true, "root_entries": [...],
+//    "root_count": N, "store_versions": ["61", ...],
+//    "version_entries": [...], "db_path": "..."|null, "db_exists": bool,
+//    "db_size": N|null, "db_header_hex": "..."|null,
+//    "db_is_sqlite": bool, "db_wal_size": N|null, "db_shm_size": N|null}
+int32_t al_probe_posterboard_container(const char *pairing_path,
+                                       ALLogCallback log_cb,
+                                       void *ctx,
+                                       char **out_json,
+                                       char **out_error);
+
+// Read-only AirTraffic export probe: ask AirTraffic to copy the
+// PosterBoard sqlite (+ -wal) out to Media and read it back over AFC.
+// Tries store version 61, then 62, then the -wal of the version whose
+// DB read back as valid SQLite. Writes nothing into the PosterBoard
+// container and does not save the recovered bytes anywhere — it only
+// reports size / SHA-256 / header checks. Returns 0 with out_json set
+// whenever the channel ran (even when no valid sqlite was recovered —
+// the JSON tells the truth); 1 with out_error on channel failure
+// (tunnel / AFC connect), with the device's own error text verbatim.
+// out_json format:
+//   {"channel": "airtraffic_export", "container": "...",
+//    "attempts": [{"version": "61"|"62", "kind": "db"|"wal",
+//    "path": "...", "ok": bool, "size": N|null, "sha256": "..."|null,
+//    "is_sqlite": bool, "is_wal": bool, "error": "..."|null}, ...],
+//    "db_version": "61"|"62"|null, "db_size": N|null,
+//    "db_sha256": "..."|null, "db_is_sqlite": bool,
+//    "wal_size": N|null, "wal_sha256": "..."|null, "wal_is_wal": bool,
+//    "success": bool}
+int32_t al_probe_posterboard_export(const char *pairing_path,
+                                    ALLogCallback log_cb,
+                                    void *ctx,
+                                    char **out_json,
+                                    char **out_error);
+
 // DVT poster refresh: SIGKILL PosterBoard (signal 9) and wait for launchd
 // to respawn it, so the gallery re-reads the extension store. Returns 0
 // with out_json set whenever the refresh ran (even when refresh_confirmed

@@ -473,6 +473,8 @@ private struct StatusLogPage: View {
     @EnvironmentObject private var state: AppState
     @State private var probing = false
     @State private var probeResult = ""
+    @State private var probing2 = false
+    @State private var probe2Result = ""
 
     var body: some View {
         ScrollView {
@@ -499,6 +501,26 @@ private struct StatusLogPage: View {
                 }.buttonStyle(.bordered)
                 if !probeResult.isEmpty {
                     Text(probeResult).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                // 探针 2：只读试 AirTraffic 拷回通道能不能读到 PosterBoard
+                // 那张现成的表。61 和 62 两个版本都试，成了再试 -wal。
+                // 只验文件头 + 大小 + SHA-256，不存表；不写 PosterBoard、
+                // 不改表、不动备份/安装逻辑。
+                Text("PosterBoard 拷回探针 2（只读）").font(.headline)
+                Text("点一下试一次：AirTraffic 能不能把那张表从 PosterBoard 容器里拷回来。61、62 各试一次，成了再试 -wal。只读，不存表。完整结果写进下面日志框，长按可复制。")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack {
+                    Button("探针 2：拷回 PosterBoard 的表") {
+                        Task { await runProbe2() }
+                    }.disabled(probing2)
+                    if probing2 { ProgressView() }
+                }.buttonStyle(.bordered)
+                if !probe2Result.isEmpty {
+                    Text(probe2Result).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
@@ -568,6 +590,65 @@ private struct StatusLogPage: View {
             summary = "探针跑完了：容器能打开，\(versionText)，但没找到那张表。完整结果见下面日志框。"
         }
         InstallLog.shared.append("probe: \(summary)")
+        return summary
+    }
+
+    /// 只读探针 2：走配对 + 隧道调一次 al_probe_posterboard_export。
+    /// 61、62 各试一次，成了再试那一版的 -wal；只在内存里验文件头，
+    /// 不存盘。结果写进安装日志框，本页只留一行结论。FFI 会阻塞，
+    /// 放后台线程跑。
+    private func runProbe2() async {
+        guard !probing2 else { return }
+        probing2 = true
+        defer { probing2 = false }
+        guard state.hasPairingFile else {
+            probe2Result = "探针 2 没跑：没有配对记录文件，先在配对记录页生成或导入一个。"
+            return
+        }
+        probe2Result = "正在拷回 PosterBoard 的表…"
+        let pairingPath = state.pairingFileURL.path
+        let (rc, json, error) = await Task.detached(priority: .userInitiated) {
+            "10.7.0.1".withCString { _ = al_set_target_host($0) }
+            var outJson: UnsafeMutablePointer<CChar>? = nil
+            var outError: UnsafeMutablePointer<CChar>? = nil
+            let rc = pairingPath.withCString { pairC in
+                al_probe_posterboard_export(pairC, airliftLogCallback, nil, &outJson, &outError)
+            }
+            var json: String? = nil
+            var error: String? = nil
+            if let p = outJson { json = String(cString: p); al_string_free(p) }
+            if let p = outError { error = String(cString: p); al_string_free(p) }
+            return (rc, json, error)
+        }.value
+        if rc == 0, let json {
+            probe2Result = Self.probe2Summary(json: json)
+        } else {
+            // 通道失败：写设备报的原文，不写含糊话。
+            let detail = error ?? "未知错误"
+            probe2Result = "探针 2 失败（通道不通）：\(detail)"
+            InstallLog.shared.append("probe2: FAILED \(detail)")
+        }
+    }
+
+    /// 探针 2 JSON 宽松解析成一行中文结论；解析不出就把 JSON 原文贴出来。
+    private static func probe2Summary(json: String) -> String {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            InstallLog.shared.append("probe2: json=\(json)")
+            return "探针 2 跑完了，但结果解析不出来，原文已写进日志框：\(json)"
+        }
+        let success = (obj["success"] as? Bool) ?? false
+        let dbVersion = (obj["db_version"] as? String) ?? "未知"
+        let dbSize = (obj["db_size"] as? NSNumber)?.intValue
+        let dbIsSqlite = (obj["db_is_sqlite"] as? Bool) ?? false
+        let walOk = (obj["wal_is_wal"] as? Bool) ?? false
+        let summary: String
+        if success && dbIsSqlite {
+            summary = "探针 2 成功：表拷回来了，store 版本 \(dbVersion)，大小 \(dbSize.map { "\($0) 字节" } ?? "未知")，SQLite 文件头对得上，-wal \(walOk ? "也拷回来了" : "没拷回来")。完整结果见下面日志框。"
+        } else {
+            summary = "探针 2 跑完了：AirTraffic 拷回没拿到可用的表（61、62 都没成）。完整结果见下面日志框。"
+        }
+        InstallLog.shared.append("probe2: \(summary)")
         return summary
     }
 }
