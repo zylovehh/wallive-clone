@@ -473,7 +473,7 @@ enum RestoreTest {
         }
         guard let db = dbURL else {
             throw StepError(step: "拿表",
-                            detail: "拷回没成（\(exportError.detail)），手机里也没存下来的表：先点探针 3 存一张表，再来还原测试。")
+                            detail: "拷回没成（\(exportError.detail)），手机里也没存下来的表：重启手机一次，再来装（拿表只有重启后第一次才稳）。")
         }
         var container: String?
         if let export = report["export"] as? [String: Any],
@@ -878,7 +878,7 @@ enum RestoreTest {
             }
         }
         guard let dbURL = source else {
-            let summary = "列不出来：表还没存下来，先点探针 3 存一张表，再来列。"
+            let summary = "列不出来：表还没存下来，重启手机一次、装一张壁纸后再来列。"
             report["error"] = summary
             return (summary, jsonString(report))
         }
