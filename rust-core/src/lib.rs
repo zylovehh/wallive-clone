@@ -20,6 +20,10 @@
 //!                            saved under the caller-supplied dest dir
 //!                            (Documents/posterboard-table) with a
 //!                            timestamped name, re-read and SHA-verified
+//!   al_restore_posterboard_writeback — restore test: write a modified
+//!                            store (+ 0-byte -wal/-shm) back into the
+//!                            device store dir over the direct-write
+//!                            AirTraffic channel
 //!   al_posterboard_refresh — DVT refresh: SIGKILL PosterBoard, wait for
 //!                            respawn, verify with a fresh client
 //!   al_backup_fetch_posterboard — targeted backup of the PosterBoard
@@ -325,6 +329,41 @@ pub unsafe extern "C" fn al_probe_posterboard_save(
         Err(e) => {
             if !out_error.is_null() {
                 *out_error = ffi_util::cstr(format!("Rust panic in al_probe_posterboard_save: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Restore-test writeback: write a modified PosterBoard store (plus 0-byte
+/// -wal/-shm) back into the device store directory. See
+/// exploit::restore_posterboard_writeback. Returns 0 with out_json set
+/// whenever the write ran (even when the device rejected it — the JSON
+/// tells the truth); 1 with out_error only for local validation failures
+/// or channel failures, with the device's own error text verbatim.
+/// `pairing_path` may be null (falls back to "wallpaper_pairing.plist");
+/// `staged_dir` / `target_dir` have no silent fallback (Swift passes both).
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_restore_posterboard_writeback(
+    pairing_path: *const c_char,
+    staged_dir: *const c_char,
+    target_dir: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exploit::restore_posterboard_writeback(pairing_path, staged_dir, target_dir, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_restore_posterboard_writeback: {e:?}"));
             }
             1
         }

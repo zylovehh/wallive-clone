@@ -29,7 +29,7 @@ workflows:
           # 探针 3 版：固定盖戳，不走 03 号的 SEQ 公式（03 号的公式
           # BUILD_NUMBER - 32 留在 main 上别动，探针编包时不要用它，
           # 探针编完、下次再编正常版时记得确认这行已经改回 SEQ 公式。）
-          TAG="V6·1107-探针3"
+          TAG="V6·1107-还原测试"
           printf 'import Foundation\n\nenum BuildInfo {\n    static let tag = "%s"\n}\n' "$TAG" > App/BuildInfo.swift
           cat App/BuildInfo.swift
       - name: Archive (unsigned)

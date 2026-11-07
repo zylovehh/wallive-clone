@@ -202,6 +202,26 @@ int32_t al_probe_posterboard_save(const char *pairing_path,
                                   char **out_json,
                                   char **out_error);
 
+// Restore-test writeback: write a modified PosterBoard store back into the
+// device store directory. `staged_dir` must hold exactly three files: the
+// modified store (SQLite magic, WAL-merged by Swift), plus 0-byte `-wal`
+// and `-shm` companions. `target_dir` is the store directory, e.g.
+// `.../PRBPosterExtensionDataStore/61`. Reuses the direct-write AirTraffic
+// channel. Returns 0 with out_json set whenever the write ran (even when
+// the device rejected it — the JSON tells the truth); 1 with out_error
+// only for local validation failures or channel failures.
+// out_json format:
+//   {"channel": "restore_writeback", "target_dir": "...",
+//    "files": [{"name": "...", "size": N, "sha256": "..."}, ...],
+//    "db_size": N, "db_sha256": "...", "writeback_ok": bool, "success": bool}
+int32_t al_restore_posterboard_writeback(const char *pairing_path,
+                                         const char *staged_dir,
+                                         const char *target_dir,
+                                         ALLogCallback log_cb,
+                                         void *ctx,
+                                         char **out_json,
+                                         char **out_error);
+
 // DVT poster refresh: SIGKILL PosterBoard (signal 9) and wait for launchd
 // to respawn it, so the gallery re-reads the extension store. Returns 0
 // with out_json set whenever the refresh ran (even when refresh_confirmed

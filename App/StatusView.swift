@@ -472,12 +472,12 @@ private struct StatusHistoryPage: View {
 
 private struct StatusLogPage: View {
     @EnvironmentObject private var state: AppState
-    @State private var probing = false
-    @State private var probeResult = ""
-    @State private var probing2 = false
-    @State private var probe2Result = ""
     @State private var probing3 = false
     @State private var probe3Result = ""
+    @State private var listing = false
+    @State private var listResult = ""
+    @State private var restoring = false
+    @State private var restoreResult = ""
 
     var body: some View {
         ScrollView {
@@ -487,46 +487,10 @@ private struct StatusLogPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-                // 探针：只读读一次 PosterBoard 容器（HouseArrest vend_container），
-                // 看容器能不能打开、表在不在、store 版本号是多少。
-                // 只读：不写任何文件、不改任何表、不触发安装、不触发备份、不重启。
-                // 失败也写清楚原文（比如 InstallationLookupFailed），不写含糊话。
-                Text("PosterBoard 容器探针（只读）").font(.headline)
-                Text("点一下读一次：配对 + 隧道通不通、容器能不能打开、里面有没有那张表、store 版本号是多少。只读，不写东西。完整结果写进下面日志框，长按可复制。")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                HStack {
-                    Button("探针：读 PosterBoard 容器") {
-                        Task { await runProbe() }
-                    }.disabled(probing)
-                    if probing { ProgressView() }
-                }.buttonStyle(.bordered)
-                if !probeResult.isEmpty {
-                    Text(probeResult).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                // 探针 2：只读试 AirTraffic 拷回通道能不能读到 PosterBoard
-                // 那张现成的表。61 和 62 两个版本都试，成了再试 -wal。
-                // 只验文件头 + 大小 + SHA-256，不存表；不写 PosterBoard、
-                // 不改表、不动备份/安装逻辑。
-                Text("PosterBoard 拷回探针 2（只读）").font(.headline)
-                Text("点一下试一次：AirTraffic 能不能把那张表从 PosterBoard 容器里拷回来。61、62 各试一次，成了再试 -wal。只读，不存表。完整结果写进下面日志框，长按可复制。")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                HStack {
-                    Button("探针 2：拷回 PosterBoard 的表") {
-                        Task { await runProbe2() }
-                    }.disabled(probing2)
-                    if probing2 { ProgressView() }
-                }.buttonStyle(.bordered)
-                if !probe2Result.isEmpty {
-                    Text(probe2Result).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
+                // 探针 1（HouseArrest 读容器）和探针 2（只读拷回不存盘）的按钮
+                // 已去掉：探针 1 在真机上证实死了，探针 2 被探针 3（拷回 + 存盘）
+                // 取代。底下那条 AirTraffic 拷回通道的 Rust 代码没删，探针 3 和
+                // 还原测试还在用它；只去掉了状态页上这两个按钮和显示区。
                 // 探针 3：把表真正存下来。走探针 2 同一条 AirTraffic 拷回
                 // 通道，只试 v61（真机已证实是 61），DB 和 -wal 存进安装器
                 // 自己的 Documents/posterboard-table，文件名带时间、不覆盖；
@@ -548,6 +512,46 @@ private struct StatusLogPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
+                // 列出表里 poster 有哪几行：读手机里已存的那张表
+                //（merged.sqlite3，没有就拿最新存下来的那份），不重新拷。
+                // 只读表，不写它；有哪个字段就列哪个，没有就不编。
+                Text("表里 poster 有哪几行（只读）").font(.headline)
+                Text("点一下读一次已存下来的那张表：poster 表每一行的 posterId、描述符、名字（有哪个字段列哪个），写进下面日志框。只读，不写表、不重新拷。")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack {
+                    Button("列出表里 poster 有哪几行") {
+                        Task { await runListRows() }
+                    }.disabled(listing)
+                    if listing { ProgressView() }
+                }.buttonStyle(.bordered)
+                if !listResult.isEmpty {
+                    Text(listResult).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                // 还原测试：改表还原，把一张壁纸真正装进图库。
+                // 拿表 → 插一行 → 写文件 → 写回表 → 提示重启手机。
+                // 用的就是导入页当前选中的那个包；没选中包就直接报，
+                // 不编默认包。不走备份路的 iOS 27 门控（这次就是要在
+                // 27.0.1 上试）；直写、备份、探针 3 都不动。
+                Text("还原测试：装一张壁纸（改表）").font(.headline)
+                Text("点一下试一次：拿表、插一行、把选中包的文件写进 PosterBoard 容器、把改好的表写回去。跑完重启手机，再去图库长按看有没有这张壁纸。完整结果写进下面日志框，长按可复制。")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack {
+                    Button("还原测试：装一张壁纸（改表）") {
+                        Task { await runRestoreTest() }
+                    }.disabled(restoring)
+                    if restoring { ProgressView() }
+                }.buttonStyle(.bordered)
+                if !restoreResult.isEmpty {
+                    Text(restoreResult).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
                 Text("安装日志（可长按复制）").font(.headline)
                 Text(InstallLog.shared.tail(60))
                     .font(.system(.caption, design: .monospaced))
@@ -557,123 +561,6 @@ private struct StatusLogPage: View {
             .padding()
             .navigationTitle("应用失败异常诊断日志")
         }
-    }
-
-    /// 只读探针：走配对 + 隧道调一次 al_probe_posterboard_container。
-    /// vend 只调一次（Rust 侧单次调用，不重试）；结果写进安装日志框，
-    /// 本页只留一行结论。FFI 会阻塞，放后台线程跑。
-    private func runProbe() async {
-        guard !probing else { return }
-        probing = true
-        defer { probing = false }
-        guard state.hasPairingFile else {
-            probeResult = "探针没跑：没有配对记录文件，先在配对记录页生成或导入一个。"
-            return
-        }
-        probeResult = "正在读 PosterBoard 容器…"
-        let pairingPath = state.pairingFileURL.path
-        let (rc, json, error) = await Task.detached(priority: .userInitiated) {
-            "10.7.0.1".withCString { _ = al_set_target_host($0) }
-            var outJson: UnsafeMutablePointer<CChar>? = nil
-            var outError: UnsafeMutablePointer<CChar>? = nil
-            let rc = pairingPath.withCString { pairC in
-                al_probe_posterboard_container(pairC, airliftLogCallback, nil, &outJson, &outError)
-            }
-            var json: String? = nil
-            var error: String? = nil
-            if let p = outJson { json = String(cString: p); al_string_free(p) }
-            if let p = outError { error = String(cString: p); al_string_free(p) }
-            return (rc, json, error)
-        }.value
-        if rc == 0, let json {
-            probeResult = Self.probeSummary(json: json)
-        } else {
-            // 通道失败：写设备报的原文，不写含糊话。
-            let detail = error ?? "未知错误"
-            probeResult = "探针失败（通道不通）：\(detail)"
-            InstallLog.shared.append("probe: FAILED \(detail)")
-        }
-    }
-
-    /// 探针 JSON 宽松解析成一行中文结论；解析不出就把 JSON 原文贴出来。
-    private static func probeSummary(json: String) -> String {
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            InstallLog.shared.append("probe: json=\(json)")
-            return "探针跑完了，但结果解析不出来，原文已写进日志框：\(json)"
-        }
-        let versions = (obj["store_versions"] as? [String]) ?? []
-        let versionText = versions.isEmpty ? "没列出版本号" : "store 版本：\(versions.joined(separator: "、"))"
-        let dbExists = (obj["db_exists"] as? Bool) ?? false
-        let dbSize = (obj["db_size"] as? NSNumber)?.intValue
-        let isSqlite = (obj["db_is_sqlite"] as? Bool) ?? false
-        let summary: String
-        if dbExists {
-            summary = "探针成功：容器能打开，\(versionText)，表找到了，大小 \(dbSize.map { "\($0) 字节" } ?? "未知")，SQLite 文件头\(isSqlite ? "对得上" : "对不上")。完整结果见下面日志框。"
-        } else {
-            summary = "探针跑完了：容器能打开，\(versionText)，但没找到那张表。完整结果见下面日志框。"
-        }
-        InstallLog.shared.append("probe: \(summary)")
-        return summary
-    }
-
-    /// 只读探针 2：走配对 + 隧道调一次 al_probe_posterboard_export。
-    /// 61、62 各试一次，成了再试那一版的 -wal；只在内存里验文件头，
-    /// 不存盘。结果写进安装日志框，本页只留一行结论。FFI 会阻塞，
-    /// 放后台线程跑。
-    private func runProbe2() async {
-        guard !probing2 else { return }
-        probing2 = true
-        defer { probing2 = false }
-        guard state.hasPairingFile else {
-            probe2Result = "探针 2 没跑：没有配对记录文件，先在配对记录页生成或导入一个。"
-            return
-        }
-        probe2Result = "正在拷回 PosterBoard 的表…"
-        let pairingPath = state.pairingFileURL.path
-        let (rc, json, error) = await Task.detached(priority: .userInitiated) {
-            "10.7.0.1".withCString { _ = al_set_target_host($0) }
-            var outJson: UnsafeMutablePointer<CChar>? = nil
-            var outError: UnsafeMutablePointer<CChar>? = nil
-            let rc = pairingPath.withCString { pairC in
-                al_probe_posterboard_export(pairC, airliftLogCallback, nil, &outJson, &outError)
-            }
-            var json: String? = nil
-            var error: String? = nil
-            if let p = outJson { json = String(cString: p); al_string_free(p) }
-            if let p = outError { error = String(cString: p); al_string_free(p) }
-            return (rc, json, error)
-        }.value
-        if rc == 0, let json {
-            probe2Result = Self.probe2Summary(json: json)
-        } else {
-            // 通道失败：写设备报的原文，不写含糊话。
-            let detail = error ?? "未知错误"
-            probe2Result = "探针 2 失败（通道不通）：\(detail)"
-            InstallLog.shared.append("probe2: FAILED \(detail)")
-        }
-    }
-
-    /// 探针 2 JSON 宽松解析成一行中文结论；解析不出就把 JSON 原文贴出来。
-    private static func probe2Summary(json: String) -> String {
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            InstallLog.shared.append("probe2: json=\(json)")
-            return "探针 2 跑完了，但结果解析不出来，原文已写进日志框：\(json)"
-        }
-        let success = (obj["success"] as? Bool) ?? false
-        let dbVersion = (obj["db_version"] as? String) ?? "未知"
-        let dbSize = (obj["db_size"] as? NSNumber)?.intValue
-        let dbIsSqlite = (obj["db_is_sqlite"] as? Bool) ?? false
-        let walOk = (obj["wal_is_wal"] as? Bool) ?? false
-        let summary: String
-        if success && dbIsSqlite {
-            summary = "探针 2 成功：表拷回来了，store 版本 \(dbVersion)，大小 \(dbSize.map { "\($0) 字节" } ?? "未知")，SQLite 文件头对得上，-wal \(walOk ? "也拷回来了" : "没拷回来")。完整结果见下面日志框。"
-        } else {
-            summary = "探针 2 跑完了：AirTraffic 拷回没拿到可用的表（61、62 都没成）。完整结果见下面日志框。"
-        }
-        InstallLog.shared.append("probe2: \(summary)")
-        return summary
     }
 
     /// 探针 3：走配对 + 隧道调一次 al_probe_posterboard_save。
@@ -726,6 +613,46 @@ private struct StatusLogPage: View {
             probe3Result = "探针 3 失败（通道不通）：\(detail)"
             InstallLog.shared.append("probe3: FAILED \(detail)")
         }
+    }
+
+    /// 列出表里 poster 有哪几行：读已存下来的那张表，不重新拷。
+    /// 只读表，不写它；SQLite 活会阻塞，放后台线程跑。
+    private func runListRows() async {
+        guard !listing else { return }
+        listing = true
+        defer { listing = false }
+        listResult = "正在读已存的表…"
+        let (summary, json) = await Task.detached(priority: .userInitiated) {
+            RestoreTest.listPosterRows()
+        }.value
+        InstallLog.shared.append("listrows: json=\(json)")
+        listResult = summary + "完整结果见下面日志框。"
+    }
+
+    /// 还原测试：拿表 → 插一行 → 写文件 → 写回表 → 提示重启。
+    /// 用的就是导入页当前选中的那个包；没选中包就直接报，不编默认包。
+    /// FFI 和 SQLite 都会阻塞，放后台线程跑；跑完提示重启手机。
+    private func runRestoreTest() async {
+        guard !restoring else { return }
+        restoring = true
+        defer { restoring = false }
+        guard state.hasPairingFile else {
+            restoreResult = "还原测试没跑：没有配对记录文件，先在配对记录页生成或导入一个。"
+            return
+        }
+        guard let packageData = state.packageData else {
+            restoreResult = "还原测试没跑：没选中包，先去导入页选一个 .tendies 包再点还原测试。"
+            return
+        }
+        restoreResult = "正在跑还原测试：拿表、插行、写文件、写回表…"
+        let pairingPath = state.pairingFileURL.path
+        let outcome = await Task.detached(priority: .userInitiated) {
+            RestoreTest.runRestore(packageData: packageData, pairingPath: pairingPath)
+        }.value
+        if outcome.success, let uuid = outcome.descriptorUUID {
+            state.installHistory.append(uuid)
+        }
+        restoreResult = outcome.summary
     }
 
     /// 探针 3 JSON 宽松解析成一行中文结论；表存下来后先合库验库，
