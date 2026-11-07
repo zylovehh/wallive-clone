@@ -15,6 +15,11 @@
 //!                            sqlite (+ -wal) out to Media and read it
 //!                            back over AFC; reports size / SHA-256 /
 //!                            header checks, saves nothing
+//!   al_probe_posterboard_save — probe 3: same export channel, v61
+//!                            only, but the recovered DB + -wal are
+//!                            saved under the caller-supplied dest dir
+//!                            (Documents/posterboard-table) with a
+//!                            timestamped name, re-read and SHA-verified
 //!   al_posterboard_refresh — DVT refresh: SIGKILL PosterBoard, wait for
 //!                            respawn, verify with a fresh client
 //!   al_backup_fetch_posterboard — targeted backup of the PosterBoard
@@ -281,6 +286,45 @@ pub unsafe extern "C" fn al_probe_posterboard_export(
         Err(e) => {
             if !out_error.is_null() {
                 *out_error = ffi_util::cstr(format!("Rust panic in al_probe_posterboard_export: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Read-only AirTraffic export probe of the PosterBoard sqlite, with
+/// save (probe 3). See exploit::probe_posterboard_save. Only store
+/// version 61 is tried (probe 2 proved it live on 27.0.1). Returns 0
+/// with out_json set whenever the channel ran (even when nothing was
+/// saved — the JSON tells the truth); 1 with out_error on channel
+/// failure (tunnel / AFC connect) or a missing/uncreatable save
+/// directory, with the device's own error text verbatim. Writes
+/// nothing into the PosterBoard container; the saved files land in the
+/// app's own Documents/posterboard-table directory. `pairing_path` may
+/// be null (falls back to "wallpaper_pairing.plist"); `dest_dir` has no
+/// silent fallback (Swift always passes it); an empty `stamp` falls
+/// back to unix seconds so file names still never collide.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_probe_posterboard_save(
+    pairing_path: *const c_char,
+    dest_dir: *const c_char,
+    stamp: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exploit::probe_posterboard_save(pairing_path, dest_dir, stamp, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_probe_posterboard_save: {e:?}"));
             }
             1
         }

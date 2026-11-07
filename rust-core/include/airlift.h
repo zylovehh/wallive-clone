@@ -171,6 +171,37 @@ int32_t al_probe_posterboard_export(const char *pairing_path,
                                     char **out_json,
                                     char **out_error);
 
+// Read-only AirTraffic export probe of the PosterBoard sqlite, with
+// save (probe 3): same channel as al_probe_posterboard_export, but
+// only store version 61 is tried (probe 2 proved it live on 27.0.1),
+// and the recovered DB + -wal are saved under `dest_dir` (the app's
+// own Documents/posterboard-table, passed in by Swift) with a
+// timestamped name, then re-read and SHA-verified. The -wal is NOT
+// merged here — Swift merges it with system SQLite3 on a copy.
+// Writes nothing into the PosterBoard container. Returns 0 with
+// out_json set whenever the channel ran (even when nothing was saved —
+// the JSON tells the truth); 1 with out_error on channel failure
+// (tunnel / AFC connect) or a missing/uncreatable save directory.
+// out_json format:
+//   {"channel": "airtraffic_export_save", "container": "...",
+//    "attempts": [{"version": "61", "kind": "db"|"wal",
+//    "path": "...", "ok": bool, "size": N|null, "sha256": "..."|null,
+//    "is_sqlite": bool, "is_wal": bool, "error": "..."|null}, ...],
+//    "db_version": "61", "db_size": N|null, "db_sha256": "..."|null,
+//    "db_is_sqlite": bool, "saved_db_path": "..."|null,
+//    "saved_db_size": N|null, "saved_db_sha256": "..."|null,
+//    "saved_db_ok": bool, "wal_size": N|null, "wal_sha256": "..."|null,
+//    "wal_is_wal": bool, "saved_wal_path": "..."|null,
+//    "saved_wal_size": N|null, "saved_wal_sha256": "..."|null,
+//    "saved_wal_ok": bool, "success": bool}
+int32_t al_probe_posterboard_save(const char *pairing_path,
+                                  const char *dest_dir,
+                                  const char *stamp,
+                                  ALLogCallback log_cb,
+                                  void *ctx,
+                                  char **out_json,
+                                  char **out_error);
+
 // DVT poster refresh: SIGKILL PosterBoard (signal 9) and wait for launchd
 // to respawn it, so the gallery re-reads the extension store. Returns 0
 // with out_json set whenever the refresh ran (even when refresh_confirmed
