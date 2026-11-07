@@ -263,11 +263,6 @@ private struct ImportDetailView: View {
                         Text(modeHintText)
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        if effectiveMode == .backup {
-                            Text("备份还原走改表还原（拿表、插行、写回），不用整机备份。")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
                     }
                     HStack {
                         Spacer()

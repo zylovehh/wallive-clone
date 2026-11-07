@@ -72,14 +72,14 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
             return "这次将用：直写（iOS 27，适用 iOS 26.2–27.2 beta 2）。"
         case (.backup, .backup):
             if deviceVersion.hasPrefix("27.2") {
-                return "这次将用：备份还原（iOS 27.2）。"
+                return "这次将用：备份 27.2（支持 iOS 27.2 及以上）。"
             }
             // 27.0.1 上手动选备份：走改表还原（不用整机备份），不用只等 27.2。
-            return "这次将用：备份还原（iOS 27.2）。"
+            return "这次将用：备份 27.2（支持 iOS 27.2 及以上）。"
         default:
             // 正常走不到这里（强制选的模式就是返回的模式）；兜底也按
             // 界面上的叫法写（带 iOS 版本号），不用 `mode.title`（那是不带版本号的"备份还原"）。
-            return "这次将用：\(mode == .backup ? "备份还原（iOS 27.2）" : "直写（iOS 27）")。"
+            return "这次将用：\(mode == .backup ? "备份 27.2（支持 iOS 27.2 及以上）" : "直写（iOS 27）")。"
         }
     }
 }
