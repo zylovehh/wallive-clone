@@ -695,6 +695,18 @@ impl MobileBackup2Client {
             "FactoryInfo":? factory_info,
             // Special cases like Unback/EnableCloudBackup are handled by caller if needed
         });
+        // #32: 运行时证明请求里到底带了什么（卡在 10% 时的诊断证据）。
+        // 只记键名，不记内容。
+        debug!("send_request {} keys: {:?}", request, dict.keys().collect::<Vec<_>>());
+        match dict.get("FactoryInfo") {
+            Some(plist::Value::Dictionary(fi)) => match fi.get("Applications") {
+                Some(plist::Value::Dictionary(apps)) => {
+                    debug!("FactoryInfo.Applications keys: {:?}", apps.keys().collect::<Vec<_>>())
+                }
+                _ => debug!("FactoryInfo present but no Applications dict"),
+            },
+            _ => debug!("FactoryInfo absent from request"),
+        }
         self.send_device_link_message(request, Some(dict)).await
     }
 
