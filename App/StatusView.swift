@@ -3,6 +3,7 @@
 
 import SwiftUI
 import UIKit
+import AirliftFFI
 
 /// 液态透明按钮样式：iOS 26+ 用透明系统玻璃，低版本回退半透明白胶囊。
 private struct GlassButtonStyle: ButtonStyle {
@@ -470,12 +471,34 @@ private struct StatusHistoryPage: View {
 
 private struct StatusLogPage: View {
     @EnvironmentObject private var state: AppState
+    @State private var probing = false
+    @State private var probeResult = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if !state.statusMessage.isEmpty {
                     Text(state.statusMessage).foregroundStyle(.red).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                // 探针：只读读一次 PosterBoard 容器（HouseArrest vend_container），
+                // 看容器能不能打开、表在不在、store 版本号是多少。
+                // 只读：不写任何文件、不改任何表、不触发安装、不触发备份、不重启。
+                // 失败也写清楚原文（比如 InstallationLookupFailed），不写含糊话。
+                Text("PosterBoard 容器探针（只读）").font(.headline)
+                Text("点一下读一次：配对 + 隧道通不通、容器能不能打开、里面有没有那张表、store 版本号是多少。只读，不写东西。完整结果写进下面日志框，长按可复制。")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack {
+                    Button("探针：读 PosterBoard 容器") {
+                        Task { await runProbe() }
+                    }.disabled(probing)
+                    if probing { ProgressView() }
+                }.buttonStyle(.bordered)
+                if !probeResult.isEmpty {
+                    Text(probeResult).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
@@ -488,5 +511,63 @@ private struct StatusLogPage: View {
             .padding()
             .navigationTitle("应用失败异常诊断日志")
         }
+    }
+
+    /// 只读探针：走配对 + 隧道调一次 al_probe_posterboard_container。
+    /// vend 只调一次（Rust 侧单次调用，不重试）；结果写进安装日志框，
+    /// 本页只留一行结论。FFI 会阻塞，放后台线程跑。
+    private func runProbe() async {
+        guard !probing else { return }
+        probing = true
+        defer { probing = false }
+        guard state.hasPairingFile else {
+            probeResult = "探针没跑：没有配对记录文件，先在配对记录页生成或导入一个。"
+            return
+        }
+        probeResult = "正在读 PosterBoard 容器…"
+        let pairingPath = state.pairingFileURL.path
+        let (rc, json, error) = await Task.detached(priority: .userInitiated) {
+            "10.7.0.1".withCString { _ = al_set_target_host($0) }
+            var outJson: UnsafeMutablePointer<CChar>? = nil
+            var outError: UnsafeMutablePointer<CChar>? = nil
+            let rc = pairingPath.withCString { pairC in
+                al_probe_posterboard_container(pairC, airliftLogCallback, nil, &outJson, &outError)
+            }
+            var json: String? = nil
+            var error: String? = nil
+            if let p = outJson { json = String(cString: p); al_string_free(p) }
+            if let p = outError { error = String(cString: p); al_string_free(p) }
+            return (rc, json, error)
+        }.value
+        if rc == 0, let json {
+            probeResult = Self.probeSummary(json: json)
+        } else {
+            // 通道失败：写设备报的原文，不写含糊话。
+            let detail = error ?? "未知错误"
+            probeResult = "探针失败（通道不通）：\(detail)"
+            InstallLog.shared.append("probe: FAILED \(detail)")
+        }
+    }
+
+    /// 探针 JSON 宽松解析成一行中文结论；解析不出就把 JSON 原文贴出来。
+    private static func probeSummary(json: String) -> String {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            InstallLog.shared.append("probe: json=\(json)")
+            return "探针跑完了，但结果解析不出来，原文已写进日志框：\(json)"
+        }
+        let versions = (obj["store_versions"] as? [String]) ?? []
+        let versionText = versions.isEmpty ? "没列出版本号" : "store 版本：\(versions.joined(separator: "、"))"
+        let dbExists = (obj["db_exists"] as? Bool) ?? false
+        let dbSize = (obj["db_size"] as? NSNumber)?.intValue
+        let isSqlite = (obj["db_is_sqlite"] as? Bool) ?? false
+        let summary: String
+        if dbExists {
+            summary = "探针成功：容器能打开，\(versionText)，表找到了，大小 \(dbSize.map { "\($0) 字节" } ?? "未知")，SQLite 文件头\(isSqlite ? "对得上" : "对不上")。完整结果见下面日志框。"
+        } else {
+            summary = "探针跑完了：容器能打开，\(versionText)，但没找到那张表。完整结果见下面日志框。"
+        }
+        InstallLog.shared.append("probe: \(summary)")
+        return summary
     }
 }

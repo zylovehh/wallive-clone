@@ -26,9 +26,11 @@ workflows:
         script: xcodebuild -resolvePackageDependencies -project WalliveClone.xcodeproj -scheme WalliveClone
       - name: Stamp build number into version tag
         script: |
-          # 序号从 01 重新起：31 号是旧计数最后一版，32 号起新计数 01、02…。
-          SEQ=$(printf "%02d" $((BUILD_NUMBER - 31)))
-          TAG="V6·$(TZ=Asia/Kuala_Lumpur date +%m%d)-${SEQ}号"
+          # 探针版固定写 V6·1107-探针，免得和已停的 03 号（直写=iOS27、备份还原=iOS27.2）
+          # 撞号。下次编 03 时把下面这行改回 SEQ 公式：
+          #   SEQ=$(printf "%02d" $((BUILD_NUMBER - 31)))
+          #   TAG="V6·$(TZ=Asia/Kuala_Lumpur date +%m%d)-${SEQ}号"
+          TAG="V6·1107-探针"
           printf 'import Foundation\n\nenum BuildInfo {\n    static let tag = "%s"\n}\n' "$TAG" > App/BuildInfo.swift
           cat App/BuildInfo.swift
       - name: Archive (unsigned)
