@@ -40,6 +40,26 @@ struct StatusView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    // 作者入口：圆形头像 + 名字，点进去是作者页（抖音主页）。
+                    NavigationLink(destination: AuthorPage()) {
+                        HStack {
+                            Image("AuthorAvatar")
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 44, height: 44)
+                                .clipShape(Circle())
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("作者").font(.headline)
+                                Text("王炸奓").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
                     NavigationLink(destination: StatusVPNPage(vpn: vpn, host: $host, portText: $portText)) {
                         HStack {
                             Image(systemName: "network").foregroundStyle(.blue).font(.title3)
@@ -494,4 +514,42 @@ private struct StatusLogPage: View {
         }
     }
 
+}
+
+/// 作者页：大圆头像 + 名字王炸奓 + 蓝色“抖音主页”按钮，点按钮跳用户自己的抖音主页。
+/// 二维码那块用户没给图，先不做。
+private struct AuthorPage: View {
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                Image("AuthorAvatar")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 140, height: 140)
+                    .clipShape(Circle())
+                Text("王炸奓")
+                    .font(.title2.bold())
+                Button {
+                    if let url = URL(string: "https://v.douyin.com/cXKCgf4lvc8/") {
+                        openURL(url)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "music.note")
+                        Text("抖音主页")
+                    }
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.blue, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+            .navigationTitle("作者")
+        }
+    }
 }
