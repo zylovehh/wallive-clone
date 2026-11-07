@@ -197,11 +197,11 @@ private struct ImportDetailView: View {
     }
 
     /// 核对区折叠时只显示的一行摘要：描述符短号 + 注入/偏好/登记/刷新各一词。
-    /// 备份路没有读回核对 / 登记 / 进程刷新那几项，折叠行只写模式 + 重启提醒。
+    /// 备份路没有读回核对 / 登记那几项，折叠行只写模式；要不要重启看下面的结论行。
     private var verifySummaryLine: String {
         guard let report = installReport else { return "尚未安装，暂无核对结果。" }
         if report.mode == .backup {
-            return "描述符 \(String(report.descriptorUUID.prefix(8))) · 备份还原 · 需重启手机"
+            return "描述符 \(String(report.descriptorUUID.prefix(8))) · 备份还原"
         }
         let inject = report.injectResults.allSatisfy(\.ok) ? "注入成功" : "注入有失败"
         let prefs = report.preferencesWritten ? "偏好成功" : "偏好未写入"
@@ -261,7 +261,7 @@ private struct ImportDetailView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         if effectiveMode == .backup {
-                            Text("备份还原最后要重启手机，装之前会先做一份保护性备份。")
+                            Text("备份还原走改表还原（拿表、插行、写回），不用整机备份；刷新确认了不用重启，没确认再重启一次。")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -474,8 +474,8 @@ private struct ImportDetailView: View {
             installReport = report
             installLogText = InstallLog.shared.tail(60)
             if report.mode == .backup {
-                // 备份路没有读回核对 / 登记 / 进程刷新那几项：还原的 completed
-                // 就是验真，偏好不写、进程不刷，壁纸进图库靠重启手机。
+                // 备份路现在也写偏好、也调刷新（RestoreTest 里做的）；读回核对和
+                // 登记这两项没有，核对看日志框。要不要重启手机看 backupSummary。
                 installResult = (report.backupSummary ?? "备份还原已完成。")
                     + "描述符 \(report.descriptorUUID)。"
             } else {

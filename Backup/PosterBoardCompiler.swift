@@ -109,7 +109,8 @@ private struct PosterBoardBuilder {
                     }
                     configs.append(PosterBoardConfigItem(uuid: folderName,
                                                          extensionID: components[6],
-                                                         setSelected: true))
+                                                         setSelected: true,
+                                                         numericId: isMercury(restorePath) ? nil : currentID))
                 }
 
                 let destination = joined(restorePath, folderName)

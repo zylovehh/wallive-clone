@@ -1,22 +1,18 @@
 import Foundation
 
-/// 备份模式的完整安装流程：包数据 + 配对文件 → 还原回去的壁纸。
+/// 备份模式的正式安装流程：改表还原（拿表 → 插行 → 写 configurations →
+/// 注入 descriptors → 写偏好 → 写回表 → 刷新）。
 ///
-/// 一条路走到底，中间任何一步失败就停，报错说清死在哪一步，
-/// 不要继续往下走。成功返回后调用方要告诉用户重启手机——
-/// 还原完必须重启一次，壁纸才会进图库（`RestoreRunner` 也不重启）。
+/// 旧的那套 MobileBackup2 定点备份（取 PosterBoard 备份 → 清单剪裁 → 还原）
+/// 已证实死在 27.0.1 上（手机根本不认 Applications 定点，备的永远是整台），
+/// 不再走。新的这套就是原来状态页上还原测试跑通的那套：表走 AirTraffic
+/// 拷回通道拿（探针 3 那条），文件走直写那条 AirTraffic 写通道，
+/// 描述符和偏好照直装补上，表写回后调刷新；刷新确认了不用重启手机。
 ///
-/// 步骤（和 `backup-swift/REPORT.md` 的调用链一致）：
-/// 1. 清掉旧的备份目录、备好取表目录（占位 Manifest.db，满备份）
-/// 2. Rust 只备 PosterBoard 一个容器
-/// 3. 从取回来的备份里取出商店数据库（WAL 合并进去）
-/// 4. 解包、编还原包（描述符走 `configurations/<新 UUID>`，不是 `descriptors/`）
-/// 5. 往商店数据库里加行（posterId 取 MAX+1）
-/// 6. 清单剪裁 + 注入（数据库 + 0 字节 -wal/-shm 一起送）
-/// 7. Rust 还原，验 `completed`
-///
-/// 只支持 iOS 27：占位 Manifest.db、sqlite 清单、WAL 商店全是 27 的
-/// 形状；iOS 26 那路（MBDB）没移植，来了直接报错，不硬走。
+/// 不再有旧的 iOS 27 门控：那是给旧备份流的（占位 Manifest.db、sqlite 清单
+/// 全是 27 的备份形状）；新流程不用 MobileBackup2，门控不在这里——
+/// 走哪条路，由 AppState 按设备版本解析（直写被藏时自动切备份）。
+/// 也不再要设备身份和 zip：容器路径走配对找，编包自己建 ZipFoundationAdapter。
 enum BackupInstallFlow {
 
     /// 备份路装完的结果。`descriptorUUID` 是编包时新编的 UUID
@@ -27,189 +23,40 @@ enum BackupInstallFlow {
         let extensionID: String
         let payloadCount: Int
         let storeSummary: String
-        /// 备份路装完永远要重启手机。
-        let needsReboot = true
+        let preferencesWritten: Bool
+        let refreshConfirmed: Bool
+        /// 描述符注入逐目标结果（主扩展 + 现代扩展）。
+        let injectResults: [InjectResult]
+        /// 刷新没确认才要重启手机。
+        var needsReboot: Bool { !refreshConfirmed }
     }
 
     static func install(packageData: Data,
-                        zip: ZipEditing,
                         pairingPath: String,
-                        deviceInfo: BackupFFI.DeviceInfo,
                         log: @escaping BackupLog = { _ in },
                         onProgress: ((String, Double) -> Void)? = nil) async throws -> Outcome {
-        // 备份路只支持 iOS 27（占位 Manifest.db、sqlite 清单、WAL 商店
-        // 全是 27 的形状）。版本号读不出来也按不支持处理，不猜。
-        let major = deviceInfo.productVersion.split(separator: ".").first
-            .flatMap { Int($0) }
-        guard major == 27 else {
-            throw BackupError("备份路只支持 iOS 27，这台设备是 iOS "
-                + "\(deviceInfo.productVersion.isEmpty ? "未知版本" : deviceInfo.productVersion)"
-                + "，走不了这条路。")
+        onProgress?("正在取表、改表、写回…", 0.10)
+        log("备份还原：走改表还原（拿表 → 插行 → 写文件 → 写回表 → 写偏好 → 刷新），不用整机备份。")
+        // RestoreTest.runRestore 是同步阻塞的（FFI + SQLite），放后台线程跑；
+        // 取消只能在跑之前和跑完之后响应，跑中间停不下来（阻塞调用中途不停）。
+        try Task.checkCancellation()
+        let outcome = await Task.detached(priority: .userInitiated) {
+            RestoreTest.runRestore(packageData: packageData, pairingPath: pairingPath)
+        }.value
+        try Task.checkCancellation()
+        guard outcome.success else {
+            throw BackupError(outcome.summary)
         }
-
-        let fm = FileManager.default
-        // 29 号：备份目录固定（Documents 下），不再每次新建 UUID 目录。
-        // 失败/取消都留着，下次接着取；真实清单在就不再重置。
-        // work 是每装一次的草稿（取出的商店、缝合的库），每次开头清掉；
-        // 设备目录（<backupRoot>/<udid>/，含清单 + 已取到的文件）是增量
-        // 基线，留着。成功也不清——清单就是下次取表的基线。
-        let backupRoot = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("wallive-clone-backup")
-        let workDir = backupRoot.appendingPathComponent("work")
-        try? fm.removeItem(at: workDir)
-
-        // 连续两次取表失败就强制全量重取（清单可能坏了），成功一次清零。
-        // 用户点的停止不算失败——停了下次还能接着取。
-        let failureKey = "walliveBackupFetchConsecutiveFailures"
-        let failures = UserDefaults.standard.integer(forKey: failureKey)
-        let forceFull = failures >= 2
-        let deviceDir = backupRoot.appendingPathComponent(deviceInfo.udid)
-        let hasReal = !forceFull && HostManifests.hasRealManifest(deviceDir: deviceDir)
-
-        do {
-            // 1. 备好取表目录：有真实清单就接着取（不重置、不写空占位表）；
-            // 没有就全量（重置 + 占位 Manifest.db）。
-            onProgress?("正在准备备份目录…", 0.05)
-            log("备份目录：\(backupRoot.path)")
-            if hasReal {
-                log("已有真实清单，接着上次继续取（不重置）")
-                try HostManifests.ensure(deviceDir: deviceDir, udid: deviceInfo.udid,
-                                         ios27: true, isFullBackup: false, applications: nil)
-            } else {
-                if forceFull { log("已连续失败 \(failures) 次，强制全量重取") }
-                try HostManifests.reset(backupRoot: backupRoot, udid: deviceInfo.udid)
-                try PosterBoardBackup.prepareFetchDirectory(backupRoot: backupRoot,
-                                                           udid: deviceInfo.udid, log: log)
-            }
-
-            // 2. Rust 只备 PosterBoard 一个容器。
-            onProgress?("正在取 PosterBoard 备份…", 0.10)
-            let fetchStart = Date()
-            var lastBytes: UInt64 = 0
-            var lastTick = fetchStart
-            let fetch: BackupFFI.FetchResult
-            do {
-                fetch = try await BackupFFI.fetchPosterBoard(
-                    pairingPath: pairingPath, backupRoot: backupRoot, log: log
-                ) { detail in
-                    guard detail.percent >= 0 else { return }
-                    let now = Date()
-                    let elapsed = now.timeIntervalSince(fetchStart)
-                    let delta = detail.bytesDone >= lastBytes ? detail.bytesDone - lastBytes : 0
-                    let dt = now.timeIntervalSince(lastTick)
-                    let speed = dt > 0 ? Double(delta) / dt : 0
-                    lastBytes = detail.bytesDone
-                    lastTick = now
-                    let step = "正在取备份… \(detail.filesDone) 个文件 · \(byteText(detail.bytesDone)) · \(speedText(speed))"
-                    onProgress?(step, 0.10 + 0.35 * detail.percent / 100.0)
-                    log("取备份 \(Int(detail.percent))%：\(detail.filesDone) 个文件，\(byteText(detail.bytesDone))，\(speedText(speed))，已用 \(Int(elapsed)) 秒")
-                }
-                UserDefaults.standard.set(0, forKey: failureKey)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                UserDefaults.standard.set(failures + 1, forKey: failureKey)
-                throw error
-            }
-            log("取回备份：留了 \(fetch.keptFiles) 个文件，筛掉 \(fetch.discardedFiles) 个")
-
-            // 3. 从取回来的备份里取出商店数据库（WAL 合并进去）。
-            onProgress?("正在取商店数据库…", 0.50)
-            let storeDir = workDir.appendingPathComponent("store")
-            let fetched = try PosterBoardBackup.extractStore(from: fetch.backupDir,
-                                                             to: storeDir, log: log)
-            log("商店数据库已取出（结构版本 \(fetched.structureVersion)，\(fetched.summary)）")
-
-            // 4. 解包、编还原包。
-            onProgress?("正在解包…", 0.58)
-            let installer = DescriptorInstaller(zip: zip)
-            let stage: URL
-            do {
-                (stage, _) = try installer.stage(packageData)
-            } catch let error as TendiesPackage.Error {
-                // TendiesPackage.Error 没带中文说明，这里按 case 翻译。
-                switch error {
-                case .notATendiesPackage:
-                    throw BackupError("解包失败（第 4 步）：这不是一个 .tendies / .wallive 包。")
-                case .missingWallpaperDirectory:
-                    throw BackupError("解包失败（第 4 步）：包里找不到壁纸目录，结构不对。")
-                case .missingWallpaperPlist:
-                    throw BackupError("解包失败（第 4 步）：包里找不到 Wallpaper.plist，结构不对。")
-                }
-            } catch {
-                throw BackupError("解包失败（第 4 步）：这个包打不开，\(error.localizedDescription)")
-            }
-            onProgress?("正在编还原包…", 0.64)
-            let compiled = try PosterBoardCompiler.compile(
-                stageDirectory: stage,
-                structureVersion: fetched.structureVersion, log: log)
-            guard !compiled.configs.isEmpty else {
-                throw BackupError("包里没找到描述符（`descriptors/` 目录），编不出还原包。"
-                    + "这个包可能是老格式，备份路只接现代格式的包。")
-            }
-            log("编包完成：\(compiled.payloads.count) 个载荷，\(compiled.configs.count) 张壁纸")
-
-            // 5. 往商店数据库里加行（在拷贝上改，源文件不动）。
-            onProgress?("正在往商店里加行…", 0.72)
-            let stitchDir = workDir.appendingPathComponent("stitch")
-            let staged = try PosterBoardStore.stitch(database: fetched.database,
-                                                     items: compiled.configs,
-                                                     workingDirectory: stitchDir)
-
-            // 6. 清单剪裁 + 注入。数据库和 0 字节 -wal/-shm 一起送：
-            // 只换主文件、留着旧 -wal，下次打开会把旧帧重放到新库上，
-            // 商店直接报"database disk image is malformed"。
-            onProgress?("正在把还原包写进清单…", 0.78)
-            var payloads = compiled.payloads
-            let storeRelativePath = PosterBoard.storePath(fetched.structureVersion)
-                + "/" + PosterBoard.databaseFileName
-            payloads.append(BackupPayload(domain: PosterBoard.domain,
-                                          relativePath: storeRelativePath, source: staged))
-            for suffix in ["-wal", "-shm"] {
-                payloads.append(BackupPayload(domain: PosterBoard.domain,
-                                              relativePath: storeRelativePath + suffix,
-                                              contents: Data()))
-            }
-            try await BackupInjector.pruneAndInject(
-                backupRoot: backupRoot, udid: deviceInfo.udid,
-                pairingPath: pairingPath, payloads: payloads,
-                posterBoardSnapshot: nil, prune: true, ios27: true, log: log)
-
-            // 7. Rust 还原，验 completed。还原本体不重启。
-            onProgress?("正在还原…", 0.86)
-            try await RestoreRunner.runRestore(backupRoot: backupRoot,
-                                               pairingPath: pairingPath, log: log)
-            onProgress?("还原完成", 1.0)
-
-            let first = compiled.configs[0]
-            return Outcome(descriptorUUID: first.uuid,
-                           extensionID: first.extensionID,
-                           payloadCount: payloads.count,
-                           storeSummary: fetched.summary)
-        } catch let error as BackupError {
-            // 已经是中文的步骤错误，原样抛，调用方直接显示。
-            throw error
-        } catch is CancellationError {
-            // 用户点了停止：原样往上抛，别包成"备份安装失败"。
-            throw CancellationError()
-        } catch {
-            // 非 BackupError 的错误（解包、文件读写等）没有中文说明，
-            // 在这里补一句，免得用户只看到系统英文。
-            throw BackupError("备份安装失败：\(error.localizedDescription)")
+        guard let uuid = outcome.descriptorUUID, let ext = outcome.extensionID else {
+            throw BackupError("备份还原跑完了，但没拿到描述符信息，日志里看详情。")
         }
-    }
-
-    /// 字节数写成 "12.3 MB" / "45 KB" / "900 字节"。
-    private static func byteText(_ bytes: UInt64) -> String {
-        if bytes >= 1_000_000 { return String(format: "%.1f MB", Double(bytes) / 1_000_000.0) }
-        if bytes >= 1_000 { return String(format: "%.0f KB", Double(bytes) / 1_000.0) }
-        return "\(bytes) 字节"
-    }
-
-    /// 速度写成 "45 KB/s" / "1.2 MB/s"。
-    private static func speedText(_ bytesPerSecond: Double) -> String {
-        if bytesPerSecond >= 1_000_000 { return String(format: "%.1f MB/s", bytesPerSecond / 1_000_000.0) }
-        if bytesPerSecond >= 1_000 { return String(format: "%.0f KB/s", bytesPerSecond / 1_000.0) }
-        return String(format: "%.0f B/s", bytesPerSecond)
+        onProgress?("备份还原完成", 1.0)
+        return Outcome(descriptorUUID: uuid,
+                       extensionID: ext,
+                       payloadCount: outcome.payloadCount ?? 0,
+                       storeSummary: outcome.storeSummary ?? "",
+                       preferencesWritten: outcome.preferencesWritten,
+                       refreshConfirmed: outcome.refreshConfirmed,
+                       injectResults: outcome.injectResults)
     }
 }

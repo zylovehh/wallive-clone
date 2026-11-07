@@ -1,46 +1,73 @@
 // RestoreTest.swift
-// 还原测试：把一张壁纸真正装进图库，走“改表还原”这条路。
+// 备份还原（改表还原）的引擎：把一张壁纸真正装进图库。
+// 原来是状态页上的还原测试按钮，正式版已接进 BackupInstallFlow；
+// 探针按钮（探针 3、列出行、还原测试）已拿掉，引擎留在这里。
+// 拿表走的还是探针 3 那条 AirTraffic 拷回通道（只读拷回 + 存盘），
+// 按钮没了，通道还在用。
 //
-// 流程（一步断了就停，不继续往下走）：
+// 流程（一步断了就停，不继续往下走；步号和下面代码里的注释一致）：
 //   1. 拿表：走探针 3 同一条 AirTraffic 拷回通道，把 v61 的表和 -wal
 //      拷回来、存进 Documents/posterboard-table（原表先另存一份备份）。
 //      拷不回来就改用已存的表（先找 merged.sqlite3，没有就找最新存
 //      下来的那份），日志里写明用的是已存的表，不假装刚拷回来。
-//   2. 编包：复用备份路的 PosterBoardCompiler.compile，把选中包编成
-//      configurations/<新 UUID> 的载荷（只走 configurations，不写
-//      descriptors——编包器自己写明了，27.0.1 上 descriptors 双写会逼
-//      商店重建、壁纸全没）。
-//   3. 写文件：载荷按父目录分组，走直写那条 AirTraffic 写通道
+//   2. 合 -wal：只改一份副本，原表不动；合完验库。
+//   3. 编包：复用备份路的 PosterBoardCompiler.compile，把选中包编成
+//      configurations/<新 UUID> 的载荷。编包器只产 configurations 载荷，
+//      描述符另外从暂存树注入（见第 4b 步）：编包器注释里那句“descriptors
+//      双写会逼商店重建、壁纸全没”，在 27.0.1 上已被直装证伪——直装每次
+//      都写 descriptors（两到三处），也没重建丢过；真正要防的只是身份重复，
+//      新 UUID 已保证不撞。
+//   4. 写文件：载荷按父目录分组，走直写那条 AirTraffic 写通道
 //     （al_exploit_write_dir，偏好重写已证实它能覆盖已有文件）写进
 //      PosterBoard 容器。
-//   4. 插行：复用备份路的 PosterBoardStore.stitch（照金块 update_sqlite
+//   4b. 写描述符：暂存树里 stage/descriptors/<原 UUID>/ 拷一份副本，把
+//      三个身份字段改成编包器给 configurations 用的同一个数字 id，再用
+//      直装同一条 al_exploit_inject_folder 注入主扩展 + 现代扩展的
+//      descriptors/<新 UUID>（图库描述符通道；直装每次都写，之前还原没写，
+//      加新壁纸页面里就看不到）。Mercury 不改 id，原样注入。
+//   5. 插行：复用备份路的 PosterBoardStore.stitch（照金块 update_sqlite
 //      搬的：posterId 取 MAX+1，三张表先改后插，sqlite_sequence 同步，
 //      0 字节 -wal/-shm 伴生），只改一份拷贝，原表不动。
-//   5. 写回表：新 Rust FFI al_restore_posterboard_writeback 把改好的
+//   6. 写回表：新 Rust FFI al_restore_posterboard_writeback 把改好的
 //      表（+ 0 字节 -wal/-shm）写回商店目录。
-//   6. 提示用户重启手机，再去图库长按看有没有这张壁纸。
+//   7. 写偏好：照直装同一份 PosterBoard 偏好写一次（重载开关），
+//      让系统重载描述符、重新索引。
+//   8. 刷新：调一次 al_posterboard_refresh 杀 PosterBoard 重读；刷新失败
+//      不算错，只是还得重启手机再看。
+//   9. 提示用户去图库长按看有没有这张壁纸（刷新确认了不用重启也行）。
 //
 // 注意：
-// - 不走 BackupInstallFlow 的 iOS 27 门控（那是给 27.2 备份路准备的，
-//   这次就是要在 27.0.1 上试改表还原）；直写、备份、探针 3 都不动。
+// - 正式版已接进 BackupInstallFlow（备份还原那条路）；直写、备份、探针 3
+//   的通道都不动，只是探针按钮拿掉了，引擎留在这里。
 // - SQL 插行不在 Rust 里做：Rust 那个包没有 SQLite 库（没 rusqlite，
 //   离线锁定构建加不进去），插行走 Swift 自带的 SQLite3，和探针 3
 //   合库那套一样；Rust 只做它才能做的事（隧道 + AirTraffic 写回）。
-// - 写回是活机写：PosterBoard 进程还开着旧表，写完请用户尽快重启，
-//   别在重启前又去图库里划来划去；重启后进程重读新表。
-// - 探针 3 之后表里只剩 10 行系统自带的，现在图库本来就是空的，
-//   这次试坏了也不会再丢东西。
+// - 写回是活机写：PosterBoard 进程还开着旧表，写完马上调刷新；刷新
+//   确认了不用重启，没确认再重启手机看。重启前别去图库里划来划去。
 
 import Foundation
 import AirliftFFI
 import SQLite3
 
-/// 还原测试一次跑完的结果（页面只显示 summary 这一行，完整 JSON 进日志框）。
+/// 备份还原一次跑完的结果（页面只显示 summary 这一行，完整 JSON 进日志框）。
+/// 原来是状态页上的还原测试按钮用的，正式版已接进 BackupInstallFlow；
+/// 探针按钮已拿掉，引擎留在这里，正式备份路调 runRestore。
 struct RestoreOutcome {
     let success: Bool
     let summary: String
     let descriptorUUID: String?
     let posterId: Int?
+    /// 正式备份路要用的字段（状态页只看 summary，这些是给 BackupInstallFlow 的）。
+    let extensionID: String?
+    /// configurations 写了几个文件。
+    let payloadCount: Int?
+    /// 插行后的商店摘要。
+    let storeSummary: String?
+    /// 成功时一定是 true（写偏好是必经步骤，失败就停了）。
+    let preferencesWritten: Bool
+    let refreshConfirmed: Bool
+    /// 描述符注入逐目标结果（主扩展 + 现代扩展）。
+    let injectResults: [InjectResult]
     let json: String
 }
 
@@ -61,7 +88,7 @@ enum RestoreTest {
 
     // MARK: - 还原测试
 
-    /// 跑一次还原测试。调用方必须已经在后台线程（FFI 和 SQLite 都会阻塞）。
+    /// 跑一次备份还原。调用方必须已经在后台线程（FFI 和 SQLite 都会阻塞）。
     /// packageData：导入页当前选中的那个包；没选中包就直接报，不编默认包。
     static func runRestore(packageData: Data, pairingPath: String) -> RestoreOutcome {
         var report: [String: Any] = ["channel": "restore_test", "success": false]
@@ -76,15 +103,19 @@ enum RestoreTest {
             InstallLog.shared.append("restore: FAILED \(e.step)：\(e.detail) json=\(jsonString(report))")
             return RestoreOutcome(
                 success: false,
-                summary: "还原测试停在\(e.step)：\(e.detail)原来的表还在 Documents/posterboard-table 里，没动。完整结果见下面日志框。",
-                descriptorUUID: nil, posterId: nil, json: jsonString(report))
+                summary: "备份还原停在\(e.step)：\(e.detail)原来的表还在 Documents/posterboard-table 里，没动。完整结果见下面日志框。",
+                descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false,
+                injectResults: [], json: jsonString(report))
         } catch {
             report["error"] = error.localizedDescription
             InstallLog.shared.append("restore: FAILED \(error.localizedDescription) json=\(jsonString(report))")
             return RestoreOutcome(
                 success: false,
-                summary: "还原测试失败：\(error.localizedDescription)完整结果见下面日志框。",
-                descriptorUUID: nil, posterId: nil, json: jsonString(report))
+                summary: "备份还原失败：\(error.localizedDescription)完整结果见下面日志框。",
+                descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false,
+                injectResults: [], json: jsonString(report))
         }
     }
 
@@ -150,10 +181,13 @@ enum RestoreTest {
         report["store_before"] = PosterBoardStore.summary(merged)
 
         // 3. 编包：先暂存、再编成 configurations 载荷（复用备份路）。
+        //    原描述符 UUID 要留住：描述符注入那步要从暂存树里拿
+        //    stage/descriptors/<原UUID>/。
         let installer = DescriptorInstaller(zip: ZipFoundationAdapter())
         let stage: URL
+        let descriptorUUID: String
         do {
-            (stage, _) = try installer.stage(packageData)
+            (stage, descriptorUUID) = try installer.stage(packageData)
         } catch let error as TendiesPackage.Error {
             switch error {
             case .notATendiesPackage:
@@ -184,6 +218,16 @@ enum RestoreTest {
         let filesWritten = try writePayloadFiles(
             payloads: compiled.payloads, container: container, pairingPath: pairingPath)
         report["files_written"] = filesWritten
+
+        // 4b. 写描述符：直装每次都写、之前还原没写的那一步（图库描述符通道）。
+        //     暂存树里现成的 stage/descriptors/<原UUID>/ 拷一份副本，把三个
+        //     身份字段改成编包器给 configurations 用的同一个数字 id，再用直装
+        //     同一条 al_exploit_inject_folder 注入主扩展 + 现代扩展的
+        //     descriptors/<新UUID>。主目标失败就停，别的目标只记进报告。
+        let descriptorResults = try injectDescriptors(
+            stage: stage, descriptorUUID: descriptorUUID, config: firstConfig,
+            container: container, pairingPath: pairingPath)
+        report["descriptors"] = descriptorResults
 
         // 5. 插行：复用备份路的 stitch（金块 update_sqlite 的移植）。
         let stitchDir = workDir.appendingPathComponent("stitch")
@@ -218,10 +262,30 @@ enum RestoreTest {
                             detail: "写回没成（\(writebackJSON["error"] as? String ?? "原因见日志")）。文件已写进容器，表还是旧的。")
         }
 
+        // 7. 写偏好：照直装同一份 PosterBoard 偏好写一次（重载开关），
+        //    让系统重载描述符、重新索引。容器内那份失败就停，全局那份尽力写。
+        try writePosterBoardPreferences(container: container, pairingPath: pairingPath)
+        report["preferences_written"] = true
+
+        // 8. 刷新：调一次 al_posterboard_refresh（杀 PosterBoard、等它重起重读），
+        //    结果只记进报告、不抛错；没确认就还是得重启手机再看。
+        let refresh = posterboardRefresh(pairingPath: pairingPath)
+        report["refresh"] = refresh
+        let refreshConfirmed = refresh["confirmed"] as? Bool ?? false
+
         let usedStored = (report["table_source"] as? String) == "stored"
-        let summary = "还原测试成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。重启手机，再去图库长按看有没有这张壁纸。完整结果见下面日志框。"
+        let descriptorInjects = descriptorResults.map {
+            InjectResult(targetParentDir: $0["target"] as? String ?? "",
+                         ok: $0["ok"] as? Bool ?? false,
+                         error: $0["error"] as? String)
+        }
+        let summary = "备份还原成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。\(refreshConfirmed ? "PosterBoard 已刷新，去图库长按看有没有这张壁纸。" : "刷新没确认，重启手机，再去图库长按看有没有这张壁纸。")完整结果见下面日志框."
         return RestoreOutcome(success: true, summary: summary,
                               descriptorUUID: firstConfig.uuid, posterId: newPosterId,
+                              extensionID: firstConfig.extensionID, payloadCount: filesWritten,
+                              storeSummary: report["store_after"] as? String,
+                              preferencesWritten: true, refreshConfirmed: refreshConfirmed,
+                              injectResults: descriptorInjects,
                               json: jsonString(report))
     }
 
@@ -450,6 +514,197 @@ enum RestoreTest {
             else { detail = "未知错误" }
             throw StepError(step: "写文件", detail: detail)
         }
+    }
+
+    // MARK: - 写描述符（图库描述符通道，直装每次都做）
+
+    /// 暂存树里现成的 stage/descriptors/<原UUID>/ 拷一份副本，把三个身份字段
+    /// 改成编包器给 configurations 用的同一个数字 id，再用直装同一条
+    /// al_exploit_inject_folder 注入主扩展 + 现代扩展的 descriptors/<新UUID>。
+    /// 目标清单照直装的 dualExtensions（Collections 双向、Mercury 双向）。
+    /// 主目标失败就停（和直装一样）；别的目标只记进报告、继续。
+    private static func injectDescriptors(stage: URL, descriptorUUID: String,
+                                          config: PosterBoardConfigItem,
+                                          container: String, pairingPath: String) throws -> [[String: Any]] {
+        let fm = FileManager.default
+        let source = stage.appendingPathComponent("descriptors").appendingPathComponent(descriptorUUID)
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue else {
+            throw StepError(step: "写描述符", detail: "暂存树里找不到描述符目录：descriptors/\(descriptorUUID)")
+        }
+        // 拷一份副本再改 id，不动暂存原树。
+        let copyDir = fm.temporaryDirectory
+            .appendingPathComponent("wallive-clone-restore-desc-\(UUID().uuidString)")
+        do {
+            try fm.copyItem(at: source, to: copyDir)
+        } catch {
+            throw StepError(step: "写描述符", detail: "描述符目录拷副本失败：\(error.localizedDescription)")
+        }
+        defer { try? fm.removeItem(at: copyDir) }
+        // 身份对齐：和 configurations 载荷里编包器用的同一个数字 id。
+        // Mercury 不改（编包器也没改它的 id，numericId 是 nil），原样注入。
+        if let numericId = config.numericId {
+            rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
+        }
+        let storeBase = container + PosterBoard.storePath(storeVersion)
+        let targets = AirliftInstaller.dualExtensions(for: config.extensionID).map {
+            "\(storeBase)/Extensions/\($0)/descriptors"
+        }
+        var results: [[String: Any]] = []
+        for (index, targetParent) in targets.enumerated() {
+            do {
+                try injectFolderFFI(folderURL: copyDir, targetParentDir: targetParent,
+                                    destName: config.uuid, pairingPath: pairingPath)
+                results.append(["target": targetParent, "ok": true])
+                InstallLog.shared.append("restore: 描述符已注入 \(targetParent)/\(config.uuid)")
+            } catch let e as StepError {
+                results.append(["target": targetParent, "ok": false, "error": e.detail])
+                if index == 0 {
+                    throw StepError(step: "写描述符", detail: e.detail)
+                }
+                InstallLog.shared.append("restore: 描述符注入 \(targetParent) 没成（\(e.detail)），继续。")
+            }
+        }
+        return results
+    }
+
+    /// al_exploit_inject_folder 的同步小包装（调用方已在后台线程）。
+    private static func injectFolderFFI(folderURL: URL, targetParentDir: String,
+                                        destName: String, pairingPath: String) throws {
+        "10.7.0.1".withCString { _ = al_set_target_host($0) }
+        var outError: UnsafeMutablePointer<CChar>? = nil
+        let rc = pairingPath.withCString { pairC in
+            folderURL.path.withCString { folderC in
+                targetParentDir.withCString { parentC in
+                    destName.withCString { destC in
+                        al_exploit_inject_folder(pairC, folderC, parentC, destC,
+                                                 airliftLogCallback, nil, &outError)
+                    }
+                }
+            }
+        }
+        if rc != 0 {
+            let detail: String
+            if let p = outError { detail = String(cString: p); al_string_free(p) }
+            else { detail = "未知错误" }
+            throw StepError(step: "写描述符", detail: detail)
+        }
+    }
+
+    /// 把描述符副本里的三个身份字段改成编包器给 configurations 用的那个数字 id，
+    /// 照编包器同一套写法：sidecar 写文本、userInfo 的 wallpaperRepresentingIdentifier
+    /// 写文本、Wallpaper.plist 的 identifier 写数字（直装 randomizeIdentifiers
+    /// 那套只改纯数字处，这里也一样——sidecar 内容不是纯数字就不动，文本查找键不能动）。
+    /// 编包器在 configurations 那边缺 sidecar 时会补一份，这里也一样：副本根目录
+    /// 没有就补一个。
+    private static func rewriteDescriptorIdentity(in folderURL: URL, identifier: Int) {
+        let fm = FileManager.default
+        let sidecarName = "com.apple.posterkit.provider.descriptor.identifier"
+        guard let enumerator = fm.enumerator(at: folderURL,
+                                             includingPropertiesForKeys: [.isRegularFileKey],
+                                             options: [.skipsHiddenFiles]) else { return }
+        while let fileURL = enumerator.nextObject() as? URL {
+            let fileName = fileURL.lastPathComponent
+            if fileName == sidecarName {
+                if let content = try? String(contentsOf: fileURL, encoding: .utf8),
+                   Int(content.trimmingCharacters(in: .whitespacesAndNewlines)) != nil {
+                    try? String(identifier).data(using: .utf8)?.write(to: fileURL)
+                }
+            } else if fileName == "com.apple.posterkit.provider.contents.userInfo" {
+                if let updated = try? PosterBoardPlist.set(
+                    contentsOf: fileURL, key: "wallpaperRepresentingIdentifier",
+                    value: String(identifier), recursive: false) {
+                    try? updated.write(to: fileURL)
+                }
+            } else if fileName.hasSuffix("Wallpaper.plist") {
+                if let updated = try? PosterBoardPlist.set(
+                    contentsOf: fileURL, key: "identifier",
+                    value: identifier, recursive: false) {
+                    try? updated.write(to: fileURL)
+                }
+            }
+        }
+        let sidecar = folderURL.appendingPathComponent(sidecarName)
+        if !fm.fileExists(atPath: sidecar.path) {
+            try? String(identifier).data(using: .utf8)?.write(to: sidecar)
+        }
+    }
+
+    // MARK: - 写偏好 + 刷新（照直装同一份内容）
+
+    /// 写一次 PosterBoard 偏好（照直装 writePosterBoardPreferences 同一份内容：
+    /// PBF_RESET_FILE_PROTECTIONS / PBF_LOCALE_DID_CHANGE + 两份 bundle 清单），
+    /// 让系统重载描述符、重新索引。容器内那份失败就停；系统全局那份尽力写，
+    /// 失败不算错（和直装一样）。
+    /// 同步版：直装那个是 async（跑在 runBlocking 里），这里调用方已在后台线程，
+    /// 直接调 writeDirFFI。
+    private static func writePosterBoardPreferences(container: String, pairingPath: String) throws {
+        let fm = FileManager.default
+        let stageDir = fm.temporaryDirectory
+            .appendingPathComponent("wallive-clone-restore-prefs-\(UUID().uuidString)")
+        try fm.createDirectory(at: stageDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: stageDir) }
+        let prefURL = stageDir.appendingPathComponent("com.apple.PosterBoard.unprotectedUserDefaults.plist")
+        let prefDict: [String: Any] = [
+            "PBF_RESET_FILE_PROTECTIONS": true,
+            "PBF_LOCALE_DID_CHANGE": true,
+            "PersistedPosterContainerBundleIdentifiers": [
+                "com.apple.Posters.CollectionsPosterApp",
+                "com.apple.WallpaperKit.CollectionsPoster",
+                "com.apple.MercuryPoster",
+                "com.apple.Posters.MercuryPosterApp",
+                "com.apple.PhotosUIPrivate.PhotosPosterProvider",
+            ],
+            "CompletedPosterBundleIdentifierMigrations": [
+                "com.apple.Posters.UnityPosterApp.ExtragalacticPoster",
+                "com.apple.Posters.WeatherPosterApp.WeatherPoster",
+                "com.apple.Posters.UnityPosterApp.Unity2025Poster",
+                "com.apple.Posters.UnityPosterApp.UnityPosterExtension",
+                "com.apple.Posters.RhizomePoster",
+                "com.apple.Posters.KaleidoscopePosterApp.KaleidoscopePoster",
+            ],
+        ]
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: prefDict, format: .binary, options: 0)
+        try plistData.write(to: prefURL)
+        do {
+            try writeDirFFI(pairingPath: pairingPath, sourceDir: stageDir.path,
+                            targetDir: container + "/Library/Preferences")
+        } catch let e as StepError {
+            throw StepError(step: "写偏好", detail: e.detail)
+        }
+        // 系统全局偏好也写一份（失败不算错，直装里同样是尽力写）。
+        _ = try? writeDirFFI(pairingPath: pairingPath, sourceDir: stageDir.path,
+                             targetDir: "/var/mobile/Library/Preferences")
+    }
+
+    /// 调一次 al_posterboard_refresh（杀 PosterBoard 进程、等它重起重读），
+    /// 结果只记进报告和日志、不抛错：刷新只是事后触发，写盘和写回已经成了。
+    private static func posterboardRefresh(pairingPath: String) -> [String: Any] {
+        "10.7.0.1".withCString { _ = al_set_target_host($0) }
+        var outJson: UnsafeMutablePointer<CChar>? = nil
+        var outError: UnsafeMutablePointer<CChar>? = nil
+        let rc = pairingPath.withCString { pairC in
+            al_posterboard_refresh(pairC, airliftLogCallback, nil, &outJson, &outError)
+        }
+        var result: [String: Any] = ["attempted": true, "rc": rc, "confirmed": false]
+        if let p = outJson {
+            let json = String(cString: p)
+            al_string_free(p)
+            if let data = json.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                result["json"] = obj
+                result["confirmed"] = obj["refresh_confirmed"] as? Bool ?? false
+            }
+            InstallLog.shared.append("restore: 刷新 PosterBoard：\(json)")
+        }
+        if let p = outError {
+            let error = String(cString: p)
+            al_string_free(p)
+            result["error"] = error
+            InstallLog.shared.append("restore: 刷新 PosterBoard 没回 JSON：\(error)")
+        }
+        return result
     }
 
     // MARK: - 写回表（新 Rust FFI）

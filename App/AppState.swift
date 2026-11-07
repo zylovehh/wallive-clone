@@ -126,7 +126,8 @@ final class AppState: ObservableObject {
     /// 暂存步骤与旧入口相同（DescriptorInstaller.stage），不改写盘逻辑、
     /// 配对、偏好键与路径、结构版本映射、标识策略。
     /// 先读设备身份、按三态选择定模式：直写走下面原有流程一字不动；
-    /// 备份走 `BackupInstallFlow`（取表 → 改表 → 编包 → 还原），装完要重启手机。
+    /// 备份走 `BackupInstallFlow`（改表还原：拿表 → 插行 → 写文件 → 写回表
+    /// → 写偏好 → 刷新），不用整机备份；刷新确认了不用重启手机。
     func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
         guard let data = packageData, hasPairingFile else { return nil }
         // 安装开始先读一次设备身份（只读不写）。读不到就用缓存的，
@@ -159,22 +160,19 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 备份路安装：取表 → 改表 → 编包 → 还原。结果同样记进 installReports，
-    /// 报告里 `mode` 是 `.backup`，`backupSummary` 写清"要重启手机"。
-    /// 直写路的读回核对 / 登记 / 进程刷新这条路没有：还原的 `completed`
-    /// 就是验真，偏好不写、进程不刷，壁纸进图库靠重启手机。
+    /// 备份路安装：走改表还原（拿表 → 插行 → 写文件 → 写回表 → 写偏好 → 刷新），
+    /// 不用整机备份。结果同样记进 installReports，报告里 `mode` 是 `.backup`。
+    /// 刷新确认了不用重启手机，没确认才要重启（看 `backupSummary`）。
+    /// 不再要设备身份：新流程不用 UDID 和版本号（容器走配对找，门控在
+    /// installWithReport 那步按设备版本解析时已经做过了）；配对记录
+    /// 和包还是要的，没有就直接返回。
     private func installWithReportBackup(data: Data,
                                          onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
-        guard let info = deviceInfo else {
-            statusMessage = "备份安装没法开始：读不到设备身份（UDID、iOS 版本），"
-                + "请确认回环 VPN 已连接、配对记录已导入，再试一次。"
-            return nil
-        }
         do {
             InstallLog.shared.clear()
             let outcome = try await BackupInstallFlow.install(
-                packageData: data, zip: zip,
-                pairingPath: pairingFileURL.path, deviceInfo: info,
+                packageData: data,
+                pairingPath: pairingFileURL.path,
                 log: { InstallLog.shared.append($0) },
                 onProgress: onProgress)
             let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
@@ -182,15 +180,16 @@ final class AppState: ObservableObject {
             let report = InstallReport(
                 descriptorUUID: outcome.descriptorUUID,
                 injectResults: [InjectResult(targetParentDir: configurationsDir,
-                                             ok: true, error: nil)],
-                preferencesWritten: false,
+                                             ok: true, error: nil)] + outcome.injectResults,
+                preferencesWritten: outcome.preferencesWritten,
                 verifyResults: [],
                 registration: nil,
                 refresh: nil,
                 mode: .backup,
                 backupSummary: "备份还原已完成（\(outcome.payloadCount) 个载荷，"
-                    + "商店：\(outcome.storeSummary)）。重启手机后去锁屏图库查看，"
-                    + "出现后再点设为墙纸组合。")
+                    + "商店：\(outcome.storeSummary)）。" + (outcome.needsReboot
+                        ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
+                        : "PosterBoard 已刷新，去锁屏图库查看，出现后再点设为墙纸组合。"))
             installHistory.append(report.descriptorUUID)
             installReports.append(report)
             return report

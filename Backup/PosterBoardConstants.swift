@@ -49,4 +49,9 @@ struct PosterBoardConfigItem: Equatable {
     let extensionID: String
     /// 是否把它设为当前选中。桌面版给每张都设，最后加的那张胜出。
     let setSelected: Bool
+    /// 编包器给这张壁纸用的数字 id：configurations 载荷里三个身份字段
+    /// （描述符 sidecar、userInfo、Wallpaper.plist）用的就是它；描述符
+    /// 注入时也要用同一个，不然两边对不上。
+    /// Mercury 不用数字 id（它的 identifier 是文本查找键），这里是 nil。
+    let numericId: Int?
 }
