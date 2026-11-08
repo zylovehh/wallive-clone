@@ -3,7 +3,9 @@
 // 原来是状态页上的还原测试按钮，正式版已接进 BackupInstallFlow；
 // 探针按钮（探针 3、列出行、还原测试）已拿掉，引擎留在这里。
 // 拿表先走 Phase 0 备份（做一份带 PosterBoard 的备份、再从备份里把表
-// 抽出来）；备份拿不到表再走探针 3 那条 AirTraffic 拷回通道。
+// 抽出来）；备份拿不到表再走探针 3 那条 AirTraffic 拷回通道；拷回
+// 也不成改用已存的表；三级全断、且手机里一张存过的表都没有时，
+// 现场造一张空名单接着装（第 4 级，27.2 第一次用的兜底）。
 // 按钮没了，通道还在用。
 //
 // 流程（一步断了就停，不继续往下走；步号和下面代码里的注释一致）：
@@ -12,6 +14,9 @@
 //      Documents/posterboard-table，原表先另存一份备份）。
 //      都拷不回来就改用已存的表（先找 merged.sqlite3，没有就找最新存
 //      下来的那份），日志里写明用的是已存的表，不假装刚拷回来。
+//      三级全断、且确认手机里一张存过的表都没有时，现场造一张空名单
+//      （第 4 级：先核包、再单拿容器路径、再造库验库），接着往下装。
+//      存过的表还在时绝不造空名单——造空名单会把好端端的名单替掉。
 //   2. 合 -wal：只改一份副本，原表不动；合完验库。
 //   3. 编包：复用备份路的 PosterBoardCompiler.compile，把选中包编成
 //      configurations/<新 UUID> 的载荷。编包器只产 configurations 载荷，
@@ -230,7 +235,8 @@ enum RestoreTest {
 
         // 1. 拿表：先试 Phase 0 备份拿表（做一份带 PosterBoard 的备份、
         //    再从备份里把表抽出来，不走拷回通道）；27.2 上直写已堵、拷回
-        //    也不稳，备份是主路。备份拿不到表再走拷回通道，最后是已存的表。
+        //    也不稳，备份是主路。备份拿不到表再走拷回通道，再是已存的表，
+        //    三级全断、且确认一张存过的表都没有时才造空名单（第 4 级）。
         let savedDB: URL
         let savedWAL: URL?
         let container: String
@@ -286,20 +292,41 @@ enum RestoreTest {
             } else {
                 let exportError = lastExportError
                     ?? StepError(step: "拿表", detail: "取表没回结果。")
-                let fallback = try storedTableFallback(report: &report, exportError: exportError)
-                savedDB = fallback.db
-                savedWAL = fallback.wal
-                container = fallback.container
-                report["table_source"] = "stored"
-                report["stored_db_path"] = fallback.db.path
-                report["stored_db_kind"] = fallback.kind
-                if let d = fallback.savedDate {
-                    report["stored_db_saved"] = isoDate(d)
+                do {
+                    let fallback = try storedTableFallback(report: &report, exportError: exportError)
+                    savedDB = fallback.db
+                    savedWAL = fallback.wal
+                    container = fallback.container
+                    report["table_source"] = "stored"
+                    report["stored_db_path"] = fallback.db.path
+                    report["stored_db_kind"] = fallback.kind
+                    if let d = fallback.savedDate {
+                        report["stored_db_saved"] = isoDate(d)
+                    }
+                    InstallLog.shared.append(
+                        "restore: 拷回没成（\(exportError.detail)），这次用的是已存的表：\(fallback.db.lastPathComponent)"
+                        + (fallback.savedDate.map { "，存于 \(isoDate($0))" } ?? "")
+                        + "；不是刚拷回来的，接着往下做。")
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // 三级全失败：先确认是不是真的没有存过的表。
+                    // 存过的表还在（只是容器路径拿不到）时绝不造空名单，
+                    // 原样报那个错——造空名单会把好端端的名单替掉。
+                    // 只有确认一张存过的表都没有，才走第 4 级。
+                    if hasStoredTable() {
+                        throw error
+                    }
+                    InstallLog.shared.append(
+                        "restore: 拷回没成（\(exportError.detail)），手机里也没存下来的表，改走第 4 级：现场造一张空名单。")
+                    let created = try createEmptyTable(
+                        packageData: packageData, pairingPath: pairingPath, workDir: workDir,
+                        report: &report, onProgress: onProgress, isCancelled: isCancelled)
+                    savedDB = created.savedDB
+                    savedWAL = created.savedWAL
+                    container = created.container
+                    report["table_source"] = "created-empty"
                 }
-                InstallLog.shared.append(
-                    "restore: 拷回没成（\(exportError.detail)），这次用的是已存的表：\(fallback.db.lastPathComponent)"
-                    + (fallback.savedDate.map { "，存于 \(isoDate($0))" } ?? "")
-                    + "；不是刚拷回来的，接着往下做。")
             }
         }
         try checkCancelled(isCancelled)
@@ -676,6 +703,169 @@ enum RestoreTest {
                             detail: "拷回没成（\(exportError.detail)），已存的表找到了（\(kind)），但拿不到 PosterBoard 容器路径，接着做不了。")
         }
         return (db, walURL, container, kind, savedDate)
+    }
+
+    /// 手机里有没有存过的表（merged.sqlite3，或任何一份 PBF...-*.sqlite3）。
+    /// 只读，不动文件。给第 4 级（造空名单）做门禁：存过的表还在时绝不
+    /// 造空名单——哪怕只是容器路径拿不到，也不能把好端端的名单替掉。
+    private static func hasStoredTable() -> Bool {
+        let fm = FileManager.default
+        let dir = tableDir
+        if fm.fileExists(atPath: dir.appendingPathComponent("merged.sqlite3").path) {
+            return true
+        }
+        let saved = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        return saved.contains {
+            $0.lastPathComponent.hasPrefix("PBFPosterExtensionDataStoreSQLiteDatabase-")
+            && $0.pathExtension == "sqlite3"
+        }
+    }
+
+    /// 第 4 级：前面三条都没成时，现场造一张空名单接着装。
+    /// 只在“备份、拷回、存过的表”三级全失败、且确认手机里一张存过的表
+    /// 都没有时才走（调用方已用 hasStoredTable 把过门）。
+    ///
+    /// 步骤（每步开始前和每步之间都查取消，点了就直接停，不改走别的路）：
+    ///   1. 核包：TendiesPackage.inspect——能解开、有描述符才继续。
+    ///   2. 拿容器路径：BackupFFI.appFactoryEntry（30 秒超时），校验非空
+    ///      且是 /var/mobile/Containers/Data/Application/ 开头。
+    ///   3. 造空库：PosterBoardStore.createEmptyDatabase（4 张必备表，store v61）。
+    ///   4. 验库：4 张必备表都在、三张数据表一行都没有、integrity_check 是 ok。
+    /// 哪步不过就抛 StepError（写明哪步），直接停，不硬装。
+    /// 返回的表是自包含的单文件（已合 WAL），不用再配 -wal；后面流程
+    /// （合库→编包→插行）照常走，插行时空表上第一行就是 posterId 1。
+    private static func createEmptyTable(packageData: Data, pairingPath: String, workDir: URL,
+                                         report: inout [String: Any],
+                                         onProgress: ((String, Double) -> Void)?,
+                                         isCancelled: @escaping () -> Bool) throws
+        -> (savedDB: URL, savedWAL: URL?, container: String) {
+        try checkCancelled(isCancelled)
+        // 拿表段的进度是 0.05→0.28（备份那段），拷回和存过的表不报进度，
+        // 所以到这里进度最多是 0.28；造空名单从 0.28 往后报，别往回跳。
+        onProgress?("前面都没成，正在造一张空名单…", 0.28)
+        InstallLog.shared.append("restore: 前面三条都没成（备份、拷回、存过的表），改造空名单接着装。")
+
+        // 1. 核包：能解开、有描述符才继续。包不对直接停，别造了表才发现包是坏的。
+        //    完整校验（暂存、编包）后面第 3 步还会再做一遍，那步在写回之前，
+        //    包坏了一定拦得住，不会写进手机。
+        do {
+            _ = try TendiesPackage.inspect(packageData, zip: ZipFoundationAdapter())
+        } catch let error as TendiesPackage.Error {
+            switch error {
+            case .notATendiesPackage:
+                throw StepError(step: "造空名单", detail: "包不对：这不是一个 .tendies / .wallive 包，造空名单停下了。")
+            case .missingWallpaperDirectory:
+                throw StepError(step: "造空名单", detail: "包不对：包里找不到壁纸目录，结构不对，造空名单停下了。")
+            case .missingWallpaperPlist:
+                throw StepError(step: "造空名单", detail: "包不对：包里找不到 Wallpaper.plist，结构不对，造空名单停下了。")
+            }
+        } catch {
+            throw StepError(step: "造空名单", detail: "包校验没过：\(error.localizedDescription)，造空名单停下了。")
+        }
+        try checkCancelled(isCancelled)
+
+        // 2. 拿容器路径：单独问手机要一次（不经过拿表那条路），30 秒超时。
+        //    拿不到、或者拿到的不是应用容器路径，就直接停，不硬猜、不写死。
+        //    runBackupCall 是备份取表共用的等法，超时报错里写的是“备份取表”，
+        //    这里是问容器路径，报错要改写成这步的名字，别让人看错。
+        onProgress?("正在问手机要壁纸位置…", 0.29)
+        let entry: [String: Any]
+        do {
+            entry = try runBackupCall(timeout: 30, isCancelled: isCancelled) {
+                try await BackupFFI.appFactoryEntry(
+                    pairingPath: pairingPath, bundleID: "com.apple.PosterBoard",
+                    log: { InstallLog.shared.append($0) })
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw StepError(step: "造空名单",
+                            detail: "容器路径拿不到（问手机要应用记录没成：\((error as? StepError)?.detail ?? error.localizedDescription)），造空名单停下了。")
+        }
+        guard let container = entry["Container"] as? String, !container.isEmpty else {
+            throw StepError(step: "造空名单", detail: "PosterBoard 的容器路径拿不到（应用记录里没有 Container），造空名单停下了。")
+        }
+        guard container.hasPrefix("/var/mobile/Containers/Data/Application/") else {
+            throw StepError(step: "造空名单", detail: "PosterBoard 的容器路径不对（不是应用容器路径：\(container)），造空名单停下了。")
+        }
+        try checkCancelled(isCancelled)
+
+        // 3. 造空库：按真表的结构造（4 张必备表，store v61），一行都没有。
+        //    造表本身是本地操作、很快，不用超时；SQL 报错直接抛。
+        onProgress?("正在造空名单…", 0.29)
+        let emptyDir = workDir.appendingPathComponent("empty-store")
+        try FileManager.default.createDirectory(at: emptyDir, withIntermediateDirectories: true)
+        let emptyDB = emptyDir.appendingPathComponent(PosterBoard.databaseFileName)
+        do {
+            try PosterBoardStore.createEmptyDatabase(at: emptyDB)
+        } catch {
+            throw StepError(step: "造空名单", detail: "空名单造不出来：\(error.localizedDescription)")
+        }
+        try checkCancelled(isCancelled)
+
+        // 4. 验库：4 张必备表都在、三张数据表一行都没有、integrity_check 是 ok。
+        //    （posterMetadata / posterRoles 是 db5+ 才加的表，造空库的参考
+        //    实现本来就不建它们，流程的校验也只认这 4 张必备表。）
+        try verifyEmptyStore(emptyDB)
+        try checkCancelled(isCancelled)
+
+        report["empty_store_path"] = emptyDB.path
+        InstallLog.shared.append("restore: 空名单造好了（\(PosterBoardStore.summary(emptyDB))），接着往下装。")
+        // 造出来的表已合 WAL，是自包含的单文件，不用再配 -wal。
+        return (emptyDB, nil, container)
+    }
+
+    /// 验一张刚造的空名单：4 张必备表都在、三张数据表一行都没有、
+    /// integrity_check 是 ok。哪项不过就抛错，写明是哪项。
+    private static func verifyEmptyStore(_ url: URL) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
+            throw StepError(step: "造空名单", detail: "刚造的空名单打不开，没法验。")
+        }
+        defer { sqlite3_close(db) }
+
+        func tableExists(_ name: String) throws -> Bool {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;", -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
+                throw StepError(step: "造空名单", detail: "验空名单时查表失败：\(String(cString: sqlite3_errmsg(db)))")
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, name, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            return sqlite3_step(stmt) == SQLITE_ROW
+        }
+
+        func rowCount(_ table: String) throws -> Int64 {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM \(table);", -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
+                throw StepError(step: "造空名单", detail: "验空名单时数 \(table) 的行失败：\(String(cString: sqlite3_errmsg(db)))")
+            }
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_step(stmt) == SQLITE_ROW else {
+                throw StepError(step: "造空名单", detail: "验空名单时 \(table) 的行数读不出来。")
+            }
+            return sqlite3_column_int64(stmt, 0)
+        }
+
+        for table in PosterBoardStore.requiredTables {
+            guard try tableExists(table) else {
+                throw StepError(step: "造空名单", detail: "刚造的空名单缺表：\(table)。")
+            }
+        }
+        for table in ["poster", "posterAttributes", "posterRoleMembership"] {
+            let count = try rowCount(table)
+            guard count == 0 else {
+                throw StepError(step: "造空名单", detail: "刚造的空名单不空：\(table) 里有 \(count) 行。")
+            }
+        }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA integrity_check;", -1, &stmt, nil) == SQLITE_OK, let stmt = stmt else {
+            throw StepError(step: "造空名单", detail: "验空名单时 integrity_check 跑不起来。")
+        }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0),
+              String(cString: text) == "ok" else {
+            throw StepError(step: "造空名单", detail: "刚造的空名单 integrity_check 没过。")
+        }
     }
 
     private static func callSaveFFI(pairingPath: String, destDir: String, stamp: String)
