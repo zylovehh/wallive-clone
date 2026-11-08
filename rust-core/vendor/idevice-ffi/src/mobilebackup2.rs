@@ -430,23 +430,16 @@ pub unsafe extern "C" fn mobilebackup2_backup(
                 .to_string(),
         )
     };
-    let opts = if options.is_null() {
-        None
-    } else {
-        let pw = unsafe { &mut *(options as *mut PlistWrapper) };
-        if let plist::Value::Dictionary(d) = pw.borrow_self().clone() {
-            Some(d)
-        } else {
-            None
-        }
-    };
-
+    // #02 实验 C：Backup 消息不带 Options（pm3 原样，只发 MessageName +
+    // TargetIdentifier），这里传进来的 options 一律忽略。C 签名保持不变，
+    // 免得头文件和调用方跟着改。
+    let _ = options;
     let delegate_ref = unsafe { &*delegate };
 
     let res = run_sync_local(async {
         unsafe { &mut *client }
             .0
-            .backup_from_path(&backup_root, source.as_deref(), opts, None, delegate_ref)
+            .backup_from_path(&backup_root, source.as_deref(), delegate_ref)
             .await
     });
 

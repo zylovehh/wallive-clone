@@ -719,14 +719,28 @@ async fn fetch_posterboard_inner(
             )
         }
     }
-    // #02 实验 C：定点只靠磁盘上的 Info.plist（下面 write_info_plist 写的
+    // Phase 0 双通道定点：磁盘上的 Info.plist（下面 write_info_plist 写的
     // Applications 列 PosterBoard + 安装器自己两条，条目都是手机给的整条
-    // 记录原样转发），手机备份开始后自己下载它来决定备什么。Backup 消息
-    // 本身不再带 FactoryInfo / Options / SourceIdentifier，只发
-    // MessageName + TargetIdentifier（参考 pymobiledevice3 的 backup()）。
-    // 之前 29–31 号把 FactoryInfo 顶层键随消息一起发，手机照样备整台
-    // （#30：1665 个文件、495.7 MB，10% 断）；#02 单变量只改请求形状，
-    // #03 单变量只在清单里加一条陪衬，消息形状和过滤器都不动。
+    // 记录原样转发）和 Backup 消息里的 FactoryInfo 各发一份同一份清单。
+    // 只靠磁盘定点（#02/#03 实验 C，消息只发 MessageName +
+    // TargetIdentifier）在 27.0.1 上已证实行不通，手机照样备整台
+    // （#30：1665 个文件、495.7 MB，10% 断）；29–31 号那次消息里也带过
+    // FactoryInfo，但条目是只挑 5 个键拼的，手机认不出。这次两边都是原样转发。
+    // FactoryInfo 先拼好：write_info_plist 要把 applications 整份拿走，
+    // 这里先拷一份出来。
+    let mut factory_info = plist::Dictionary::new();
+    factory_info.insert(
+        "Applications".to_string(),
+        plist::Value::Dictionary(applications.clone()),
+    );
+    let installed_applications: Vec<plist::Value> = applications
+        .keys()
+        .map(|bundle_id| plist::Value::String(bundle_id.clone()))
+        .collect();
+    factory_info.insert(
+        "Installed Applications".to_string(),
+        plist::Value::Array(installed_applications),
+    );
     write_info_plist(
         &device_dir.join("Info.plist"),
         &udid,
@@ -759,11 +773,15 @@ async fn fetch_posterboard_inner(
     // carries no TargetIdentifier and the device drops the channel.
     mb2.idevice.set_udid(udid.clone());
     logger.log("backup: starting targeted PosterBoard backup…");
-    // #02 实验 C：backup_from_path 只发 MessageName + TargetIdentifier
-    // （pm3 原样），不再传 Options / FactoryInfo。set_udid 在上面已调，
-    // TargetIdentifier 一定在；backup_from_path 里没调 set_udid 会直接报错。
+    // set_udid 在上面已调，TargetIdentifier 一定在；没调 set_udid 会直接报错。
     let backup_result = mb2
-        .backup_from_path(&backup_root, Some(&udid), &delegate)
+        .backup_from_path_with_factory_info(
+            &backup_root,
+            Some(&udid),
+            Some(plist::Dictionary::new()),
+            Some(factory_info),
+            &delegate,
+        )
         .await;
     // The 0-byte stand-ins for filtered payloads must outlive the whole
     // exchange and are removed only now that it has returned (reference:

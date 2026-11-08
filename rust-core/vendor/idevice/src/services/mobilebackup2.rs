@@ -958,7 +958,34 @@ impl MobileBackup2Client {
     ///
     /// Returns the final response dictionary from the device on success. If the device
     /// reports an error, the dictionary will contain `ErrorCode` and `ErrorDescription`.
+    ///
+    /// 默认只发 MessageName + TargetIdentifier（pm3 原样，#02 实验 C）。
+    /// 要带 FactoryInfo 定点，调 `backup_from_path_with_factory_info`。
     pub async fn backup_from_path(
+        &mut self,
+        backup_root: &Path,
+        source_identifier: Option<&str>,
+        delegate: &dyn BackupDelegate,
+    ) -> Result<Option<Dictionary>, IdeviceError> {
+        self.backup_from_path_with_factory_info(
+            backup_root, source_identifier, None, None, delegate,
+        )
+        .await
+    }
+
+    /// Backup，但消息里也带 FactoryInfo / Options / SourceIdentifier
+    /// （移动版 GoldenNugget 双通道：磁盘 Info.plist + 消息 FactoryInfo
+    /// 各发一份同一份 Applications）。
+    ///
+    /// 为什么要加这一路：只靠磁盘 Info.plist 定点（#02/#03 实验 C，
+    /// 消息只发 MessageName + TargetIdentifier）在 27.0.1 上已证实行不通，
+    /// 手机照样备整台（1665 个文件、495.7 MB，10% 断）。29–31 号那次消息里
+    /// 也带过 FactoryInfo，但条目是只挑 5 个键拼的，手机认不出；这次条目是
+    /// installation_proxy 原样转发，和 #31 修过的 Info.plist 一致。
+    /// 调用前必须先调 set_udid，否则这里直接报错，不发没有
+    /// TargetIdentifier 的请求（之前没调 set_udid 时手机直接掐通道）。
+    /// 还原（restore_from_path）不走这条路，不受影响。
+    pub async fn backup_from_path_with_factory_info(
         &mut self,
         backup_root: &Path,
         source_identifier: Option<&str>,
@@ -977,9 +1004,13 @@ impl MobileBackup2Client {
         let backup_dir = backup_root.join(source);
         let _ = delegate.create_dir_all(&backup_dir).await;
 
+        // TargetIdentifier 必须在：没调 set_udid 就直接报错，不发残请求。
+        let target_udid = target_udid.ok_or(IdeviceError::InvalidHostID)?;
+        // #32 的消息级日志还在 send_request 里：真机卡住也能看到这次到底发了哪几个键。
+        debug!("backup with FactoryInfo: sending Backup (MessageName + TargetIdentifier + SourceIdentifier + Options + FactoryInfo)");
         self.send_request(
             BackupMessageType::BackupMessageTypeBackup.as_str(),
-            target_udid,
+            Some(target_udid),
             Some(source),
             options,
             factory_info,

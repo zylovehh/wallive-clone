@@ -2,13 +2,15 @@
 // 备份还原（改表还原）的引擎：把一张壁纸真正装进图库。
 // 原来是状态页上的还原测试按钮，正式版已接进 BackupInstallFlow；
 // 探针按钮（探针 3、列出行、还原测试）已拿掉，引擎留在这里。
-// 拿表走的还是探针 3 那条 AirTraffic 拷回通道（只读拷回 + 存盘），
+// 拿表先走 Phase 0 备份（做一份带 PosterBoard 的备份、再从备份里把表
+// 抽出来）；备份拿不到表再走探针 3 那条 AirTraffic 拷回通道。
 // 按钮没了，通道还在用。
 //
 // 流程（一步断了就停，不继续往下走；步号和下面代码里的注释一致）：
-//   1. 拿表：走探针 3 同一条 AirTraffic 拷回通道，把 v61 的表和 -wal
-//      拷回来、存进 Documents/posterboard-table（原表先另存一份备份）。
-//      拷不回来就改用已存的表（先找 merged.sqlite3，没有就找最新存
+//   1. 拿表：先试 Phase 0 备份拿表（备份 → 抽表合 WAL），再试探针 3
+//      同一条 AirTraffic 拷回通道（v61 的表 + -wal，存进
+//      Documents/posterboard-table，原表先另存一份备份）。
+//      都拷不回来就改用已存的表（先找 merged.sqlite3，没有就找最新存
 //      下来的那份），日志里写明用的是已存的表，不假装刚拷回来。
 //   2. 合 -wal：只改一份副本，原表不动；合完验库。
 //   3. 编包：复用备份路的 PosterBoardCompiler.compile，把选中包编成
@@ -226,61 +228,84 @@ enum RestoreTest {
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
 
-        // 1. 拿表：先试探针 3 同一条通道拷回 v61 的表 + -wal、存盘。
-        //    拷不回来就改用手机里已存的那张表接着做，不死等重拷——
-        //    拷回那条路重启后第一次能成，之后再跑就不成。
-        //    快失败（比如同步完了、文件读不到）多试 3 次再放弃：有时
-        //    是手机那边慢一拍，再试一次就成了。超时不重试：超时那次
-        //    后台线程还在跑，再开一次会两路同时拷，互相干扰。
+        // 1. 拿表：先试 Phase 0 备份拿表（做一份带 PosterBoard 的备份、
+        //    再从备份里把表抽出来，不走拷回通道）；27.2 上直写已堵、拷回
+        //    也不稳，备份是主路。备份拿不到表再走拷回通道，最后是已存的表。
         let savedDB: URL
         let savedWAL: URL?
         let container: String
-        var freshResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
-        var lastExportError: StepError? = nil
-        for attempt in 1...3 {
-            do {
-                freshResult = try exportAndSaveTimed(
-                    pairingPath: pairingPath, stamp: stamp, report: &report)
-                break
-            } catch {
-                lastExportError = (error as? StepError)
-                    ?? StepError(step: "拿表", detail: "\(error.localizedDescription)")
-                // 超时不重试：那次后台线程还在跑，再试会两路同时拷。
-                if let e = lastExportError, e.detail.hasPrefix("取表超时") { break }
-                if attempt < 3 {
-                    InstallLog.shared.append("restore: 拿表第 \(attempt) 次没成，等 5 秒再试一次。")
-                    Thread.sleep(forTimeInterval: 5)
-                    try checkCancelled(isCancelled)
+        var backupResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
+        do {
+            backupResult = try fetchTableViaBackup(
+                pairingPath: pairingPath, workDir: workDir, report: &report,
+                onProgress: onProgress, isCancelled: isCancelled)
+        } catch is CancellationError {
+            // 用户点了停止：不当失败报，也不改走拷回，直接停。
+            throw CancellationError()
+        } catch {
+            let detail = (error as? StepError)?.detail ?? error.localizedDescription
+            InstallLog.shared.append("restore: 备份拿表没成（\(detail)），改走拷回通道。")
+        }
+        if let backup = backupResult {
+            savedDB = backup.savedDB
+            savedWAL = backup.savedWAL
+            container = backup.container
+            report["table_source"] = "backup"
+            InstallLog.shared.append("restore: 拿表走备份这条路成了（表已从备份里抽出来）。")
+        } else {
+            // 拷回：先试探针 3 同一条通道拷回 v61 的表 + -wal、存盘。
+            //    拷不回来就改用手机里已存的那张表接着做，不死等重拷——
+            //    拷回那条路重启后第一次能成，之后再跑就不成。
+            //    快失败（比如同步完了、文件读不到）多试 3 次再放弃：有时
+            //    是手机那边慢一拍，再试一次就成了。超时不重试：超时那次
+            //    后台线程还在跑，再开一次会两路同时拷，互相干扰。
+            var freshResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
+            var lastExportError: StepError? = nil
+            for attempt in 1...3 {
+                do {
+                    freshResult = try exportAndSaveTimed(
+                        pairingPath: pairingPath, stamp: stamp, report: &report)
+                    break
+                } catch {
+                    lastExportError = (error as? StepError)
+                        ?? StepError(step: "拿表", detail: "\(error.localizedDescription)")
+                    // 超时不重试：那次后台线程还在跑，再试会两路同时拷。
+                    if let e = lastExportError, e.detail.hasPrefix("取表超时") { break }
+                    if attempt < 3 {
+                        InstallLog.shared.append("restore: 拿表第 \(attempt) 次没成，等 5 秒再试一次。")
+                        Thread.sleep(forTimeInterval: 5)
+                        try checkCancelled(isCancelled)
+                    }
                 }
             }
-        }
-        if let fresh = freshResult {
-            savedDB = fresh.savedDB
-            savedWAL = fresh.savedWAL
-            container = fresh.container
-            report["table_source"] = "fresh"
-        } else {
-            let exportError = lastExportError
-                ?? StepError(step: "拿表", detail: "取表没回结果。")
-            let fallback = try storedTableFallback(report: &report, exportError: exportError)
-            savedDB = fallback.db
-            savedWAL = fallback.wal
-            container = fallback.container
-            report["table_source"] = "stored"
-            report["stored_db_path"] = fallback.db.path
-            report["stored_db_kind"] = fallback.kind
-            if let d = fallback.savedDate {
-                report["stored_db_saved"] = isoDate(d)
+            if let fresh = freshResult {
+                savedDB = fresh.savedDB
+                savedWAL = fresh.savedWAL
+                container = fresh.container
+                report["table_source"] = "fresh"
+            } else {
+                let exportError = lastExportError
+                    ?? StepError(step: "拿表", detail: "取表没回结果。")
+                let fallback = try storedTableFallback(report: &report, exportError: exportError)
+                savedDB = fallback.db
+                savedWAL = fallback.wal
+                container = fallback.container
+                report["table_source"] = "stored"
+                report["stored_db_path"] = fallback.db.path
+                report["stored_db_kind"] = fallback.kind
+                if let d = fallback.savedDate {
+                    report["stored_db_saved"] = isoDate(d)
+                }
+                InstallLog.shared.append(
+                    "restore: 拷回没成（\(exportError.detail)），这次用的是已存的表：\(fallback.db.lastPathComponent)"
+                    + (fallback.savedDate.map { "，存于 \(isoDate($0))" } ?? "")
+                    + "；不是刚拷回来的，接着往下做。")
             }
-            InstallLog.shared.append(
-                "restore: 拷回没成（\(exportError.detail)），这次用的是已存的表：\(fallback.db.lastPathComponent)"
-                + (fallback.savedDate.map { "，存于 \(isoDate($0))" } ?? "")
-                + "；不是刚拷回来的，接着往下做。")
         }
         try checkCancelled(isCancelled)
         onProgress?("正在写文件…", 0.30)
 
-        // 原表备份：写回之前先把这次用的原表（刚拷回来的，或已存的那份）再存一份，坏了能回来。
+        // 原表备份：写回之前先把这次用的原表（刚拷回来的、备份抽出来的，或已存的那份）再存一份，坏了能回来。
         let backupDB = tableDir.appendingPathComponent("backup-原表-\(stamp).sqlite3")
         try? fm.removeItem(at: backupDB)
         try fm.copyItem(at: savedDB, to: backupDB)
@@ -422,7 +447,153 @@ enum RestoreTest {
                               json: jsonString(report))
     }
 
-    // MARK: - 拿表（探针 3 同一条 FFI）
+    // MARK: - 拿表（Phase 0 备份优先，拷回是备选）
+
+    /// Phase 0 拿表：先做一份带 PosterBoard 的备份、再从备份里把表抽出来，
+    /// 不走 AirTraffic 拷回通道。27.2 上直写已堵、拷回也不稳，备份是主路。
+    ///
+    /// 步骤：拿 UDID → 备好取表目录（占位 Manifest.db + Status.plist 满备份
+    /// + 空 Manifest.plist）→ Rust 只备 PosterBoard 一个容器（Backup 消息
+    /// 里也带 FactoryInfo 双通道定点）→ 从备份里抽商店（合 WAL）→
+    /// 拿 PosterBoard 容器路径。哪步不成、或者抽出来的商店版本不是 v61，
+    /// 就抛错，调用方改走拷回通道。用户点了停止抛取消，不改走别的路。
+    ///
+    /// 备份不是 30 秒能完的：取备份给 180 秒超时，拿 UDID 和容器路径各 30 秒；
+    /// 超时那次后台调用还在跑，结果丢弃（和拷回超时一个做法），不阻塞后面的路。
+    private static func fetchTableViaBackup(pairingPath: String, workDir: URL,
+                                            report: inout [String: Any],
+                                            onProgress: ((String, Double) -> Void)?,
+                                            isCancelled: @escaping () -> Bool) throws
+        -> (savedDB: URL, savedWAL: URL?, container: String) {
+        let fm = FileManager.default
+        let backupRoot = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("posterboard-backup")
+        // 1. 拿 UDID：取表目录按 UDID 分。
+        let info = try runBackupCall(timeout: 30, isCancelled: isCancelled) {
+            try await BackupFFI.deviceInfo(
+                pairingPath: pairingPath, log: { InstallLog.shared.append($0) })
+        }
+        let udid = info.udid
+        // 2. 备好取表目录：占位 Manifest.db + Status.plist（满备份）+
+        //    空 Manifest.plist。旧目录先清掉，别让上次的残留混进来。
+        try? fm.removeItem(at: backupRoot)
+        do {
+            try PosterBoardBackup.prepareFetchDirectory(
+                backupRoot: backupRoot, udid: udid, log: { InstallLog.shared.append($0) })
+        } catch {
+            throw StepError(step: "拿表", detail: "备份取表目录备不出来：\(error.localizedDescription)")
+        }
+        // 3. 跑备份：只备 PosterBoard 一个容器。进度折进拿表段（5%→28%）。
+        let progressGate = ProgressGate()
+        let fetch = try runBackupCall(timeout: 180, isCancelled: isCancelled) {
+            try await BackupFFI.fetchPosterBoard(
+                pairingPath: pairingPath, backupRoot: backupRoot,
+                log: { InstallLog.shared.append($0) },
+                onProgress: { detail in
+                    guard detail.percent >= 0,
+                          progressGate.advance(to: Int(detail.percent)) else { return }
+                    onProgress?("正在备份取表…", 0.05 + 0.23 * detail.percent / 100)
+                })
+        }
+        report["backup_kept_files"] = fetch.keptFiles
+        report["backup_discarded_files"] = fetch.discardedFiles
+        report["backup_dir"] = fetch.backupDir.path
+        InstallLog.shared.append(
+            "restore: 备份跑完了（留了 \(fetch.keptFiles) 个、排了 \(fetch.discardedFiles) 个）。")
+        guard fetch.keptFiles > 0 else {
+            throw StepError(step: "拿表", detail: "备份跑完了，但一个文件都没留下来（手机可能没发 PosterBoard 的文件）。")
+        }
+        // 4. 从备份里抽商店（合 WAL）。
+        let extractDir = workDir.appendingPathComponent("backup-extract")
+        let store: PosterBoardBackup.Fetch
+        do {
+            store = try PosterBoardBackup.extractStore(
+                from: fetch.backupDir, to: extractDir, log: { InstallLog.shared.append($0) })
+        } catch {
+            throw StepError(step: "拿表", detail: "备份里抽不出 PosterBoard 的表：\(error.localizedDescription)")
+        }
+        guard store.structureVersion == storeVersion else {
+            throw StepError(step: "拿表",
+                            detail: "备份里抽出来的商店是 v\(store.structureVersion)，这次只认 v\(storeVersion)。")
+        }
+        report["backup_structure_version"] = store.structureVersion
+        report["backup_store_summary"] = store.summary
+        // 5. 拿 PosterBoard 容器路径（写文件/写回/偏好都要它）。
+        let entry = try runBackupCall(timeout: 30, isCancelled: isCancelled) {
+            try await BackupFFI.appFactoryEntry(
+                pairingPath: pairingPath, bundleID: "com.apple.PosterBoard",
+                log: { InstallLog.shared.append($0) })
+        }
+        guard let container = entry["Container"] as? String, !container.isEmpty else {
+            throw StepError(step: "拿表", detail: "PosterBoard 的容器路径拿不到（应用记录里没有 Container）。")
+        }
+        // 抽出来的表已经合了 WAL，是自包含的单文件，不用再配 -wal。
+        return (store.database, nil, container)
+    }
+
+    /// 在同步代码里等一个 async 的备份 FFI 调用：超时就取消那路、抛错，
+    /// 调用方改走别的路；用户点了停止也一样取消、抛取消。等的时候每秒
+    /// 查一次取消，满 60 秒记一行日志，别让用户干等没动静。
+    private static func runBackupCall<T>(timeout: TimeInterval,
+                                         isCancelled: @escaping () -> Bool,
+                                         _ work: @escaping () async throws -> T) throws -> T {
+        let box = BackupCallBox<T>()
+        let semaphore = DispatchSemaphore(value: 0)
+        let task = Task {
+            do {
+                box.set(.success(try await work()))
+            } catch {
+                box.set(.failure(error))
+            }
+            semaphore.signal()
+        }
+        var waited: TimeInterval = 0
+        while semaphore.wait(timeout: .now() + 1) == .timedOut {
+            waited += 1
+            if isCancelled() {
+                task.cancel()
+                throw CancellationError()
+            }
+            if waited >= timeout {
+                task.cancel()
+                throw StepError(step: "拿表", detail: "备份取表超时（\(Int(timeout)) 秒没等到手机备完）。")
+            }
+            if Int(waited) % 60 == 0 {
+                InstallLog.shared.append("restore: 备份取表进行中（已等 \(Int(waited)) 秒）……")
+            }
+        }
+        guard let result = box.result else {
+            throw StepError(step: "拿表", detail: "备份取表没回结果。")
+        }
+        return try result.get()
+    }
+
+    /// 跨线程传一次 async 备份调用的结果（和 ExportResultBox 一个做法）。
+    private final class BackupCallBox<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _result: Result<T, Error>?
+        var result: Result<T, Error>? {
+            lock.lock(); defer { lock.unlock() }
+            return _result
+        }
+        func set(_ result: Result<T, Error>) {
+            lock.lock(); defer { lock.unlock() }
+            _result = result
+        }
+    }
+
+    /// 备份进度节流：Rust 回调来得密，只在整百分比变了时才往 UI 报。
+    private final class ProgressGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var last = -1
+        /// 整数百分比变了才返回 true（调用方再报进度）。
+        func advance(to percent: Int) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard percent != last else { return false }
+            last = percent
+            return true
+        }
+    }
 
     /// 调 al_probe_posterboard_save 拷回 v61 的表 + -wal，返回存盘路径和容器路径。
     private static func exportAndSave(pairingPath: String, stamp: String,
