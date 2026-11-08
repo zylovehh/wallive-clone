@@ -106,6 +106,20 @@ struct ContentView: View {
                 .tag(3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // iPad 布局：iOS 18 起 iPad 的页签默认飘在顶部，改回底部。
+        .modifier(PadBottomTabs())
         .environmentObject(accountStore)
+    }
+}
+
+/// iPad 布局：iOS 18 起 iPad 的页签默认飘在顶部胶囊，强制回到底部 dock 栏。
+/// 只在 iPad + iOS 18+ 生效；iPhone 和 iOS 17 以下不动（本来就在底部）。
+private struct PadBottomTabs: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), UIDevice.current.userInterfaceIdiom == .pad {
+            content.tabViewStyle(.tabBarOnly)
+        } else {
+            content
+        }
     }
 }

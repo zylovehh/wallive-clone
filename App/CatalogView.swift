@@ -77,7 +77,8 @@ struct CatalogView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 8) {
+            // iPad 上间距收紧一点，发现页上边空隙小一点；iPhone 不动。
+            VStack(spacing: UIDevice.current.userInterfaceIdiom == .pad ? 4 : 8) {
                 // 发现 / 我的：高透液态玻璃分段条，选中的那段稍亮一点。
                 HStack(spacing: 4) {
                     ForEach([(0, "发现"), (1, "我的")], id: \.0) { value, label in
@@ -118,8 +119,11 @@ struct CatalogView: View {
             // 顶部不留大黑边：不用系统大标题，改用一行小标题，整个目录往上贴。
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("目录").font(.headline)
+                // iPad 上不显示“目录”两个字，只留右上角人头按钮，顶部往上贴。
+                if UIDevice.current.userInterfaceIdiom != .pad {
+                    ToolbarItem(placement: .principal) {
+                        Text("目录").font(.headline)
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingAccount = true } label: {
@@ -342,6 +346,8 @@ struct CatalogView: View {
             }
         }
         .padding(.horizontal)
+        // iPad 上“我的”页满宽显示，不再缩在中间窄窄一条；iPhone 不动。
+        .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? .infinity : nil, alignment: .leading)
         .overlay(alignment: .bottom) {
             Text("构建 \(AppBuild.tag)")
                 .font(.caption2).foregroundStyle(.secondary)
