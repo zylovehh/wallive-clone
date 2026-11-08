@@ -121,14 +121,27 @@ struct ContentView: View {
 
 /// iPad 布局：系统页签栏藏起来，底部改用一颗浮动药丸（跟原来顶部那颗一个样）。
 /// 只在 iPad 生效；iPhone 不动（本来就是底部标准页签）。
+///
+/// 顶栏为什么藏不住（V1 实测 + mollyiv.dev）：iPadOS 18 起系统页签栏改成顶部浮动药丸，
+/// `.toolbar(.hidden, for: .tabBar)` 有已知 bug——编程式切页签（点底部药丸设 selectedTab）
+/// 后顶栏会重新出现。iOS 18 起要用 `.toolbarVisibility(.hidden, for: .tabBar)` 才能真正藏住。
+/// 两处都写上：18+ 走新 API，17 走老 API。顶栏藏不住是点导入/深景还卡的根源，务必藏掉。
 private struct PadFloatingTabPill: ViewModifier {
     func body(content: Content) -> some View {
         if UIDevice.current.userInterfaceIdiom == .pad {
-            content
-                .toolbar(.hidden, for: .tabBar)
-                .overlay(alignment: .bottom) {
-                    FloatingTabPill()
+            Group {
+                if #available(iOS 18.0, *) {
+                    content
+                        .toolbar(.hidden, for: .tabBar)
+                        .toolbarVisibility(.hidden, for: .tabBar)
+                } else {
+                    content
+                        .toolbar(.hidden, for: .tabBar)
                 }
+            }
+            .overlay(alignment: .bottom) {
+                FloatingTabPill()
+            }
         } else {
             content
         }
@@ -154,7 +167,7 @@ private struct FloatingTabPill: View {
                 .padding(.vertical, 10)
                 .background {
                     if state.selectedTab == index {
-                        Capsule().fill(Color.white.opacity(0.18))
+                        Capsule().fill(Color.white.opacity(0.25))
                     }
                 }
                 .buttonStyle(.plain)
@@ -162,12 +175,12 @@ private struct FloatingTabPill: View {
             }
         }
         .padding(4)
+        // 药丸底改实在：深色不透底 + 细白边，任何背景上都一眼能看清、字能读清。
+        // V1 的白 0.06 在深色涂鸦底上几乎隐形；glassEffect(.clear) 在 26 上也太透，都不用了。
         .background {
-            if #available(iOS 26.0, *) {
-                Capsule().glassEffect(.clear)
-            } else {
-                Capsule().fill(.white.opacity(0.06))
-            }
+            Capsule()
+                .fill(Color(white: 0.12).opacity(0.9))
+                .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1))
         }
         .padding(.bottom, 16)
     }
