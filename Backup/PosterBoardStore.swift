@@ -16,9 +16,10 @@ import SQLite3
 /// 猜出来的行集合会撞。所以 apply 是读设备的数据库，在它的拷贝上
 /// 加行，再把拷贝送回去。
 enum PosterBoardStore {
-    /// 经典的 pre-db5 表集合。严格校验要求四个都有。
-    static let requiredTables = ["poster", "posterAttributes", "posterRoleMembership",
-                                 "sqlite_sequence"]
+    /// v61（db5+）的表集合：真机 27.0.1 / 27.2 的 PosterBoard 商店实测有这 6 张表
+    ///（2026-11-08 探针从设备真表打出的 sqlite_master）。严格校验要求六个都有。
+    static let requiredTables = ["poster", "posterAttributes", "posterMetadata",
+                                 "posterRoleMembership", "posterRoles", "sqlite_sequence"]
 
     /// `SQLITE_TRANSIENT` 是 C 的宏，这个模块看不到它；`-1` 告诉 sqlite
     /// 把字节拷一份再存，不要留着指针——Swift 的临时量在 bind 返回
@@ -29,7 +30,7 @@ enum PosterBoardStore {
 
     /// `_validate_posterboard_db`。
     ///
-    /// - Parameter strict: `true` 要求经典表集合；`false` 接受任何带着
+    /// - Parameter strict: `true` 要求 v61 表集合；`false` 接受任何带着
     ///   poster 相关表的健康数据库，因为结构会在 iOS 版本之间变（db5+）。
     static func validate(_ url: URL, strict: Bool = true) -> Bool {
         diagnose(url, strict: strict) == nil
@@ -148,6 +149,11 @@ enum PosterBoardStore {
 
     /// `create_empty_posterboard_db`：商店的结构、不带数据，
     /// 也就是一次完整重置后留下的东西。
+    ///
+    /// 建表语句照抄设备真表（v61，2026-11-08 探针从 27.0.1 真机打出的
+    /// sqlite_master），包括以前漏掉的 posterRoles / posterMetadata。
+    /// 顺序上 posterRoles 在前，因为 posterAttributes 和
+    /// posterRoleMembership 的外键指着它。
     static func createEmptyDatabase(at url: URL) throws {
         try? FileManager.default.removeItem(at: url)
         var db: OpaquePointer?
@@ -156,21 +162,34 @@ enum PosterBoardStore {
         }
         defer { sqlite3_close(db) }
         let schema = """
-            CREATE TABLE IF NOT EXISTS poster (
-              posterId INTEGER PRIMARY KEY AUTOINCREMENT,
-              UUID TEXT,
-              providerId TEXT
+            CREATE TABLE IF NOT EXISTS "poster" (
+              "posterId" INTEGER PRIMARY KEY AUTOINCREMENT,
+              "UUID" TEXT UNIQUE ON CONFLICT ROLLBACK,
+              "providerId" TEXT NOT NULL ON CONFLICT ROLLBACK
             );
-            CREATE TABLE IF NOT EXISTS posterAttributes (
-              posterUUID TEXT,
-              roleId TEXT,
-              attributeIdentifier TEXT,
-              attributePayload BLOB
+            CREATE TABLE IF NOT EXISTS "posterRoles" (
+              "roleIdentifier" TEXT PRIMARY KEY ON CONFLICT ROLLBACK UNIQUE ON CONFLICT ROLLBACK NOT NULL ON CONFLICT ROLLBACK,
+              "displayName" NOT NULL ON CONFLICT ROLLBACK UNIQUE ON CONFLICT ROLLBACK
             );
-            CREATE TABLE IF NOT EXISTS posterRoleMembership (
-              posterUUID TEXT,
-              roleId TEXT,
-              roleSortKey INTEGER
+            CREATE TABLE IF NOT EXISTS "posterMetadata" (
+              "key" TEXT NOT NULL ON CONFLICT ROLLBACK UNIQUE ON CONFLICT ROLLBACK PRIMARY KEY,
+              "value" TEXT NOT NULL ON CONFLICT ROLLBACK
+            );
+            CREATE TABLE IF NOT EXISTS "posterAttributes" (
+              "posterUUID" TEXT NOT NULL ON CONFLICT ROLLBACK,
+              "roleId" TEXT NOT NULL ON CONFLICT ROLLBACK,
+              "attributeIdentifier" TEXT NOT NULL ON CONFLICT ROLLBACK,
+              "attributePayload" TEXT NOT NULL ON CONFLICT ROLLBACK,
+              CONSTRAINT posters FOREIGN KEY (posterUUID) REFERENCES poster(UUID) ON DELETE CASCADE,
+              CONSTRAINT roles FOREIGN KEY (roleId) REFERENCES posterRoles(roleIdentifier) ON DELETE CASCADE,
+              UNIQUE (posterUUID, roleID, attributeIdentifier)
+            );
+            CREATE TABLE IF NOT EXISTS "posterRoleMembership" (
+              "posterUUID" TEXT NOT NULL ON CONFLICT ROLLBACK,
+              "roleId" TEXT NOT NULL ON CONFLICT ROLLBACK,
+              "roleSortKey" INTEGER NOT NULL,
+              CONSTRAINT posters FOREIGN KEY (posterUUID) REFERENCES poster(UUID) ON DELETE CASCADE,
+              CONSTRAINT roles FOREIGN KEY (roleId) REFERENCES posterRoles(roleIdentifier) ON DELETE CASCADE
             );
             """
         guard exec(db, schema) else {
