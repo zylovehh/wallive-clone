@@ -314,6 +314,10 @@ enum RestoreTest {
         try checkCancelled(isCancelled)
         let merged = try mergeStore(savedDB: fresh.savedDB, savedWAL: fresh.savedWAL, workDir: workDir)
 
+        // 3b. 打表结构：把真表的建表语句打到日志里（只打 CREATE TABLE，不打数据行），
+        //     用来补空表缺的 posterRoles / posterMetadata。打不出来不拦路，探针照常存表。
+        logTableSchema(db: merged)
+
         // 4. 存成已存表（merged.sqlite3），跟成功安装后刷新存过的表一个做法。
         onProgress?("正在存表…", 0.9)
         try checkCancelled(isCancelled)
@@ -326,6 +330,33 @@ enum RestoreTest {
             success: true,
             summary: "表已存好（v\(version)，\(dbSize) 字节）。",
             dbSize: dbSize, dbVersion: version, json: jsonString(report))
+    }
+
+    /// 打真表的建表语句到日志里：只打 CREATE TABLE（sqlite_master 的 sql 列），
+    /// 不打数据行。用来补空表缺的 posterRoles / posterMetadata。
+    /// 打不出来也不让探针失败，只记一行原因，探针该存表还存表。
+    private static func logTableSchema(db: URL) {
+        var handle: OpaquePointer?
+        let rc = sqlite3_open_v2(db.path, &handle, SQLITE_OPEN_READONLY, nil)
+        guard rc == SQLITE_OK, let handle else {
+            InstallLog.shared.append("probe: 表结构没打出来：表打不开。")
+            if let h = handle { sqlite3_close(h) }
+            return
+        }
+        defer { sqlite3_close(handle) }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "SELECT sql FROM sqlite_master WHERE type='table' ORDER BY name;", -1, &stmt, nil) == SQLITE_OK,
+              let stmt = stmt else {
+            InstallLog.shared.append("probe: 表结构没打出来：\(String(cString: sqlite3_errmsg(handle)))")
+            return
+        }
+        defer { sqlite3_finalize(stmt) }
+        InstallLog.shared.append("probe: 表结构（sqlite_master）：")
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let text = sqlite3_column_text(stmt, 0) {
+                InstallLog.shared.append(String(cString: text))
+            }
+        }
     }
 
     /// 校验刚拷回来的表：是 SQLite 文件、版本是 61。校验不过不存坏表，直接停。
