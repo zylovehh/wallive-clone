@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 液态透明胶囊：iOS 26+ 用透明系统玻璃，低版本回退半透明白。
 private struct LiquidGlassCapsule: ViewModifier {
@@ -36,6 +37,8 @@ struct ImportView: View {
     @EnvironmentObject private var state: AppState
     @State private var showPicker = false
     @State private var message = ""
+    @State private var showPairingPicker = false
+    @State private var pairingMessage = ""
     @State private var clearing = false
     @State private var clearResult = ""
 
@@ -55,6 +58,37 @@ struct ImportView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
+
+                // 26 系统用：配对文件下载/导入入口，只在 iOS 26 的手机上显示。
+                // 26 的手机自己生成不了配对文件，得电脑连 USB 生成、传到手机上再导进来；
+                // 27 的手机能自己生成，不需要这步，所以 27 不显示。
+                if isIOS26 {
+                    Section("配对文件（26 系统用）") {
+                        HStack {
+                            Spacer()
+                            Button("下载配置文件") { showPairingPicker = true }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 28).padding(.vertical, 12)
+                                .glassCapsule()
+                                .buttonStyle(PressBounceButtonStyle())
+                            Spacer()
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        Text("26 的手机自己生成不了配对文件：先在电脑上连 USB 生成，传到手机上（隔空投送，或存到文件 App），再点上面按钮选那个 .plist 导进来。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .listRowBackground(Color.clear)
+                        if state.pairingLoaded {
+                            Text("配对文件已导入：\(state.pairingDescription)")
+                                .font(.caption)
+                                .listRowBackground(Color.clear)
+                        } else if !pairingMessage.isEmpty {
+                            Text(pairingMessage).foregroundStyle(.red).font(.caption)
+                                .listRowBackground(Color.clear)
+                        }
+                    }
+                }
 
                 if let info = state.packageInfo {
                     Section("1 个壁纸包") {
@@ -126,7 +160,30 @@ struct ImportView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showPairingPicker) {
+                DocumentPicker(contentTypes: [.propertyList]) { url in
+                    showPairingPicker = false
+                    Task { @MainActor in
+                        pairingMessage = ""
+                        state.importPairingFile(from: url)
+                        if state.pairingLoaded {
+                            pairingMessage = "配对文件已导入，可以装壁纸了。"
+                        } else if !state.statusMessage.isEmpty {
+                            pairingMessage = state.statusMessage
+                        } else {
+                            pairingMessage = "配对文件导入失败，请确认选的是电脑上生成的配对文件（.plist）。"
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    /// 只在 iOS 26 的手机上显示配对文件下载入口：26 的手机自己生成不了
+    /// 配对文件，27 的手机能自己生成，不需要这步。用本机系统版本判断
+    ///（App 就跑在这台手机上），不走 deviceInfo（没配对文件时读不到）。
+    private var isIOS26: Bool {
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26
     }
 
     private func packageName(from info: TendiesPackageInfo) -> String {
