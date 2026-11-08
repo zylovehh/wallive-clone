@@ -98,56 +98,57 @@ struct ContentView: View {
     }
 
     private var mainTabs: some View {
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            // iPad：不用 TabView——系统顶栏药丸（iPadOS 18 浮动 tab bar）藏不住。
-            // `.toolbar(.hidden)` 切页后会重新冒出来（已知 bug），
-            // `.toolbarVisibility(.hidden)` 在 V2 真机上也证实不管用（mollyiv.dev：
-            // “没有官方 API 能藏住默认 tab bar”）。而且 V2 在 iPad 上点导入/
-            // 深景/状态会整 App 卡死、只有目录能点——三页进页时做的事都不会
-            // 冻主线程（导入没配对文件直接返回，深景只是渐变文字动画，状态
-            // 只是读个 plist），卡死只能是 TabView 编程式切页签那一步本身
-            // 在 iPadOS 18 上的毛病。顶栏还在和切页卡死是同一个根因。
-            // 改用自定义容器：四个页按 selectedTab 显示，没有 TabView 就没有
-            // 系统顶栏、也没有 TabView 切页那步，两处一起治。底部药丸自己切页。
-            // 四个页都留在层级里（只改透明度和可点），切页不重建、不丢状态。
-            // iPhone 不动，走原来的 TabView。
-            ZStack(alignment: .bottom) {
-                Group {
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                // iPad：不用 TabView——系统顶栏药丸（iPadOS 18 浮动 tab bar）藏不住。
+                // `.toolbar(.hidden)` 切页后会重新冒出来（已知 bug），
+                // `.toolbarVisibility(.hidden)` 在 V2 真机上也证实不管用（mollyiv.dev：
+                // “没有官方 API 能藏住默认 tab bar”）。而且 V2 在 iPad 上点导入/
+                // 深景/状态会整 App 卡死、只有目录能点——三页进页时做的事都不会
+                // 冻主线程（导入没配对文件直接返回，深景只是渐变文字动画，状态
+                // 只是读个 plist），卡死只能是 TabView 编程式切页签那一步本身
+                // 在 iPadOS 18 上的毛病。顶栏还在和切页卡死是同一个根因。
+                // 改用自定义容器：四个页按 selectedTab 显示，没有 TabView 就没有
+                // 系统顶栏、也没有 TabView 切页那步，两处一起治。底部药丸自己切页。
+                // 四个页都留在层级里（只改透明度和可点），切页不重建、不丢状态。
+                // iPhone 不动，走原来的 TabView。
+                ZStack(alignment: .bottom) {
+                    Group {
+                        CatalogView()
+                            .opacity(state.selectedTab == 0 ? 1 : 0)
+                            .disabled(state.selectedTab != 0)
+                        ImportView()
+                            .opacity(state.selectedTab == 1 ? 1 : 0)
+                            .disabled(state.selectedTab != 1)
+                        DepthView()
+                            .opacity(state.selectedTab == 2 ? 1 : 0)
+                            .disabled(state.selectedTab != 2)
+                        StatusView()
+                            .opacity(state.selectedTab == 3 ? 1 : 0)
+                            .disabled(state.selectedTab != 3)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    FloatingTabPill()
+                }
+            } else {
+                TabView(selection: $state.selectedTab) {
                     CatalogView()
-                        .opacity(state.selectedTab == 0 ? 1 : 0)
-                        .disabled(state.selectedTab != 0)
+                        .tabItem { Label("目录", systemImage: "square.grid.2x2") }
+                        .tag(0)
                     ImportView()
-                        .opacity(state.selectedTab == 1 ? 1 : 0)
-                        .disabled(state.selectedTab != 1)
+                        .tabItem { Label("导入", systemImage: "square.and.arrow.down") }
+                        .tag(1)
                     DepthView()
-                        .opacity(state.selectedTab == 2 ? 1 : 0)
-                        .disabled(state.selectedTab != 2)
+                        .tabItem { Label("深景", systemImage: "moon.stars") }
+                        .tag(2)
                     StatusView()
-                        .opacity(state.selectedTab == 3 ? 1 : 0)
-                        .disabled(state.selectedTab != 3)
+                        .tabItem { Label("状态", systemImage: "info.circle") }
+                        .tag(3)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                FloatingTabPill()
             }
-            .environmentObject(accountStore)
-        } else {
-            TabView(selection: $state.selectedTab) {
-                CatalogView()
-                    .tabItem { Label("目录", systemImage: "square.grid.2x2") }
-                    .tag(0)
-                ImportView()
-                    .tabItem { Label("导入", systemImage: "square.and.arrow.down") }
-                    .tag(1)
-                DepthView()
-                    .tabItem { Label("深景", systemImage: "moon.stars") }
-                    .tag(2)
-                StatusView()
-                    .tabItem { Label("状态", systemImage: "info.circle") }
-                    .tag(3)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .environmentObject(accountStore)
         }
+        .environmentObject(accountStore)
     }
 }
 
