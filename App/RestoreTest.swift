@@ -229,19 +229,39 @@ enum RestoreTest {
         // 1. 拿表：先试探针 3 同一条通道拷回 v61 的表 + -wal、存盘。
         //    拷不回来就改用手机里已存的那张表接着做，不死等重拷——
         //    拷回那条路重启后第一次能成，之后再跑就不成。
+        //    快失败（比如同步完了、文件读不到）多试 3 次再放弃：有时
+        //    是手机那边慢一拍，再试一次就成了。超时不重试：超时那次
+        //    后台线程还在跑，再开一次会两路同时拷，互相干扰。
         let savedDB: URL
         let savedWAL: URL?
         let container: String
-        do {
-            let fresh = try exportAndSaveTimed(
-                pairingPath: pairingPath, stamp: stamp, report: &report)
+        var freshResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
+        var lastExportError: StepError? = nil
+        for attempt in 1...3 {
+            do {
+                freshResult = try exportAndSaveTimed(
+                    pairingPath: pairingPath, stamp: stamp, report: &report)
+                break
+            } catch {
+                lastExportError = (error as? StepError)
+                    ?? StepError(step: "拿表", detail: "\(error.localizedDescription)")
+                // 超时不重试：那次后台线程还在跑，再试会两路同时拷。
+                if let e = lastExportError, e.detail.hasPrefix("取表超时") { break }
+                if attempt < 3 {
+                    InstallLog.shared.append("restore: 拿表第 \(attempt) 次没成，等 5 秒再试一次。")
+                    Thread.sleep(forTimeInterval: 5)
+                    try checkCancelled(isCancelled)
+                }
+            }
+        }
+        if let fresh = freshResult {
             savedDB = fresh.savedDB
             savedWAL = fresh.savedWAL
             container = fresh.container
             report["table_source"] = "fresh"
-        } catch {
-            let exportError = (error as? StepError)
-                ?? StepError(step: "拿表", detail: "\(error.localizedDescription)")
+        } else {
+            let exportError = lastExportError
+                ?? StepError(step: "拿表", detail: "取表没回结果。")
             let fallback = try storedTableFallback(report: &report, exportError: exportError)
             savedDB = fallback.db
             savedWAL = fallback.wal
