@@ -73,6 +73,9 @@ struct RestoreOutcome {
     /// 成功时一定是 true（写偏好是必经步骤，失败就停了）。
     let preferencesWritten: Bool
     let refreshConfirmed: Bool
+    /// 刷新失败且 PosterBoard 杀掉后没回来时为 true：只有重启手机能让它
+    /// 重读新表，导入页备份装完给用户一个“重启手机”按钮（用户亲手点才重启）。
+    let rebootNeeded: Bool
     /// 描述符注入逐目标结果（主扩展 + 现代扩展）。
     let injectResults: [InjectResult]
     let json: String
@@ -193,7 +196,7 @@ enum RestoreTest {
                 success: false,
                 summary: "已停止。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
-                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
                 injectResults: [], json: jsonString(report))
         } catch let e as StepError {
             report["step"] = e.step
@@ -203,7 +206,7 @@ enum RestoreTest {
                 success: false,
                 summary: "备份还原停在\(e.step)：\(e.detail)原来的表还在 Documents/posterboard-table 里，没动。完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
-                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
                 injectResults: [], json: jsonString(report))
         } catch {
             report["error"] = error.localizedDescription
@@ -212,7 +215,7 @@ enum RestoreTest {
                 success: false,
                 summary: "备份还原失败：\(error.localizedDescription)完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
-                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
                 injectResults: [], json: jsonString(report))
         }
     }
@@ -664,9 +667,12 @@ enum RestoreTest {
 
         // 8. 刷新：调一次 al_posterboard_refresh（杀 PosterBoard、等它重起重读），
         //    结果只记进报告、不抛错；没确认就还是得重启手机再看。
+        //    27.2 上 PosterBoard 杀掉后不回来时 rebootNeeded 为 true：只有
+        //    重启手机能让它重读新表，导入页给用户一个“重启手机”按钮。
         let refresh = posterboardRefresh(pairingPath: pairingPath)
         report["refresh"] = refresh
         let refreshConfirmed = refresh["confirmed"] as? Bool ?? false
+        let rebootNeeded = refresh["rebootNeeded"] as? Bool ?? false
         onProgress?("刷新完成", 1.0)
 
         // 已存表更新成刚写回的那张：下次拿表万一拷不回来，兜底用的就是
@@ -680,12 +686,12 @@ enum RestoreTest {
                          ok: $0["ok"] as? Bool ?? false,
                          error: $0["error"] as? String)
         }
-        let summary = "备份还原成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。\(refreshConfirmed ? "PosterBoard 已刷新，去图库长按看有没有这张壁纸。" : "刷新没确认，重启手机，再去图库长按看有没有这张壁纸。")完整结果见下面日志框."
+        let summary = "备份还原成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。\(refreshConfirmed ? "PosterBoard 已刷新，去图库长按看有没有这张壁纸。" : rebootNeeded ? "刷新没确认：PosterBoard 杀掉后没回来，只有重启手机能让它重读新表，重启后去图库长按看有没有这张壁纸。" : "刷新没确认，重启手机，再去图库长按看有没有这张壁纸。")完整结果见下面日志框."
         return RestoreOutcome(success: true, summary: summary,
                               descriptorUUID: firstConfig.uuid, posterId: newPosterId,
                               extensionID: firstConfig.extensionID, payloadCount: filesWritten,
                               storeSummary: report["store_after"] as? String,
-                              preferencesWritten: true, refreshConfirmed: refreshConfirmed,
+                              preferencesWritten: true, refreshConfirmed: refreshConfirmed, rebootNeeded: rebootNeeded,
                               injectResults: descriptorInjects,
                               json: jsonString(report))
     }
@@ -1494,6 +1500,9 @@ enum RestoreTest {
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 result["json"] = obj
                 result["confirmed"] = obj["refresh_confirmed"] as? Bool ?? false
+                // 27.2 上 PosterBoard 杀掉后没回来时 Rust 置 true：只有重启
+                // 手机能让它重读新表，导入页据此给用户一个“重启手机”按钮。
+                result["rebootNeeded"] = obj["reboot_needed"] as? Bool ?? false
             }
             InstallLog.shared.append("restore: 刷新 PosterBoard：\(json)")
         }
@@ -1504,6 +1513,30 @@ enum RestoreTest {
             InstallLog.shared.append("restore: 刷新 PosterBoard 没回 JSON：\(error)")
         }
         return result
+    }
+
+    /// 一键重启手机：调 al_device_respring（diagnostics_relay Restart，
+    /// 是整机重启，不是只刷桌面——按钮文案必须写“重启手机”，不许写
+    /// “刷新桌面”或“Respring”；2026-11-01 没打招呼的整机重启就是教训）。
+    /// 只在刷新失败、PosterBoard 杀掉后没回来时给用户亲手点；绝不自动调。
+    /// FFI 会阻塞，放后台线程跑；返回 true 只代表指令发出去了，不代表
+    /// 手机已经重启完。
+    static func deviceReboot(pairingPath: String) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            "10.7.0.1".withCString { _ = al_set_target_host($0) }
+            var outError: UnsafeMutablePointer<CChar>? = nil
+            let rc = pairingPath.withCString { pairC in
+                al_device_respring(pairC, airliftLogCallback, nil, &outError)
+            }
+            if let p = outError {
+                let error = String(cString: p)
+                al_string_free(p)
+                InstallLog.shared.append("restore: 重启手机失败：\(error)")
+                return false
+            }
+            InstallLog.shared.append("restore: 已发送重启手机指令（rc=\(rc)）。")
+            return rc == 0
+        }.value
     }
 
     // MARK: - 写回表（新 Rust FFI）

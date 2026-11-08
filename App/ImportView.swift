@@ -237,6 +237,9 @@ private struct ImportDetailView: View {
     @State private var installProgress = 0.0
     /// 正在跑的安装任务，进度框里的"停止"按钮用它取消。
     @State private var installTask: Task<Void, Never>?
+    @State private var showRebootConfirm = false
+    @State private var rebooting = false
+    @State private var rebootResult = ""
 
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
@@ -428,6 +431,29 @@ private struct ImportDetailView: View {
                         Text("安装成功，再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合。")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("备份还原装完要重启手机，壁纸才会进图库。点一下直接重启，不用手动关机再开机。")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            HStack {
+                                Button("重启手机") { showRebootConfirm = true }
+                                    .disabled(rebooting || !state.hasPairingFile)
+                                if rebooting { ProgressView() }
+                            }.buttonStyle(.bordered)
+                            if !rebootResult.isEmpty {
+                                Text(rebootResult).font(.caption)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .alert("重启手机？", isPresented: $showRebootConfirm) {
+                            Button("重启手机", role: .destructive) {
+                                Task { await runReboot() }
+                            }
+                            Button("取消", role: .cancel) {}
+                        } message: {
+                            Text("重启后 PosterBoard 会重新读取新表，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。")
+                        }
                     } else if let reason = installFailedReason {
                         Text("安装失败：\(reason)。再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
                             .font(.caption).foregroundStyle(.secondary)
@@ -579,6 +605,26 @@ private struct ImportDetailView: View {
             installLogText = InstallLog.shared.tail(60)
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
+        }
+    }
+
+    /// 一键重启手机：备份路装完必须重启一次壁纸才会进图库（27.2 上
+    /// 杀 PosterBoard 刷不动，只能重启）。用户亲手点确认才发指令，
+    /// 绝不自动重启。指令发出后手机自己重启，重启完去锁屏长按进图库看。
+    private func runReboot() async {
+        guard !rebooting else { return }
+        rebooting = true
+        defer { rebooting = false }
+        guard state.hasPairingFile else {
+            rebootResult = "重启没发：没有配对记录文件，先在配对记录页生成或导入一个。"
+            return
+        }
+        rebootResult = "正在发重启指令…"
+        let ok = await RestoreTest.deviceReboot(pairingPath: state.pairingFileURL.path)
+        if ok {
+            rebootResult = "已发送重启指令，手机正在重启。重启后去锁屏长按进图库看有没有这张壁纸。"
+        } else {
+            rebootResult = "重启指令没发出去，原因见下面日志。也可以手动关机再开机。"
         }
     }
 
