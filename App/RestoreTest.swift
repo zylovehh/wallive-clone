@@ -665,14 +665,19 @@ enum RestoreTest {
         try checkCancelled(isCancelled)
         onProgress?("正在刷新…", 0.85)
 
-        // 8. 刷新：调一次 al_posterboard_refresh（杀 PosterBoard、等它重起重读），
-        //    结果只记进报告、不抛错；没确认就还是得重启手机再看。
-        //    27.2 上 PosterBoard 杀掉后不回来时 rebootNeeded 为 true：只有
-        //    重启手机能让它重读新表，导入页给用户一个“重启手机”按钮。
-        let refresh = posterboardRefresh(pairingPath: pairingPath)
+        // 8. 刷新：默认走 SpringBoard 重启（装完直接重启桌面，桌面回来壁纸
+        //    就该在图库里了；跟换语言时系统重启桌面一个道理，桌面一定回来，
+        //    不存在杀 PosterBoard 后不回来那回事）。SpringBoard 重启起不来
+        //    才回落到杀 PosterBoard（老路，27.0.1 上管用，27.2 上杀完不回来、
+        //    还得重启手机，导入页给用户一个“重启手机”按钮）。
+        //    注意：桌面重启时 App 可能被系统一起杀掉，那时这步回不来，用户
+        //    直接去图库看；文件、表、偏好在第 8 步之前已经全写好了，日志也已
+        //    落盘，重开 App 能看到装完了。结果只记进报告、不抛错。
+        let refresh = refreshAfterInstall(pairingPath: pairingPath)
         report["refresh"] = refresh
         let refreshConfirmed = refresh["confirmed"] as? Bool ?? false
         let rebootNeeded = refresh["rebootNeeded"] as? Bool ?? false
+        let refreshMethod = refresh["method"] as? String ?? "posterboard"
         onProgress?("刷新完成", 1.0)
 
         // 已存表更新成刚写回的那张：下次拿表万一拷不回来，兜底用的就是
@@ -686,7 +691,7 @@ enum RestoreTest {
                          ok: $0["ok"] as? Bool ?? false,
                          error: $0["error"] as? String)
         }
-        let summary = "备份还原成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。\(refreshConfirmed ? "PosterBoard 已刷新，去图库长按看有没有这张壁纸。" : rebootNeeded ? "刷新没确认：PosterBoard 杀掉后没回来，只有重启手机能让它重读新表，重启后去图库长按看有没有这张壁纸。" : "刷新没确认，重启手机，再去图库长按看有没有这张壁纸。")完整结果见下面日志框."
+        let summary = "备份还原成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。\(refreshConfirmed ? (refreshMethod == "springboard" ? "桌面已重启，去图库长按看有没有这张壁纸。" : "PosterBoard 已刷新，去图库长按看有没有这张壁纸。") : rebootNeeded ? "刷新没确认：PosterBoard 杀掉后没回来，只有重启手机能让它重读新表，重启后去图库长按看有没有这张壁纸。" : "刷新没确认，重启手机，再去图库长按看有没有这张壁纸。")完整结果见下面日志框."
         return RestoreOutcome(success: true, summary: summary,
                               descriptorUUID: firstConfig.uuid, posterId: newPosterId,
                               extensionID: firstConfig.extensionID, payloadCount: filesWritten,
@@ -1511,6 +1516,61 @@ enum RestoreTest {
             al_string_free(p)
             result["error"] = error
             InstallLog.shared.append("restore: 刷新 PosterBoard 没回 JSON：\(error)")
+        }
+        return result
+    }
+
+    /// 装完刷新：先试 SpringBoard 重启，不行再回落到杀 PosterBoard。
+    /// 2026-11-09，27.2：PosterBoard 杀掉后不回来（V6 日志已证实表对了也
+    /// 不回来），改成装完直接重启桌面——桌面回来壁纸就该在图库里了，跟换
+    /// 语言时系统重启桌面一个道理。杀 PosterBoard 留着当备选，万一 SpringBoard
+    /// 重启起不来（拿不到进程号、没确认）还能切回去。
+    /// 返回的字典跟原来第 8 步同一个形状：confirmed / rebootNeeded / json，
+    /// 多一个 method（"springboard" 或 "posterboard"），写进报告和日志。
+    /// 注意：桌面重启时 App 可能被系统一起杀掉，那时这步回不来，用户直接
+    /// 去图库看；文件、表、偏好在第 8 步之前已经全写好了，日志也已落盘，
+    /// 重开 App 能看到装完了。
+    private static func refreshAfterInstall(pairingPath: String) -> [String: Any] {
+        InstallLog.shared.append("restore: 刷新：先试 SpringBoard 重启…")
+        var sb = springboardRespringSync(pairingPath: pairingPath)
+        sb["method"] = "springboard"
+        if sb["confirmed"] as? Bool == true {
+            InstallLog.shared.append("restore: SpringBoard 重启已确认，桌面回来了，去图库看壁纸。")
+            return sb
+        }
+        InstallLog.shared.append("restore: SpringBoard 重启没确认（\(sb["error"] as? String ?? "见日志")），回落到杀 PosterBoard。")
+        var pb = posterboardRefresh(pairingPath: pairingPath)
+        pb["method"] = "posterboard"
+        return pb
+    }
+
+    /// 同步版 SpringBoard 重启：给 restore() 第 8 步用（restore 是同步的，
+    /// 不能 await 那个异步版）。跟 posterboardRefresh 一个写法：直接在调用
+    /// 线程调 al_springboard_respring（FFI 会阻塞，调用方必须在后台线程，
+    /// runRestore 的文档就是这么要求的）。返回 confirmed / old_pid / new_pid / error。
+    private static func springboardRespringSync(pairingPath: String) -> [String: Any] {
+        "10.7.0.1".withCString { _ = al_set_target_host($0) }
+        var outJson: UnsafeMutablePointer<CChar>? = nil
+        var outError: UnsafeMutablePointer<CChar>? = nil
+        let rc = pairingPath.withCString { pairC in
+            al_springboard_respring(pairC, airliftLogCallback, nil, &outJson, &outError)
+        }
+        var result: [String: Any] = ["attempted": true, "rc": rc, "confirmed": false]
+        if let p = outJson {
+            let json = String(cString: p)
+            al_string_free(p)
+            if let data = json.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                result["json"] = obj
+                result["confirmed"] = obj["respring_confirmed"] as? Bool ?? false
+            }
+            InstallLog.shared.append("restore: SpringBoard 重启：\(json)")
+        }
+        if let p = outError {
+            let error = String(cString: p)
+            al_string_free(p)
+            result["error"] = error
+            InstallLog.shared.append("restore: SpringBoard 重启没回 JSON：\(error)")
         }
         return result
     }
