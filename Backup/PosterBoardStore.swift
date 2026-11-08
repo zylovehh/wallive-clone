@@ -317,14 +317,30 @@ enum PosterBoardStore {
 
         // 角色行：归属和属性的外键都指着 posterRoles，空表里必须先有
         // 锁屏角色这一行，PosterBoard 查角色时才能找到，图库才认这张
-        // 壁纸。displayName 没有真表行数据可抄（探针只打了建表语句），
-        // 先写标识本身；posterMetadata 的 key 也待真表行数据，这里先
-        // 不插，只插角色行。
+        // 壁纸。displayName 和 metadata 的值抄自 Vellum PC 自带的空白
+        // 底座表 builtin_base.sqlite3（证据：~/workspace/vellum-pc-re/
+        // analysis/builtin_base_rows.txt）：锁屏角色显示名是 "Lock Screen"，
+        // posterMetadata 是 version=2、deviceClass=0。
         try run(db, "UPDATE posterRoles SET displayName = ? WHERE roleIdentifier = ?",
-                [.text("PRPosterRoleLockScreen"), .text("PRPosterRoleLockScreen")])
+                [.text("Lock Screen"), .text("PRPosterRoleLockScreen")])
         if changes(db) == 0 {
             try run(db, "INSERT INTO posterRoles (roleIdentifier, displayName) VALUES (?, ?)",
-                    [.text("PRPosterRoleLockScreen"), .text("PRPosterRoleLockScreen")])
+                    [.text("PRPosterRoleLockScreen"), .text("Lock Screen")])
+        }
+
+        // 元数据行：真表里有 version=2、deviceClass=0 两行（同上，Vellum PC
+        // builtin_base.sqlite3）。空表里没有这两行时也补上。
+        try run(db, "UPDATE posterMetadata SET value = ? WHERE key = ?",
+                [.text("2"), .text("version")])
+        if changes(db) == 0 {
+            try run(db, "INSERT INTO posterMetadata (key, value) VALUES (?, ?)",
+                    [.text("version"), .text("2")])
+        }
+        try run(db, "UPDATE posterMetadata SET value = ? WHERE key = ?",
+                [.text("0"), .text("deviceClass")])
+        if changes(db) == 0 {
+            try run(db, "INSERT INTO posterMetadata (key, value) VALUES (?, ?)",
+                    [.text("deviceClass"), .text("0")])
         }
 
         // 选中的壁纸只能有一张。没有新条目要求当选时（包括只动容器的
