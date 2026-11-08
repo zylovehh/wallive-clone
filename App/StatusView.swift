@@ -490,6 +490,10 @@ private struct StatusHistoryPage: View {
 
 private struct StatusLogPage: View {
     @EnvironmentObject private var state: AppState
+    @State private var probeRunning = false
+    @State private var probeProgress = ""
+    @State private var probeResult = ""
+    @State private var probeTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -499,10 +503,54 @@ private struct StatusLogPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-                // 探针按钮（探针 3、列出行、还原测试）已全部拿掉：正式版
-                // 备份还原走导入页的安装按钮（BackupInstallFlow），拿表、
-                // 插行、写回那套引擎还在 RestoreTest.swift 里，按钮没了，
-                // 通道还在用。这里只剩安装日志。
+                // 探针拿表：不装壁纸，单独把那张表拿下来存好。
+                // 探针 2 那次拿到的表只存在内存里、没存盘，丢了；这个按钮就是补
+                // 这个缺：点一下，单独跑一遍探针 3 那条拷回通道拿表、校验、存成
+                // 已存表（merged.sqlite3），以后装就有兜底了。
+                // 旧的探针按钮（探针 3、列出行、还原测试）已拿掉，正式版备份还原
+                // 走导入页的安装按钮（BackupInstallFlow），拿表、插行、写回那套
+                // 引擎还在 RestoreTest.swift 里。
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("探针拿表").font(.headline)
+                    Text("不装壁纸，单独把那张表拿下来存好（以后装就有兜底了）。走探针 3 那条拷回通道，30 秒超时。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 12) {
+                        Button {
+                            runProbeFetch()
+                        } label: {
+                            Text("探针拿表").frame(maxWidth: .infinity)
+                        }
+                        .disabled(probeRunning || !state.hasPairingFile)
+                        if probeRunning {
+                            Button {
+                                stopProbeFetch()
+                            } label: {
+                                Text("停止").frame(maxWidth: .infinity)
+                            }
+                        }
+                    }.buttonStyle(GlassButtonStyle())
+                    if !state.hasPairingFile {
+                        Text("没有配对记录文件：先去配对记录页导入一个。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if probeRunning {
+                        ProgressView().frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    if probeRunning && !probeProgress.isEmpty {
+                        Text(probeProgress).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !probeResult.isEmpty {
+                        Text(probeResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding()
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                 Text("安装日志（可长按复制）").font(.headline)
                 Text(InstallLog.shared.tail(60))
                     .font(.system(.caption, design: .monospaced))
@@ -514,6 +562,95 @@ private struct StatusLogPage: View {
         }
     }
 
+    /// 探针拿表：后台跑 RestoreTest.probeFetchTable（同步阻塞，放后台线程）。
+    /// 停止按钮取消的是上层 Task，后台那路看不到取消标记，所以用取消盒中转：
+    /// 上层取消时轮询立刻抛、关进度，不等后台回来；后台在下一步边界查到取消
+    /// 标记就自己停。跟 BackupInstallFlow 那套一样的接法。
+    private func runProbeFetch() {
+        guard !probeRunning else { return }
+        guard state.hasPairingFile else {
+            probeResult = "没有配对记录文件：先去配对记录页导入一个。"
+            return
+        }
+        probeRunning = true
+        probeProgress = "正在拿表…"
+        probeResult = ""
+        let pairingPath = state.pairingFileURL.path
+        probeTask = Task {
+            let cancelBox = ProbeFetchCancelBox()
+            let outcomeBox = ProbeFetchOutcomeBox()
+            _ = Task.detached(priority: .userInitiated) {
+                let outcome = RestoreTest.probeFetchTable(
+                    pairingPath: pairingPath,
+                    onProgress: { text, _ in
+                        Task { @MainActor in self.probeProgress = text }
+                    },
+                    isCancelled: { cancelBox.isCancelled })
+                outcomeBox.finish(outcome)
+            }
+            do {
+                let outcome = try await withTaskCancellationHandler {
+                    try await waitForProbeOutcome(outcomeBox)
+                } onCancel: {
+                    cancelBox.cancel()
+                }
+                await MainActor.run {
+                    probeResult = outcome.summary
+                    probeProgress = ""
+                    probeRunning = false
+                }
+            } catch {
+                cancelBox.cancel()
+                await MainActor.run {
+                    probeResult = "已停止。"
+                    probeProgress = ""
+                    probeRunning = false
+                }
+            }
+        }
+    }
+
+    private func stopProbeFetch() {
+        probeTask?.cancel()
+    }
+
+    /// 等后台 probeFetchTable 写结果盒：先看盒里有没有，没有再查取消、
+    /// 睡 0.2 秒再看；上层 Task 取消（点了停止）就立刻抛，不等后台回来。
+    private func waitForProbeOutcome(_ box: ProbeFetchOutcomeBox) async throws -> RestoreTest.ProbeFetchOutcome {
+        while true {
+            if let outcome = box.outcome { return outcome }
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+}
+
+/// 探针拿表的取消标记盒：上层 Task 取消时置位，后台阻塞调用在步骤之间查。
+private final class ProbeFetchCancelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _cancelled = false
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _cancelled
+    }
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        _cancelled = true
+    }
+}
+
+/// 探针拿表的结果盒：后台线程写完、轮询循环读。
+private final class ProbeFetchOutcomeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _outcome: RestoreTest.ProbeFetchOutcome?
+    var outcome: RestoreTest.ProbeFetchOutcome? {
+        lock.lock(); defer { lock.unlock() }
+        return _outcome
+    }
+    func finish(_ outcome: RestoreTest.ProbeFetchOutcome) {
+        lock.lock(); defer { lock.unlock() }
+        _outcome = outcome
+    }
 }
 
 /// 作者页：大圆头像 + 名字王炸奓 + 蓝色“抖音主页”按钮，点按钮跳用户自己的抖音主页。

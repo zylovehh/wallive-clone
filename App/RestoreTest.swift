@@ -217,6 +217,169 @@ enum RestoreTest {
         }
     }
 
+    // MARK: - 探针拿表（单独拿表存好，不装壁纸）
+
+    /// 单独探针拿表的结果。summary 直接给页面显示。
+    struct ProbeFetchOutcome {
+        let success: Bool
+        /// 成功：“表已存好（v61，282,624 字节）”；失败：原因；停止：“已停止。”
+        let summary: String
+        /// 成功时表的字节数。
+        let dbSize: Int?
+        /// 成功时表的版本（"61"）。
+        let dbVersion: String?
+        let json: String
+    }
+
+    /// 单独探针拿表：不装壁纸，只把表拿下来存好。
+    /// 复用探针 3 那条拷回通道（exportAndSaveTimed，30 秒超时），快失败
+    /// 多试 3 次（跟装壁纸时第 2 级一样的逻辑：超时不重试、两次之间等 5 秒），
+    /// 拿到后校验（SQLite 头、版本 61、integrity_check），合 -wal，再存成
+    /// 已存表（merged.sqlite3，跟成功安装后刷新存过的表一个做法）。
+    /// 校验不过不存坏表，直接报。调用方必须已经在后台线程。
+    /// isCancelled：步骤之间查取消，点了停止就直接停。
+    static func probeFetchTable(pairingPath: String,
+                                onProgress: ((String, Double) -> Void)? = nil,
+                                isCancelled: @escaping () -> Bool = { false }) -> ProbeFetchOutcome {
+        var report: [String: Any] = ["channel": "probe_fetch", "success": false]
+        do {
+            let outcome = try probeFetch(pairingPath: pairingPath, report: &report,
+                                         onProgress: onProgress, isCancelled: isCancelled)
+            report["success"] = true
+            InstallLog.shared.append("probe: json=\(jsonString(report))")
+            return outcome
+        } catch is CancellationError {
+            InstallLog.shared.append("probe: 已停止（用户点了停止）。")
+            return ProbeFetchOutcome(success: false, summary: "已停止。", dbSize: nil, dbVersion: nil, json: jsonString(report))
+        } catch let e as StepError {
+            report["step"] = e.step
+            report["error"] = e.detail
+            InstallLog.shared.append("probe: FAILED \(e.step)：\(e.detail) json=\(jsonString(report))")
+            return ProbeFetchOutcome(success: false, summary: e.detail, dbSize: nil, dbVersion: nil, json: jsonString(report))
+        } catch {
+            report["error"] = error.localizedDescription
+            InstallLog.shared.append("probe: FAILED \(error.localizedDescription) json=\(jsonString(report))")
+            return ProbeFetchOutcome(success: false, summary: "探针拿表失败：\(error.localizedDescription)", dbSize: nil, dbVersion: nil, json: jsonString(report))
+        }
+    }
+
+    private static func probeFetch(pairingPath: String,
+                                   report: inout [String: Any],
+                                   onProgress: ((String, Double) -> Void)?,
+                                   isCancelled: @escaping () -> Bool) throws -> ProbeFetchOutcome {
+        try checkCancelled(isCancelled)
+        let fm = FileManager.default
+        let stamp = timeStamp()
+        let workDir = fm.temporaryDirectory.appendingPathComponent("wallive-clone-probe-\(stamp)")
+        try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: workDir) }
+
+        // 1. 拷回：探针 3 同一条通道，快失败多试 3 次（跟装壁纸时第 2 级一样）。
+        //    超时不重试：超时那次后台线程还在跑，再开一次会两路同时拷，互相干扰。
+        onProgress?("正在拿表…", 0.1)
+        var freshResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
+        var lastExportError: StepError? = nil
+        for attempt in 1...3 {
+            try checkCancelled(isCancelled)
+            onProgress?("正在拿表（第 \(attempt) 次）…", 0.1)
+            do {
+                freshResult = try exportAndSaveTimed(
+                    pairingPath: pairingPath, stamp: stamp, report: &report)
+                break
+            } catch {
+                lastExportError = (error as? StepError)
+                    ?? StepError(step: "拿表", detail: "\(error.localizedDescription)")
+                if let e = lastExportError, e.detail.hasPrefix("取表超时") { break }
+                if attempt < 3 {
+                    InstallLog.shared.append("probe: 拿表第 \(attempt) 次没成，等 5 秒再试一次。")
+                    Thread.sleep(forTimeInterval: 5)
+                    try checkCancelled(isCancelled)
+                }
+            }
+        }
+        guard let fresh = freshResult else {
+            let exportError = lastExportError
+                ?? StepError(step: "拿表", detail: "取表没回结果。")
+            throw StepError(step: "拿表", detail: "拷回没成（\(exportError.detail)）。重启手机一次再试（拿表只有重启后第一次才稳）。")
+        }
+        report["table_source"] = "probe"
+
+        // 2. 校验：是 SQLite、版本 61。校验不过不存坏表，直接停。
+        onProgress?("正在校验表…", 0.5)
+        try checkCancelled(isCancelled)
+        try validateFetchedStore(db: fresh.savedDB, report: report)
+
+        // 3. 合 -wal：checkpoint 合进主库，integrity_check 不过就停。
+        onProgress?("正在合库…", 0.7)
+        try checkCancelled(isCancelled)
+        let merged = try mergeStore(savedDB: fresh.savedDB, savedWAL: fresh.savedWAL, workDir: workDir)
+
+        // 4. 存成已存表（merged.sqlite3），跟成功安装后刷新存过的表一个做法。
+        onProgress?("正在存表…", 0.9)
+        try checkCancelled(isCancelled)
+        let dbSize = try saveAsStoredTable(from: merged)
+        let version = storeVersionString(from: report) ?? String(storeVersion)
+        InstallLog.shared.append("probe: 表已存好（v\(version)，\(dbSize) 字节），table_source=probe。")
+        onProgress?("表已存好", 1.0)
+        report["success"] = true
+        return ProbeFetchOutcome(
+            success: true,
+            summary: "表已存好（v\(version)，\(dbSize) 字节）。",
+            dbSize: dbSize, dbVersion: version, json: jsonString(report))
+    }
+
+    /// 校验刚拷回来的表：是 SQLite 文件、版本是 61。校验不过不存坏表，直接停。
+    private static func validateFetchedStore(db: URL, report: [String: Any]) throws {
+        // SQLite 文件头：前 16 字节必须是 "SQLite format 3\0"。
+        let sqliteMagic: [UInt8] = [0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66,
+                                    0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33, 0x00]
+        let data: Data
+        do {
+            data = try Data(contentsOf: db)
+        } catch {
+            throw StepError(step: "拿表", detail: "刚拷回来的表打不开，没法校验。")
+        }
+        guard data.count >= 16, [UInt8](data.prefix(16)) == sqliteMagic else {
+            throw StepError(step: "拿表", detail: "刚拷回来的表不是 SQLite 文件，不存。")
+        }
+        // 版本：拷回那次 JSON 里的 db_version 必须是 61。
+        let version = storeVersionString(from: report)
+        guard version == String(storeVersion) else {
+            throw StepError(step: "拿表", detail: "刚拷回来的表版本不对（\(version ?? "没读到")），只要 v61，不存。")
+        }
+    }
+
+    /// 从拷回那次 JSON 里读 db_version（可能是字符串 "61"，也可能是数字 61）。
+    private static func storeVersionString(from report: [String: Any]) -> String? {
+        guard let export = report["export"] as? [String: Any] else { return nil }
+        if let s = export["db_version"] as? String { return s }
+        if let n = export["db_version"] as? Int { return String(n) }
+        if let n = export["db_version"] as? NSNumber { return n.stringValue }
+        return nil
+    }
+
+    /// 把合好的表存成已存表（merged.sqlite3），跟成功安装后刷新存过的表一个做法。
+    /// 存失败就抛错（探针的重点就是存好，存不上要如实报，不悄悄吞掉）。
+    /// 返回存好的字节数。
+    private static func saveAsStoredTable(from merged: URL) throws -> Int {
+        let fm = FileManager.default
+        let dest = tableDir.appendingPathComponent("merged.sqlite3")
+        do {
+            try fm.createDirectory(at: tableDir, withIntermediateDirectories: true)
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.copyItem(at: merged, to: dest)
+            // 旁边要是有旧 -wal 残留会误导下次合库，一并清掉。
+            try? fm.removeItem(at: URL(fileURLWithPath: dest.path + "-wal"))
+        } catch {
+            throw StepError(step: "拿表", detail: "表拿到了，但存成已存表失败：\(error.localizedDescription)")
+        }
+        guard let size = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.intValue,
+              size > 0 else {
+            throw StepError(step: "拿表", detail: "表拿到了，但存成已存表后读不到大小。")
+        }
+        return size
+    }
+
     /// 步骤之间查取消：用户点了停止就立刻停，不等整轮跑完。
     private static func checkCancelled(_ isCancelled: () -> Bool) throws {
         if isCancelled() { throw CancellationError() }
