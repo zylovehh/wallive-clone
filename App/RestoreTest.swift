@@ -891,7 +891,9 @@ enum RestoreTest {
     /// 步骤（每步开始前和每步之间都查取消，点了就直接停，不改走别的路）：
     ///   1. 核包：TendiesPackage.inspect——能解开、有描述符才继续。
     ///   2. 拿容器路径：BackupFFI.appFactoryEntry（30 秒超时），校验非空
-    ///      且是 /var/mobile/Containers/Data/Application/ 开头。
+    ///      且是应用容器路径开头（/var/mobile/Containers/Data/Application/
+    ///      或 /private/var/mobile/Containers/Data/Application/——iOS 上
+    ///      /var 就是指向 /private/var 的，同一个地方两种写法，都认）。
     ///   3. 造空库：PosterBoardStore.createEmptyDatabase（4 张必备表，store v61）。
     ///   4. 验库：4 张必备表都在、三张数据表一行都没有、integrity_check 是 ok。
     /// 哪步不过就抛 StepError（写明哪步），直接停，不硬装。
@@ -948,7 +950,8 @@ enum RestoreTest {
         guard let container = entry["Container"] as? String, !container.isEmpty else {
             throw StepError(step: "造空名单", detail: "PosterBoard 的容器路径拿不到（应用记录里没有 Container），造空名单停下了。")
         }
-        guard container.hasPrefix("/var/mobile/Containers/Data/Application/") else {
+        guard container.hasPrefix("/var/mobile/Containers/Data/Application/")
+            || container.hasPrefix("/private/var/mobile/Containers/Data/Application/") else {
             throw StepError(step: "造空名单", detail: "PosterBoard 的容器路径不对（不是应用容器路径：\(container)），造空名单停下了。")
         }
         try checkCancelled(isCancelled)
