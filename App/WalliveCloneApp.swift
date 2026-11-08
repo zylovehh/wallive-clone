@@ -113,20 +113,62 @@ struct ContentView: View {
                 .tag(3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // iPad 布局：iOS 18 起 iPad 的页签默认飘在顶部，改回底部。
-        .modifier(PadBottomTabs())
+        // iPad 布局：系统页签栏藏起来，底部改用一颗浮动药丸（跟原来顶部那颗一个样）。
+        .modifier(PadFloatingTabPill())
         .environmentObject(accountStore)
     }
 }
 
-/// iPad 布局：iOS 18 起 iPad 的页签默认飘在顶部胶囊，强制回到底部 dock 栏。
-/// 只在 iPad + iOS 18+ 生效；iPhone 和 iOS 17 以下不动（本来就在底部）。
-private struct PadBottomTabs: ViewModifier {
+/// iPad 布局：系统页签栏藏起来，底部改用一颗浮动药丸（跟原来顶部那颗一个样）。
+/// 只在 iPad 生效；iPhone 不动（本来就是底部标准页签）。
+private struct PadFloatingTabPill: ViewModifier {
     func body(content: Content) -> some View {
-        if #available(iOS 18.0, *), UIDevice.current.userInterfaceIdiom == .pad {
-            content.tabViewStyle(.tabBarOnly)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            content
+                .toolbar(.hidden, for: .tabBar)
+                .overlay(alignment: .bottom) {
+                    FloatingTabPill()
+                }
         } else {
             content
         }
+    }
+}
+
+/// iPad 底部浮动药丸：四个字横排，选中的那段底色稍亮一点。
+/// 点哪个就把 selectedTab 设成对应序号（0 目录、1 导入、2 深景、3 状态）。
+private struct FloatingTabPill: View {
+    @EnvironmentObject private var state: AppState
+
+    private let labels = ["目录", "导入", "深景", "状态"]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<labels.count, id: \.self) { index in
+                Button(labels[index]) {
+                    state.selectedTab = index
+                }
+                .font(.subheadline.weight(state.selectedTab == index ? .semibold : .regular))
+                .foregroundStyle(state.selectedTab == index ? .white : .white.opacity(0.7))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background {
+                    if state.selectedTab == index {
+                        Capsule().fill(Color.white.opacity(0.18))
+                    }
+                }
+                .buttonStyle(.plain)
+                .contentShape(Capsule())
+            }
+        }
+        .padding(4)
+        .background {
+            if #available(iOS 26.0, *) {
+                Capsule().glassEffect(.clear)
+            } else {
+                Capsule().fill(.white.opacity(0.06))
+            }
+        }
+        .padding(.bottom, 16)
     }
 }
