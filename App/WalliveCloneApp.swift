@@ -45,11 +45,18 @@ func ALGetGrappaToken(
 /// 全页背景：仓库里 App/app-background.jpg（网页上传的原图），
 /// 各页根视图垫在它上面，卡片用半透明底，背景才透得出来。
 /// 找不到图时回退纯黑，不会闪白屏。
+/// 图只解一次：static 只初始化一次，第一次用到时解开，之后各页复用同一张，
+/// 不再每次 body 都重新读盘解图（切页签时主线程上不再重复解图）。
 struct AppBackgroundView: View {
+    /// 背景图缓存：只解一次，之后直接复用；图找不到时是 nil，走纯黑回退。
+    private static let backgroundImage: UIImage? = {
+        guard let url = Bundle.main.url(forResource: "app-background", withExtension: "jpg"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return UIImage(data: data)
+    }()
+
     var body: some View {
-        if let url = Bundle.main.url(forResource: "app-background", withExtension: "jpg"),
-           let data = try? Data(contentsOf: url),
-           let image = UIImage(data: data) {
+        if let image = Self.backgroundImage {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
