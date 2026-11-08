@@ -263,9 +263,31 @@ int32_t al_posterboard_refresh(const char *pairing_path,
                                char **out_json,
                                char **out_error);
 
+// DVT SpringBoard respring (test only). Same mechanism as
+// al_posterboard_refresh, but targets SpringBoard: find its pid, SIGKILL
+// it, wait for launchd to respawn it. Desktop reloads, phone does NOT
+// fully reboot — same as the respring when the system language is changed.
+// Returns 0 with out_json set whenever the respring ran (even when
+// respring_confirmed is false — the JSON tells the truth); 1 with out_error
+// on operational failure before the signal is sent. `pairing_path` may be
+// null (falls back to "wallpaper_pairing.plist").
+// out_json format (our own, parsed leniently by Swift):
+//   {"respring_confirmed": bool,
+//    "old_pid": N, "new_pid": N|null, "verified_pid": N|null,
+//    "verify_error": "..."|null, "error": "..."|null}
+// WARNING: killing SpringBoard blanks the screen for a few seconds while
+// the desktop reloads. Only called from the Status page test card, never
+// automatically. If the screen stays black over ~1 minute, force reboot.
+int32_t al_springboard_respring(const char *pairing_path,
+                                ALLogCallback log_cb,
+                                void *ctx,
+                                char **out_json,
+                                char **out_error);
+
 // ---------------------------------------------------------------------------
 // Syslog Stream / Live Card Detection
 // ---------------------------------------------------------------------------
+
 
 typedef void (*ALSyslogLineCallback)(void *ctx, const char *line);
 

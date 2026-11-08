@@ -494,6 +494,8 @@ private struct StatusLogPage: View {
     @State private var probeProgress = ""
     @State private var probeResult = ""
     @State private var probeTask: Task<Void, Never>?
+    @State private var springboardRunning = false
+    @State private var springboardResult = ""
 
     var body: some View {
         ScrollView {
@@ -544,6 +546,41 @@ private struct StatusLogPage: View {
                     }
                     if !probeResult.isEmpty {
                         Text(probeResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding()
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                // SpringBoard 重启测试：DVT 杀 SpringBoard 进程、等桌面重起重读，
+                // 跟换语言时系统重启桌面一个道理（只重启桌面、不重启手机）。
+                // 27.2 上 PosterBoard 杀掉后回不来，表对了也不回来，就测桌面重启
+                // 这条路能不能让它重读新表。点一下屏幕会黑几秒再回来；黑屏超
+                // 过 1 分钟没回来，长按电源键强制重启。App 可能在桌面重启时被
+                // 系统一起杀掉，那时这行字看不到，直接看屏幕就行，日志在下面
+                // 安装日志里（落盘了），重开 App 还能看。
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("SpringBoard 重启测试").font(.headline)
+                    Text("只重启桌面、不重启手机。点一下屏幕会黑几秒，桌面回来就是成了；黑屏超过 1 分钟没回来，长按电源键强制重启。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        runSpringboardRespring()
+                    } label: {
+                        Text("重启 SpringBoard（测试）").frame(maxWidth: .infinity)
+                    }
+                    .disabled(springboardRunning || !state.hasPairingFile)
+                    if !state.hasPairingFile {
+                        Text("没有配对记录文件：先去配对记录页导入一个。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if springboardRunning {
+                        ProgressView().frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    if !springboardResult.isEmpty {
+                        Text(springboardResult).font(.caption)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }
@@ -612,6 +649,34 @@ private struct StatusLogPage: View {
 
     private func stopProbeFetch() {
         probeTask?.cancel()
+    }
+
+    /// SpringBoard 重启测试：后台调 RestoreTest.springboardRespring。
+    /// App 可能在桌面重启时被系统一起杀掉，那时结果回不来、这行字也
+    /// 看不到，用户直接看屏幕：黑屏后桌面回来就是成了；黑屏超过 1 分钟
+    /// 没回来，长按电源键强制重启。日志在 InstallLog 里，重启 App 还能看。
+    private func runSpringboardRespring() {
+        guard !springboardRunning else { return }
+        guard state.hasPairingFile else {
+            springboardResult = "没有配对记录文件：先去配对记录页导入一个。"
+            return
+        }
+        springboardRunning = true
+        springboardResult = "已发送重启指令，桌面正在重启，观察屏幕…"
+        let pairingPath = state.pairingFileURL.path
+        Task {
+            let outcome = await RestoreTest.springboardRespring(pairingPath: pairingPath)
+            await MainActor.run {
+                springboardRunning = false
+                if let confirmed = outcome["confirmed"] as? Bool, confirmed {
+                    springboardResult = "桌面已重启回来（旧进程 \(outcome["old_pid"] ?? "?") → 新进程 \(outcome["new_pid"] ?? "?")），去图库看壁纸在不在。"
+                } else if let error = outcome["error"] as? String {
+                    springboardResult = "没确认：\(error)"
+                } else {
+                    springboardResult = "没确认：桌面没在 30 秒内回来，观察屏幕；黑屏超过 1 分钟没回来，长按电源键强制重启。"
+                }
+            }
+        }
     }
 
     /// 等后台 probeFetchTable 写结果盒：先看盒里有没有，没有再查取消、

@@ -1539,6 +1539,42 @@ enum RestoreTest {
         }.value
     }
 
+    /// SpringBoard 重启测试：调 al_springboard_respring（DVT SIGKILL
+    /// SpringBoard，只重启桌面、不重启手机；跟换语言时系统重启桌面一个
+    /// 道理）。只给状态页诊断日志那张测试卡用；绝不自动调，必须用户亲手点。
+    /// FFI 会阻塞，放后台线程跑；桌面重启时 App 可能被系统一起杀掉，那时
+    /// 结果回不来，用户直接看屏幕：黑屏后桌面回来就是成了，黑屏超过 1 分钟
+    /// 没回来就长按电源键强制重启。日志在 InstallLog 里（落盘了），重开
+    /// App 还能看。返回的字典里 confirmed / old_pid / new_pid / error。
+    static func springboardRespring(pairingPath: String) async -> [String: Any] {
+        await Task.detached(priority: .userInitiated) {
+            "10.7.0.1".withCString { _ = al_set_target_host($0) }
+            var outJson: UnsafeMutablePointer<CChar>? = nil
+            var outError: UnsafeMutablePointer<CChar>? = nil
+            let rc = pairingPath.withCString { pairC in
+                al_springboard_respring(pairC, airliftLogCallback, nil, &outJson, &outError)
+            }
+            var result: [String: Any] = ["rc": rc, "confirmed": false]
+            if let p = outJson {
+                let json = String(cString: p)
+                al_string_free(p)
+                if let data = json.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    result.merge(obj) { _, new in new }
+                    result["confirmed"] = obj["respring_confirmed"] as? Bool ?? false
+                }
+                InstallLog.shared.append("restore: SpringBoard 重启测试：\(json)")
+            }
+            if let p = outError {
+                let error = String(cString: p)
+                al_string_free(p)
+                result["error"] = error
+                InstallLog.shared.append("restore: SpringBoard 重启测试没回 JSON：\(error)")
+            }
+            return result
+        }.value
+    }
+
     // MARK: - 写回表（新 Rust FFI）
 
     private static func callWritebackFFI(pairingPath: String, stagedDir: String,

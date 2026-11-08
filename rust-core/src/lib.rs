@@ -447,6 +447,37 @@ pub unsafe extern "C" fn al_posterboard_refresh(
     }
 }
 
+/// DVT SpringBoard respring (test only). See exploit::springboard_respring.
+/// Returns 0 with out_json set whenever the respring ran (even when
+/// respring_confirmed is false); 1 with out_error on operational failure
+/// before the signal is sent.
+/// `pairing_path` may be null (falls back to "wallpaper_pairing.plist").
+/// Restarts the desktop only — never restarts the device.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_springboard_respring(
+    pairing_path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exploit::springboard_respring(pairing_path, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_springboard_respring: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
 /// Free any `*mut c_char` returned by this library.
 ///
 /// # Safety
