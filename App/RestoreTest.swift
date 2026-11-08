@@ -427,26 +427,48 @@ enum RestoreTest {
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
 
-        // 1. 拿表：先试 Phase 0 备份拿表（做一份带 PosterBoard 的备份、
-        //    再从备份里把表抽出来，不走拷回通道）；27.2 上直写已堵、拷回
-        //    也不稳，备份是主路。备份拿不到表再走拷回通道，再是已存的表，
-        //    三级全断、且确认一张存过的表都没有时才造空名单（第 4 级）。
+        // 1. 拿表：只在 iOS 27.2 及以上，先试第 0 级 FileService（CoreDevice
+        //    文件服务，直接读已知路径的表）；27.2 上直写已堵、拷回也死了、
+        //    备份 0 文件，FileService 是唯一可能拿到真表的路。27.0.1 不走
+        //    这级，老路不动。拿不到就改走原来的链：备份（主路）→拷回→已存
+        //    的表，三级全断、且确认一张存过的表都没有时才造空名单（第 4 级）。
         let savedDB: URL
         let savedWAL: URL?
         let container: String
-        var backupResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
-        do {
-            backupResult = try fetchTableViaBackup(
-                pairingPath: pairingPath, workDir: workDir, report: &report,
-                onProgress: onProgress, isCancelled: isCancelled)
-        } catch is CancellationError {
-            // 用户点了停止：不当失败报，也不改走拷回，直接停。
-            throw CancellationError()
-        } catch {
-            let detail = (error as? StepError)?.detail ?? error.localizedDescription
-            InstallLog.shared.append("restore: 备份拿表没成（\(detail)），改走拷回通道。")
+        var fileServiceResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
+        if isFileServiceEligible {
+            do {
+                fileServiceResult = try exportViaFileServiceTimed(
+                    pairingPath: pairingPath, stamp: stamp, report: &report)
+            } catch is CancellationError {
+                // 用户点了停止：不当失败报，也不改走别的路，直接停。
+                throw CancellationError()
+            } catch {
+                let detail = (error as? StepError)?.detail ?? error.localizedDescription
+                InstallLog.shared.append("restore: FileService 拿表没成（\(detail)），改走原来的链。")
+            }
         }
-        if let backup = backupResult {
+        var backupResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
+        if fileServiceResult == nil {
+            do {
+                backupResult = try fetchTableViaBackup(
+                    pairingPath: pairingPath, workDir: workDir, report: &report,
+                    onProgress: onProgress, isCancelled: isCancelled)
+            } catch is CancellationError {
+                // 用户点了停止：不当失败报，也不改走拷回，直接停。
+                throw CancellationError()
+            } catch {
+                let detail = (error as? StepError)?.detail ?? error.localizedDescription
+                InstallLog.shared.append("restore: 备份拿表没成（\(detail)），改走拷回通道。")
+            }
+        }
+        if let fs = fileServiceResult {
+            savedDB = fs.savedDB
+            savedWAL = fs.savedWAL
+            container = fs.container
+            report["table_source"] = "fileservice"
+            InstallLog.shared.append("restore: 拿表走 FileService 这条路成了（表已从文件服务读出来）。")
+        } else if let backup = backupResult {
             savedDB = backup.savedDB
             savedWAL = backup.savedWAL
             container = backup.container
@@ -841,6 +863,72 @@ enum RestoreTest {
                 container)
     }
 
+    /// FileService 只在 iOS 27.2 及以上走：拷回在 27.2 上死了，27.0.1
+    /// 的拷回是通的，老路不动。27.2 beta 3 起直写就堵了，所以 27.2
+    /// 及以上都算同一档。
+    private static var isFileServiceEligible: Bool {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return v.majorVersion == 27 && v.minorVersion >= 2
+    }
+
+    /// 调 al_fileservice_posterboard_export 走 FileService 读 v61 的表 + -wal，返回存盘路径和容器路径。
+    /// 只在 iOS 27.2 及以上调（isFileServiceEligible 把过门）。
+    private static func exportViaFileService(pairingPath: String, stamp: String,
+                                             report: inout [String: Any]) throws
+        -> (savedDB: URL, savedWAL: URL?, container: String) {
+        let destDir = tableDir.path
+        let (rc, json, error) = callFileServiceFFI(
+            pairingPath: pairingPath, destDir: destDir, stamp: stamp)
+        guard rc == 0, let json,
+              let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw StepError(step: "拿表", detail: "FileService 通道没通：\(error ?? "未知错误")")
+        }
+        report["fileservice_export"] = obj
+        guard (obj["success"] as? Bool) == true,
+              (obj["saved_db_ok"] as? Bool) == true,
+              let dbPath = obj["saved_db_path"] as? String,
+              let container = obj["container"] as? String else {
+            throw StepError(step: "拿表", detail: "表没从 FileService 读回来（v61 没成，或存盘校验没过）。")
+        }
+        let walPath = obj["saved_wal_path"] as? String
+        return (URL(fileURLWithPath: dbPath),
+                walPath.map { URL(fileURLWithPath: $0) },
+                container)
+    }
+
+    /// FileService 拿表也加 30 秒超时（跟拷回那路一样），超时就停，不死等。
+    private static func exportViaFileServiceTimed(pairingPath: String, stamp: String,
+                                                  report: inout [String: Any],
+                                                  timeout: TimeInterval = 30) throws
+        -> (savedDB: URL, savedWAL: URL?, container: String) {
+        let box = ExportResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var workerReport: [String: Any] = ["channel": "restore_test"]
+            do {
+                let fresh = try exportViaFileService(pairingPath: pairingPath, stamp: stamp, report: &workerReport)
+                box.set(.success((fresh.savedDB, fresh.savedWAL, fresh.container)), report: workerReport)
+            } catch {
+                box.set(.failure(error), report: workerReport)
+            }
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            throw StepError(step: "拿表", detail: "FileService 取表超时（\(Int(timeout)) 秒没等到手机回表）。")
+        }
+        // 没超时：把 worker 那边记进 report 的键合回来（失败时也要合，
+        // 兜底要从 report["fileservice_export"] 里拿容器路径）。
+        for (key, value) in box.report { report[key] = value }
+        guard let result = box.result else {
+            throw StepError(step: "拿表", detail: "取表没回结果。")
+        }
+        switch result {
+        case .success(let fresh): return fresh
+        case .failure(let error): throw error
+        }
+    }
+
     /// 兜底：拷回失败时改用手机里已存的表接着做。先找 merged.sqlite3，
     /// 没有就找最新时间戳的那份 PBF...-*.sqlite3（配同名 -wal）。
     /// 容器路径从刚失败那次拷回的 JSON 里拿（失败的 JSON 里也有
@@ -925,8 +1013,8 @@ enum RestoreTest {
     ///      且是应用容器路径开头（/var/mobile/Containers/Data/Application/
     ///      或 /private/var/mobile/Containers/Data/Application/——iOS 上
     ///      /var 就是指向 /private/var 的，同一个地方两种写法，都认）。
-    ///   3. 造空库：PosterBoardStore.createEmptyDatabase（4 张必备表，store v61）。
-    ///   4. 验库：4 张必备表都在、三张数据表一行都没有、integrity_check 是 ok。
+    ///   3. 造空库：PosterBoardStore.createEmptyDatabase（6 张必备表，store v61）。
+    ///   4. 验库：6 张必备表都在、数据表一行都没有、integrity_check 是 ok。
     /// 哪步不过就抛 StepError（写明哪步），直接停，不硬装。
     /// 返回的表是自包含的单文件（已合 WAL），不用再配 -wal；后面流程
     /// （合库→编包→插行）照常走，插行时空表上第一行就是 posterId 1。
@@ -987,7 +1075,7 @@ enum RestoreTest {
         }
         try checkCancelled(isCancelled)
 
-        // 3. 造空库：按真表的结构造（4 张必备表，store v61），一行都没有。
+        // 3. 造空库：按真表的结构造（6 张必备表，store v61），一行都没有。
         //    造表本身是本地操作、很快，不用超时；SQL 报错直接抛。
         onProgress?("正在造空名单…", 0.29)
         let emptyDir = workDir.appendingPathComponent("empty-store")
@@ -1000,9 +1088,9 @@ enum RestoreTest {
         }
         try checkCancelled(isCancelled)
 
-        // 4. 验库：4 张必备表都在、三张数据表一行都没有、integrity_check 是 ok。
-        //    （posterMetadata / posterRoles 是 db5+ 才加的表，造空库的参考
-        //    实现本来就不建它们，流程的校验也只认这 4 张必备表。）
+        // 4. 验库：6 张必备表都在、数据表一行都没有、integrity_check 是 ok。
+        //    （posterMetadata / posterRoles 是 db5+ 才加的表，空表里也建了，
+        //    校验认全部 6 张必备表。）
         try verifyEmptyStore(emptyDB)
         try checkCancelled(isCancelled)
 
@@ -1012,7 +1100,7 @@ enum RestoreTest {
         return (emptyDB, nil, container)
     }
 
-    /// 验一张刚造的空名单：4 张必备表都在、三张数据表一行都没有、
+    /// 验一张刚造的空名单：6 张必备表都在、数据表一行都没有、
     /// integrity_check 是 ok。哪项不过就抛错，写明是哪项。
     private static func verifyEmptyStore(_ url: URL) throws {
         var db: OpaquePointer?
@@ -1075,6 +1163,26 @@ enum RestoreTest {
                 stamp.withCString { stampC in
                     al_probe_posterboard_save(pairC, destC, stampC,
                                               airliftLogCallback, nil, &outJson, &outError)
+                }
+            }
+        }
+        var json: String? = nil
+        var error: String? = nil
+        if let p = outJson { json = String(cString: p); al_string_free(p) }
+        if let p = outError { error = String(cString: p); al_string_free(p) }
+        return (rc, json, error)
+    }
+
+    private static func callFileServiceFFI(pairingPath: String, destDir: String, stamp: String)
+        -> (rc: Int32, json: String?, error: String?) {
+        "10.7.0.1".withCString { _ = al_set_target_host($0) }
+        var outJson: UnsafeMutablePointer<CChar>? = nil
+        var outError: UnsafeMutablePointer<CChar>? = nil
+        let rc = pairingPath.withCString { pairC in
+            destDir.withCString { destC in
+                stamp.withCString { stampC in
+                    al_fileservice_posterboard_export(pairC, destC, stampC,
+                                                      airliftLogCallback, nil, &outJson, &outError)
                 }
             }
         }

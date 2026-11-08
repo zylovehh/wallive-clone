@@ -142,6 +142,12 @@ enum PosterBoardStore {
         if tableExists(db, "posterAttributes") {
             parts.append("\(count("posterAttributes")) 条属性记录")
         }
+        if tableExists(db, "posterRoles") {
+            parts.append("\(count("posterRoles")) 个角色")
+        }
+        if tableExists(db, "posterMetadata") {
+            parts.append("\(count("posterMetadata")) 条元数据")
+        }
         return parts.joined(separator: "，")
     }
 
@@ -308,6 +314,18 @@ enum PosterBoardStore {
         var sortKey = try scalarInt(db,
             "SELECT MAX(roleSortKey) FROM posterRoleMembership WHERE roleId = ?",
             [.text("PRPosterRoleLockScreen")]) ?? sequence
+
+        // 角色行：归属和属性的外键都指着 posterRoles，空表里必须先有
+        // 锁屏角色这一行，PosterBoard 查角色时才能找到，图库才认这张
+        // 壁纸。displayName 没有真表行数据可抄（探针只打了建表语句），
+        // 先写标识本身；posterMetadata 的 key 也待真表行数据，这里先
+        // 不插，只插角色行。
+        try run(db, "UPDATE posterRoles SET displayName = ? WHERE roleIdentifier = ?",
+                [.text("PRPosterRoleLockScreen"), .text("PRPosterRoleLockScreen")])
+        if changes(db) == 0 {
+            try run(db, "INSERT INTO posterRoles (roleIdentifier, displayName) VALUES (?, ?)",
+                    [.text("PRPosterRoleLockScreen"), .text("PRPosterRoleLockScreen")])
+        }
 
         // 选中的壁纸只能有一张。没有新条目要求当选时（包括只动容器的
         // 流程），保留当前选中的那张。

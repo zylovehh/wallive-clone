@@ -20,6 +20,11 @@
 //!                            saved under the caller-supplied dest dir
 //!                            (Documents/posterboard-table) with a
 //!                            timestamped name, re-read and SHA-verified
+//!   al_fileservice_posterboard_export — FileService export: same
+//!                            save + JSON shape as probe 3, but the
+//!                            table is read over the CoreDevice file
+//!                            service (27.2 only; copy-back is dead
+//!                            there and backup returns 0 files)
 //!   al_restore_posterboard_writeback — restore test: write a modified
 //!                            store (+ 0-byte -wal/-shm) back into the
 //!                            device store dir over the direct-write
@@ -41,6 +46,7 @@ pub mod backup;
 pub mod device;
 pub mod exploit;
 pub mod ffi_util;
+pub mod file_service;
 pub mod grappa;
 pub mod logging;
 pub mod pairing;
@@ -329,6 +335,45 @@ pub unsafe extern "C" fn al_probe_posterboard_save(
         Err(e) => {
             if !out_error.is_null() {
                 *out_error = ffi_util::cstr(format!("Rust panic in al_probe_posterboard_save: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Read-only CoreDevice FileService export of the PosterBoard sqlite,
+/// with save. Same save + JSON shape as al_probe_posterboard_save
+/// (v61 only, dest_dir + stamp, re-read and SHA-verified), but the
+/// table is read over the file service instead of AirTraffic
+/// copy-back. Only used on iOS 27.2+ (Swift gates it): copy-back is
+/// dead there and backup returns 0 files. Whether the service lets
+/// this app read the PosterBoard container is unproven — that needs a
+/// real 27.2 device; a refusal comes back as out_error, not a silent
+/// wrong table. Writes nothing into the PosterBoard container.
+/// `pairing_path` may be null (falls back to "wallpaper_pairing.plist");
+/// `dest_dir` has no silent fallback (Swift always passes it); an empty
+/// `stamp` falls back to unix seconds so file names still never collide.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_fileservice_posterboard_export(
+    pairing_path: *const c_char,
+    dest_dir: *const c_char,
+    stamp: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exploit::fileservice_posterboard_export(pairing_path, dest_dir, stamp, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_fileservice_posterboard_export: {e:?}"));
             }
             1
         }

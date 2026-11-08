@@ -202,6 +202,29 @@ int32_t al_probe_posterboard_save(const char *pairing_path,
                                   char **out_json,
                                   char **out_error);
 
+// Read-only CoreDevice FileService export of the PosterBoard sqlite,
+// with save: same save + JSON shape as al_probe_posterboard_save
+// (v61 only, dest_dir + stamp, re-read and SHA-verified), but the
+// table is read over the file service instead of AirTraffic copy-back.
+// Only used on iOS 27.2+ (Swift gates it): copy-back is dead there
+// and backup returns 0 files. Whether the service lets this app read
+// the PosterBoard container is unproven — that needs a real 27.2
+// device; a refusal comes back as out_error, not a silent wrong table.
+// Writes nothing into the PosterBoard container. Returns 0 with
+// out_json set whenever the channel ran (even when nothing was saved —
+// the JSON tells the truth); 1 with out_error on channel failure
+// (tunnel / FileService connect / session) or a missing/uncreatable
+// save directory.
+// out_json format: same keys as al_probe_posterboard_save, with
+// "channel": "fileservice_export_save".
+int32_t al_fileservice_posterboard_export(const char *pairing_path,
+                                          const char *dest_dir,
+                                          const char *stamp,
+                                          ALLogCallback log_cb,
+                                          void *ctx,
+                                          char **out_json,
+                                          char **out_error);
+
 // Restore-test writeback: write a modified PosterBoard store back into the
 // device store directory. `staged_dir` must hold exactly three files: the
 // modified store (SQLite magic, WAL-merged by Swift), plus 0-byte `-wal`
