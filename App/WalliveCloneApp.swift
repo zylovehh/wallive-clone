@@ -110,22 +110,26 @@ struct ContentView: View {
                 // 在 iPadOS 18 上的毛病。顶栏还在和切页卡死是同一个根因。
                 // 改用自定义容器：四个页按 selectedTab 显示，没有 TabView 就没有
                 // 系统顶栏、也没有 TabView 切页那步，两处一起治。底部药丸自己切页。
-                // 四个页都留在层级里（只改透明度和可点），切页不重建、不丢状态。
-                // iPhone 不动，走原来的 TabView。
+                // 只渲染当前选中的一页：之前四个页都留在层级里（只改透明度和可点），
+                // 藏着的页也在跑东西——深景页的 TimelineView(.animation) 每秒刷 60 次、
+                // 导入页的 List、状态页的内容全在后台跑，点着点着主线程就被拖死了，
+                // V6 真机上深景/导入就是这么卡住的。只留选中页，藏着的页彻底拿掉，
+                // 不跑动画、不跑任务。切页会重建页面（@State 会丢），但重要数据都在
+                // AppState 里（包数据、包信息），重进还在。iPhone 不动，走原来的 TabView。
                 ZStack(alignment: .bottom) {
                     Group {
-                        CatalogView()
-                            .opacity(state.selectedTab == 0 ? 1 : 0)
-                            .disabled(state.selectedTab != 0)
-                        ImportView()
-                            .opacity(state.selectedTab == 1 ? 1 : 0)
-                            .disabled(state.selectedTab != 1)
-                        DepthView()
-                            .opacity(state.selectedTab == 2 ? 1 : 0)
-                            .disabled(state.selectedTab != 2)
-                        StatusView()
-                            .opacity(state.selectedTab == 3 ? 1 : 0)
-                            .disabled(state.selectedTab != 3)
+                        switch state.selectedTab {
+                        case 0:
+                            CatalogView()
+                        case 1:
+                            ImportView()
+                        case 2:
+                            DepthView()
+                        case 3:
+                            StatusView()
+                        default:
+                            CatalogView()
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     FloatingTabPill()

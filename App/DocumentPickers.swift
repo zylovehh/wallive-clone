@@ -14,10 +14,32 @@ struct DocumentPicker: UIViewControllerRepresentable {
         let vc = UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: true)
         vc.delegate = context.coordinator
         vc.allowsMultipleSelection = false
+        // iPad：文件选择器默认走 popover 弹出，没有源头位置会整 App 卡住
+        //（iPhone 上全屏弹出所以没事）。点“下载配置文件”在 iPad 上就是这么
+        // 卡住的，“＋导入新的壁纸包”用的也是这个选择器，一样会卡。
+        // 在创建时就配好源头：用选择器自己的 view 做源头、矩形取其中间，
+        // 箭头方向不限制，保证有地方落，不等 update（弹出来时再配就晚了）。
+        if let popover = vc.popoverPresentationController {
+            popover.sourceView = vc.view
+            popover.sourceRect = CGRect(
+                x: vc.view.bounds.midX, y: vc.view.bounds.midY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
         return vc
     }
 
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {
+        // 兜底：万一创建时 view 还没好、源头没配上，这里再补一次。
+        if let popover = uiViewController.popoverPresentationController,
+           popover.sourceView == nil {
+            popover.sourceView = uiViewController.view
+            popover.sourceRect = CGRect(
+                x: uiViewController.view.bounds.midX,
+                y: uiViewController.view.bounds.midY,
+                width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
 
