@@ -57,4 +57,12 @@ enum AppUTTypes {
     static var tendies: UTType {
         UTType("com.mutually.wallpaper.tendies") ?? .data
     }
+
+    /// 导入壁纸包用的类型白名单：除自家类型和 zip 外，再放行通用数据。
+    /// iPad 上隔空投送/网盘落下来的包，系统有时认不出扩展名对应的类型，
+    /// 文件在选择器里整条置灰、点不了；放行 .data 后都能选中，
+    /// 选错了导入那一步自己报错，不会再卡在选不了。
+    static var wallpaperPackage: [UTType] {
+        [AppUTTypes.tendies, .zip, .data]
+    }
 }

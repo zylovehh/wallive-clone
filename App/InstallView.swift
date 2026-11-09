@@ -64,7 +64,8 @@ struct InstallView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-                if !installLog.isEmpty {
+                // 成功不铺日志：只在失败时显示完整日志。
+                if !installLog.isEmpty && !result.hasPrefix("安装完成") {
                     Text("安装日志（可长按复制）").font(.headline)
                     ScrollView {
                         Text(installLog)

@@ -146,7 +146,7 @@ struct ImportView: View {
                 }
             }
             .sheet(isPresented: $showPicker) {
-                DocumentPicker(contentTypes: [AppUTTypes.tendies, .zip]) { url in
+                DocumentPicker(contentTypes: AppUTTypes.wallpaperPackage) { url in
                     showPicker = false
                     Task { @MainActor in
                         do {
@@ -412,7 +412,8 @@ private struct ImportDetailView: View {
                         } else {
                             Text("尚未安装，暂无核对结果。写盘成功不代表图库已列出。").font(.caption).foregroundStyle(.secondary)
                         }
-                        if !installLogText.isEmpty {
+                        // 成功不铺日志：只在失败时显示完整日志，成功时诊断区已够用。
+                        if !installLogText.isEmpty && installFailedReason != nil {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Text("安装日志（可长按复制）").font(.caption).foregroundStyle(.secondary)
