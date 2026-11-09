@@ -268,7 +268,9 @@ final class AppState: ObservableObject {
                 preferencesWritten: outcome.preferencesWritten,
                 verifyResults: [],
                 registration: nil,
-                refresh: nil,
+                // 刷新结论原样带给界面：确认了就不补桌面刷新，没确认
+                //（含没配对）就由界面补一次本地网页法只重启桌面。
+                refresh: RefreshResult(confirmed: outcome.refreshConfirmed),
                 mode: .backup,
                 backupSummary: "备份还原已完成（\(outcome.payloadCount) 个载荷，"
                     + "商店：\(outcome.storeSummary)）。" + (outcome.needsReboot

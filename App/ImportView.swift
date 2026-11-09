@@ -574,6 +574,12 @@ private struct ImportDetailView: View {
                 // 登记这两项没有，核对看日志框。成功只写四个字，载荷数、行数、
                 // 描述符这些长日志留在日志框里，不显示在结果区。
                 installResult = "安装成功"
+                // 刷新没确认（含没配对——那步 FFI 碰不了）就补一次本地网页法
+                // 只重启桌面：桌面回来 PosterBoard 重扫，运气好不用重启整机。
+                // 桌面重启时本 App 可能被一起关掉，属正常，重开即可。
+                if !(report.refresh?.confirmed ?? false) {
+                    DesktopRestart.trigger()
+                }
             } else if report.mode == .test {
                 // 测试版：只写了描述符、没碰表，刷新那项没有，重启手机才进图库。
                 installResult = "测试版安装成功：只写了描述符、没碰数据库表。偏好已写（PBF 轻量刷新）。重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"

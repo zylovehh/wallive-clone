@@ -231,6 +231,17 @@ public struct RefreshResult {
         }
         self.error = error ?? jsonError
     }
+
+    /// 直接给结论组装（备份路用：RestoreTest 那边的结果原样带进报告，
+    /// 界面据此决定要不要再补一次本地桌面刷新）。
+    init(confirmed: Bool, error: String? = nil) {
+        self.confirmed = confirmed
+        self.wallpaperVisible = "unverified"
+        self.oldPid = nil
+        self.newPid = nil
+        self.verifiedPid = nil
+        self.error = error
+    }
 }
 
 /// 安装报告：描述符 UUID + 逐目录注入结果 + 偏好写入结果 + 读回核对 + 登记 + 进程刷新。
