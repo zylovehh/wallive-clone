@@ -31,6 +31,12 @@ final class AppState: ObservableObject {
     /// 界面显示"设备版本读不到"，安装按 fail closed 走备份路。
     @Published var deviceInfo: BackupFFI.DeviceInfo?
 
+    init() {
+        // 启动自愈：上次逃逸中途崩溃会把 App Group 的 Library/Caches 留成
+        // 指向壁纸库的软链，不收拾会污染其他走 App Group 的读写。
+        WorseQueryEscape.recoverStaleSymlink()
+    }
+
     /// 读一次设备身份（只读不写）。隧道/配对不通就置空，不抛错——
     /// 调用方按"读不到"处理，不拿旧值冒充。
     func refreshDeviceInfo() async {

