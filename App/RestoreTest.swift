@@ -430,6 +430,10 @@ enum RestoreTest {
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
 
+        // V8：安装计时起点，关键步骤日志里记耗时（走到哪步用了几秒）。
+        let restoreStart = Date()
+        let elapsed: () -> String = { String(format: "%.1fs", Date().timeIntervalSince(restoreStart)) }
+
         // 1. 拿表：只在 iOS 27.2 及以上，先试第 0 级 FileService（CoreDevice
         //    文件服务，直接读已知路径的表）；27.2 上直写已堵、拷回也死了、
         //    备份 0 文件，FileService 是唯一可能拿到真表的路。27.0.1 不走
@@ -550,6 +554,8 @@ enum RestoreTest {
         }
         try checkCancelled(isCancelled)
         onProgress?("正在写文件…", 0.30)
+        // V8：拿表完成，记来源和容器——出问题先看这行是哪条路拿的表。
+        InstallLog.shared.append("restore: 拿表完成（\(elapsed())）：来源 \(report["table_source"] as? String ?? "?")，容器 \(container)。")
 
         // 原表备份：写回之前先把这次用的原表（刚拷回来的、备份抽出来的，或已存的那份）再存一份，坏了能回来。
         let backupDB = tableDir.appendingPathComponent("backup-原表-\(stamp).sqlite3")
@@ -571,6 +577,8 @@ enum RestoreTest {
         let merged = try mergeStore(savedDB: savedDB, savedWAL: savedWAL, workDir: workDir)
         report["merged_db"] = merged.path
         report["store_before"] = PosterBoardStore.summary(merged)
+        // V8：插行前表行数，出问题对照插行后的行数看哪张表丢了行。
+        InstallLog.shared.append("restore: 表行数（插行前，\(elapsed())）：\(report["store_before"] as? String ?? "?")。")
 
         // 3. 编包：先暂存、再编成 configurations 载荷（复用备份路）。
         //    原描述符 UUID 要留住：描述符注入那步要从暂存树里拿
@@ -610,6 +618,7 @@ enum RestoreTest {
         let filesWritten = try writePayloadFiles(
             payloads: compiled.payloads, container: container, pairingPath: pairingPath)
         report["files_written"] = filesWritten
+        InstallLog.shared.append("restore: 文件写完（\(elapsed())）：写了 \(filesWritten) 个。")
 
         // 4b. 写描述符：直装每次都写、之前还原没写的那一步（图库描述符通道）。
         //     暂存树里现成的 stage/descriptors/<原UUID>/ 拷一份副本，把三个
@@ -636,6 +645,7 @@ enum RestoreTest {
         let newPosterId = try posterIdOfStitched(staged: staged, uuid: firstConfig.uuid)
         report["poster_id"] = newPosterId
         report["store_after"] = PosterBoardStore.summary(staged)
+        InstallLog.shared.append("restore: 插行完成（\(elapsed())）：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)；表行数（插行后）：\(report["store_after"] as? String ?? "?")。")
         try checkCancelled(isCancelled)
         onProgress?("正在写回表…", 0.70)
 
@@ -657,11 +667,16 @@ enum RestoreTest {
             throw StepError(step: "写回表",
                             detail: "写回没成（\(writebackJSON["error"] as? String ?? "原因见日志")）。文件已写进容器，表还是旧的。")
         }
+        // V8：写回字节数和 SHA——写回去的表和插行后那张对得上才算真写回去了。
+        let wbSize = writebackJSON["db_size"] as? Int ?? 0
+        let wbSha = writebackJSON["db_sha256"] as? String ?? "?"
+        InstallLog.shared.append("restore: 写回完成（\(elapsed())）：表 \(wbSize) 字节，sha256 \(wbSha)。")
 
         // 7. 写偏好：照直装同一份 PosterBoard 偏好写一次（重载开关），
         //    让系统重载描述符、重新索引。容器内那份失败就停，全局那份尽力写。
         try writePosterBoardPreferences(container: container, pairingPath: pairingPath)
         report["preferences_written"] = true
+        InstallLog.shared.append("restore: 偏好已写（\(elapsed())）。")
         try checkCancelled(isCancelled)
         onProgress?("正在刷新…", 0.85)
 
@@ -678,6 +693,7 @@ enum RestoreTest {
         let refreshConfirmed = refresh["confirmed"] as? Bool ?? false
         let rebootNeeded = refresh["rebootNeeded"] as? Bool ?? false
         let refreshMethod = refresh["method"] as? String ?? "posterboard"
+        InstallLog.shared.append("restore: 刷新完成（\(elapsed())）：方式 \(refreshMethod)，已确认 \(refreshConfirmed)，需重启手机 \(rebootNeeded)。")
         onProgress?("刷新完成", 1.0)
 
         // 已存表更新成刚写回的那张：下次拿表万一拷不回来，兜底用的就是
@@ -691,6 +707,8 @@ enum RestoreTest {
                          ok: $0["ok"] as? Bool ?? false,
                          error: $0["error"] as? String)
         }
+        report["elapsed_seconds"] = Date().timeIntervalSince(restoreStart)
+        InstallLog.shared.append("restore: 全部完成（\(elapsed())）。")
         let summary = "备份还原成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。\(refreshConfirmed ? (refreshMethod == "springboard" ? "桌面已重启，去图库长按看有没有这张壁纸。" : "PosterBoard 已刷新，去图库长按看有没有这张壁纸。") : rebootNeeded ? "刷新没确认：PosterBoard 杀掉后没回来，只有重启手机能让它重读新表，重启后去图库长按看有没有这张壁纸。" : "刷新没确认，重启手机，再去图库长按看有没有这张壁纸。")完整结果见下面日志框."
         return RestoreOutcome(success: true, summary: summary,
                               descriptorUUID: firstConfig.uuid, posterId: newPosterId,
@@ -877,6 +895,14 @@ enum RestoreTest {
     /// FileService 只在 iOS 27.2 及以上走：拷回在 27.2 上死了，27.0.1
     /// 的拷回是通的，老路不动。27.2 beta 3 起直写就堵了，所以 27.2
     /// 及以上都算同一档。
+    /// 是不是 iOS 27.2 及以上：27.2 上杀 PosterBoard 回不来（V6 日志已证实
+    /// 表对了也不回来），刷新那步不再杀，改报需重启手机。
+    /// App 就跑在这台手机上，ProcessInfo 读的就是本机系统版本。
+    private static var isIOS27_2OrLater: Bool {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return v.majorVersion == 27 && v.minorVersion >= 2
+    }
+
     private static var isFileServiceEligible: Bool {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return v.majorVersion == 27 && v.minorVersion >= 2
@@ -1523,8 +1549,9 @@ enum RestoreTest {
     /// 装完刷新：先试 SpringBoard 重启，不行再回落到杀 PosterBoard。
     /// 2026-11-09，27.2：PosterBoard 杀掉后不回来（V6 日志已证实表对了也
     /// 不回来），改成装完直接重启桌面——桌面回来壁纸就该在图库里了，跟换
-    /// 语言时系统重启桌面一个道理。杀 PosterBoard 留着当备选，万一 SpringBoard
-    /// 重启起不来（拿不到进程号、没确认）还能切回去。
+    /// 语言时系统重启桌面一个道理。V8：27.2 上 SpringBoard 重启没确认时
+    /// 不再回落到杀 PosterBoard（死路），直接报需重启手机；27.0/27.1
+    /// 保持原样，杀 PosterBoard 仍当备选。
     /// 返回的字典跟原来第 8 步同一个形状：confirmed / rebootNeeded / json，
     /// 多一个 method（"springboard" 或 "posterboard"），写进报告和日志。
     /// 注意：桌面重启时 App 可能被系统一起杀掉，那时这步回不来，用户直接
@@ -1537,6 +1564,14 @@ enum RestoreTest {
         if sb["confirmed"] as? Bool == true {
             InstallLog.shared.append("restore: SpringBoard 重启已确认，桌面回来了，去图库看壁纸。")
             return sb
+        }
+        // V8：27.2 上杀 PosterBoard 是死路（V6 日志证实表对了也不回来），
+        // 不再杀——直接报需重启手机，导入页弹出“重启手机”按钮。
+        // 27.0/27.1 保持原样：杀 PosterBoard 当备选。
+        if isIOS27_2OrLater {
+            InstallLog.shared.append("restore: SpringBoard 重启没确认（\(sb["error"] as? String ?? "见日志")），27.2 上不杀 PosterBoard，直接报需重启手机。")
+            return ["attempted": true, "confirmed": false, "rebootNeeded": true, "method": "springboard",
+                    "error": sb["error"] as? String ?? "SpringBoard 重启没确认"]
         }
         InstallLog.shared.append("restore: SpringBoard 重启没确认（\(sb["error"] as? String ?? "见日志")），回落到杀 PosterBoard。")
         var pb = posterboardRefresh(pairingPath: pairingPath)

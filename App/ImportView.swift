@@ -112,7 +112,7 @@ struct ImportView: View {
                         }
                     }
                 } else {
-                    Text("还没导入包。点上面按钮选本地 .tendies / .wallive，WALLIVE1 加密包会自动解密后再检查。")
+                    Text("还没导入包。点上面按钮选本地 .tendies / .wallive，没加密的包导入时会自动转成 WALLIVE1 加密版（只有本 App 能装），加密包会自动解密后再检查。")
                         .foregroundStyle(.secondary).font(.caption)
                         .listRowBackground(Color.clear)
                 }

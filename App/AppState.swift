@@ -55,14 +55,26 @@ final class AppState: ObservableObject {
         FileManager.default.fileExists(atPath: pairingFileURL.path)
     }
 
-    /// 设当前包并做检查（WALLIVE1 加密包先解密再校验结构）。
+    /// 设为当前包并做检查（WALLIVE1 加密包先解密再校验结构）。
     /// displayName：目录下载时传条目标题；直接导入文件时不传。
+    /// V8：不是 WALLIVE1 加密的包，先转成加密版再存——这样装出去的包
+    /// 只有咱们安装器能解开用，3105、CAPlayground、Wallive 打不开。
+    /// 加密失败（极少）不拦安装，原样用明文包继续。
     func setPackage(_ data: Data, displayName: String? = nil) {
-        packageData = data
+        var stored = data
+        if !Wallive1Crypto.isWallive1(data) {
+            do {
+                stored = try Wallive1Crypto.encrypt(data)
+                InstallLog.shared.append("restore: 导入的包不是加密版，已转成 WALLIVE1 加密版（\(data.count) 字节 → \(stored.count) 字节）。")
+            } catch {
+                InstallLog.shared.append("restore: 导入的包转加密失败（\(error.localizedDescription)），原样用明文包继续。")
+            }
+        }
+        packageData = stored
         packageDisplayName = displayName
         packageImportedAt = Date()
         do {
-            packageInfo = try TendiesPackage.inspect(data, zip: zip)
+            packageInfo = try TendiesPackage.inspect(stored, zip: zip)
             packageError = nil
         } catch {
             packageInfo = nil
