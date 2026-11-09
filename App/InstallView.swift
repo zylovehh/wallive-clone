@@ -90,8 +90,15 @@ struct InstallView: View {
         installLog = ""
         defer { installing = false }
         if let uuid = await state.install(host: host, forceRefresh: forceRefresh) {
-            result = "安装完成，描述符 UUID：\(uuid)。正在只重启桌面（不重启手机），稍后去锁屏查看。"
-            DesktopRestart.trigger()
+            // 装完补一次只重启桌面：配对在走 FFI 路没确认时补网页法，
+            // 没配对直接用网页法（跟 Vellum 同款）；都没动静再重启手机。
+            if state.hasPairingFile {
+                result = "安装完成，描述符 UUID：\(uuid)。正在只重启桌面（不重启手机），稍后去锁屏查看。"
+                DesktopRestart.trigger()
+            } else {
+                result = "安装完成，描述符 UUID：\(uuid)。正在用网页方式重启桌面（跟 Vellum 同款，20 秒内生效）；桌面没动静的话，重启一次手机再看。"
+                DesktopRestart.trigger()
+            }
         } else if state.statusMessage.isEmpty {
             result = "安装未完成：先去“导入”选包；失败原因看提示或安装日志。"
         }
@@ -139,6 +146,9 @@ enum DesktopRestart {
 """
 
     /// 装完自动调：把全屏网页视图贴到主窗口上，桌面随后重启。
+    /// Vellum 同款做法（它没配对时也走这一招）：20 秒内桌面还没重启成
+    ///（App 还活着）就把网页撤掉，不让它一直在后台压内存；真重启成了
+    /// App 会跟着被杀，撤不撤无所谓。
     static func trigger() {
         DispatchQueue.main.async {
             guard let windowScene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
@@ -152,6 +162,9 @@ enum DesktopRestart {
             webView.backgroundColor = .black
             window.addSubview(webView)
             webView.loadHTMLString(neospringHTML, baseURL: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+                webView.removeFromSuperview()
+            }
         }
     }
 }

@@ -574,11 +574,15 @@ private struct ImportDetailView: View {
                 // 登记这两项没有，核对看日志框。成功只写四个字，载荷数、行数、
                 // 描述符这些长日志留在日志框里，不显示在结果区。
                 installResult = "安装成功"
-                // 刷新没确认（含没配对——那步 FFI 碰不了）就补一次本地网页法
-                // 只重启桌面：桌面回来 PosterBoard 重扫，运气好不用重启整机。
-                // 桌面重启时本 App 可能被一起关掉，属正常，重开即可。
+                // 刷新没确认就补一次只重启桌面。Vellum 没配对时用的也是这招
+                //（原话："没有配对文件，跳过隧道重启（只用系统自带的重启桌面
+                // 方式）"），桌面没动静就退回重启手机。网页 20 秒自动撤
+                //（见 DesktopRestart.trigger），不会一直在后台压内存。
                 if !(report.refresh?.confirmed ?? false) {
                     DesktopRestart.trigger()
+                    if !state.hasPairingFile {
+                        installResult = "安装成功：正在用网页方式重启桌面（约几秒）。桌面没动静的话，重启一次手机再看。"
+                    }
                 }
             } else if report.mode == .test {
                 // 测试版：只写了描述符、没碰表，刷新那项没有，重启手机才进图库。

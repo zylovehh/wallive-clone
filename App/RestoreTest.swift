@@ -2126,12 +2126,15 @@ enum RestoreTest {
         return result
     }
 
-    /// 装完刷新：先试 SpringBoard 重启，不行再回落到杀 PosterBoard。
+    /// 装完刷新：27.2 以下先杀 PosterBoard（只动壁纸进程，App 活着），
+    /// 没确认再回落到重启桌面；27.2 及以上照旧先重启桌面。
+    /// 2026-11-10 真机反馈（27.0）：配对装完走 SpringBoard 重启会把
+    /// 本 App 一起杀掉，回来还落在锁屏。27.2 以下改回先杀 PosterBoard
+    ///（老路，27.0.1 上管用、App 不被带掉），没确认才重启桌面。
     /// 2026-11-09，27.2：PosterBoard 杀掉后不回来（V6 日志已证实表对了也
     /// 不回来），改成装完直接重启桌面——桌面回来壁纸就该在图库里了，跟换
     /// 语言时系统重启桌面一个道理。V8：27.2 上 SpringBoard 重启没确认时
-    /// 不再回落到杀 PosterBoard（死路），直接报需重启手机；27.0/27.1
-    /// 保持原样，杀 PosterBoard 仍当备选。
+    /// 不再回落到杀 PosterBoard（死路），直接报需重启手机。
     /// 返回的字典跟原来第 8 步同一个形状：confirmed / rebootNeeded / json，
     /// 多一个 method（"springboard" 或 "posterboard"），写进报告和日志。
     /// 注意：桌面重启时 App 可能被系统一起杀掉，那时这步回不来，用户直接
@@ -2146,7 +2149,24 @@ enum RestoreTest {
             return ["attempted": false, "confirmed": false, "rebootNeeded": true, "method": "none",
                     "error": "没有配对记录，没做自动刷新"]
         }
-        InstallLog.shared.append("restore: 刷新：先试 SpringBoard 重启…")
+        if !isIOS27_2OrLater {
+            // 27.2 以下：先杀 PosterBoard，App 不被带掉；没确认再重启桌面。
+            InstallLog.shared.append("restore: 27.2 以下刷新：先杀 PosterBoard（App 不被带掉）…")
+            var pb = posterboardRefresh(pairingPath: pairingPath)
+            pb["method"] = "posterboard"
+            if pb["confirmed"] as? Bool == true {
+                InstallLog.shared.append("restore: PosterBoard 刷新已确认，App 还开着，去图库长按看壁纸。")
+                return pb
+            }
+            InstallLog.shared.append("restore: PosterBoard 刷新没确认（\(pb["error"] as? String ?? "见日志")），回落到 SpringBoard 重启。")
+            var sb = springboardRespringSync(pairingPath: pairingPath)
+            sb["method"] = "springboard"
+            if sb["confirmed"] as? Bool == true {
+                InstallLog.shared.append("restore: SpringBoard 重启已确认，桌面回来了，去图库看壁纸。")
+            }
+            return sb
+        }
+        InstallLog.shared.append("restore: 刷新：27.2 先试 SpringBoard 重启…")
         var sb = springboardRespringSync(pairingPath: pairingPath)
         sb["method"] = "springboard"
         if sb["confirmed"] as? Bool == true {
@@ -2155,16 +2175,9 @@ enum RestoreTest {
         }
         // V8：27.2 上杀 PosterBoard 是死路（V6 日志证实表对了也不回来），
         // 不再杀——直接报需重启手机，导入页弹出“重启手机”按钮。
-        // 27.0/27.1 保持原样：杀 PosterBoard 当备选。
-        if isIOS27_2OrLater {
-            InstallLog.shared.append("restore: SpringBoard 重启没确认（\(sb["error"] as? String ?? "见日志")），27.2 上不杀 PosterBoard，直接报需重启手机。")
-            return ["attempted": true, "confirmed": false, "rebootNeeded": true, "method": "springboard",
-                    "error": sb["error"] as? String ?? "SpringBoard 重启没确认"]
-        }
-        InstallLog.shared.append("restore: SpringBoard 重启没确认（\(sb["error"] as? String ?? "见日志")），回落到杀 PosterBoard。")
-        var pb = posterboardRefresh(pairingPath: pairingPath)
-        pb["method"] = "posterboard"
-        return pb
+        InstallLog.shared.append("restore: SpringBoard 重启没确认（\(sb["error"] as? String ?? "见日志")），27.2 上不杀 PosterBoard，直接报需重启手机。")
+        return ["attempted": true, "confirmed": false, "rebootNeeded": true, "method": "springboard",
+                "error": sb["error"] as? String ?? "SpringBoard 重启没确认"]
     }
 
     /// 同步版 SpringBoard 重启：给 restore() 第 8 步用（restore 是同步的，

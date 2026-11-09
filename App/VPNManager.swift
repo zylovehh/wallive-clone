@@ -19,6 +19,11 @@ final class VPNManager: ObservableObject {
     @Published private(set) var lastError: String = ""
 
     private var manager: NETunnelProviderManager?
+    /// 这次会话里用户亲手关过 VPN 就不再自动连（避免“关了又被打开”）。
+    private var userStopped = false
+    /// 载入进行中的标记：自动连和 init 里的载入可能同时跑，串起来防止
+    /// 并发载入把配置存出两份。
+    private var loadInFlight = false
     private var observer: NSObjectProtocol?
 
     init() {
@@ -49,7 +54,11 @@ final class VPNManager: ObservableObject {
     var isConnected: Bool { status == .connected }
 
     /// 载入已保存的隧道配置（没有就新建一个，保存进系统偏好）。
+    /// 同时只跑一份：有载入在跑时直接返回，等下一轮（onAppear 或手动点）再来。
     func load() async {
+        guard !loadInFlight else { return }
+        loadInFlight = true
+        defer { loadInFlight = false }
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
             if let existing = managers.first(where: { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == Self.tunnelBundleID }) {
@@ -86,11 +95,24 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// 关闭：停掉隧道。
+    /// 关闭：停掉隧道。用户亲手关过就记下，自动连不再碰。
     func stop() {
         lastError = ""
+        userStopped = true
         manager?.connection.stopVPNTunnel()
         refreshStatus()
+    }
+
+    /// 进状态页自动连：没连上、也没正在连/正在断，而且这次会话里用户没亲手
+    /// 关过，就自动开。第一次会弹系统授权提示，点“允许”后隧道直接连上。
+    func autoConnectIfNeeded() {
+        guard !userStopped else { return }
+        switch status {
+        case .connected, .connecting, .disconnecting, .reasserting:
+            return
+        default:
+            Task { await start() }
+        }
     }
 
     private func refreshStatus() {

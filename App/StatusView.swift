@@ -34,9 +34,6 @@ struct StatusView: View {
     @StateObject private var vpn = VPNManager()
     @State private var host = "10.7.0.1"
     @State private var portText = "62078"
-    // 共享抽屉体检：App Group 容器路径（nil = 签名没配好）和一句结论。
-    @State private var groupHealthPath: String?
-    @State private var groupHealthNote = ""
     // QQ 卡渐变文字：细体，从左往右流动循环。
 
     var body: some View {
@@ -93,49 +90,6 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // class 2 备用逃逸通道：主通道（class 7）全挂时才出手，默认关。
-                    VStack(alignment: .leading, spacing: 6) {
-                        Toggle(isOn: Binding(
-                            get: { WorseQueryEscape.class2OptIn },
-                            set: { WorseQueryEscape.class2OptIn = $0 }
-                        )) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("备用逃逸通道").font(.headline)
-                                Text(WorseQueryEscape.class2AutoDisabled
-                                     ? "之前连败已自动停用；关一次再开就重置"
-                                     : "主通道写不进时才试，默认关，谨慎打开").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
-                    // 共享抽屉体检：27.2 逃逸的先决条件，一进状态页就能看到门开没开。
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Image(systemName: groupHealthPath != nil ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                                .foregroundStyle(groupHealthPath != nil ? .green : .yellow)
-                            Text("共享抽屉体检").font(.headline)
-                            Spacer()
-                            Button("再看一次") {
-                                let result = WorseQueryEscape.groupHealth()
-                                groupHealthPath = result.containerPath
-                                groupHealthNote = result.note
-                            }
-                            .font(.caption)
-                        }
-                        Text(groupHealthNote)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
-                    .onAppear {
-                        let result = WorseQueryEscape.groupHealth()
-                        groupHealthPath = result.containerPath
-                        groupHealthNote = result.note
-                    }
                     NavigationLink(destination: StatusHistoryPage()) {
                         HStack {
                             Image(systemName: "archivebox").foregroundStyle(.blue).font(.title3)
@@ -215,7 +169,12 @@ struct StatusView: View {
                 .padding()
                 .background(AppBackgroundView())
                 .navigationTitle("状态")
-                .onAppear { state.refreshPairingStatus() }
+                .onAppear {
+                    state.refreshPairingStatus()
+                    // 进状态页自动连内置 VPN：第一次会弹系统提示点“允许”，
+                    // 允许后直接连上，不用再手动点开启。
+                    vpn.autoConnectIfNeeded()
+                }
             }
         }
     }
