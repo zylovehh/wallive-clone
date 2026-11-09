@@ -892,10 +892,12 @@ enum RestoreTest {
         report["payload_count"] = compiled.payloads.count
 
         // 3. 写文件：载荷按父目录分组，走直写那条 AirTraffic 写通道。
+        //    测试版这条路没有沙箱逃逸（逃逸只在备份路吃扩展），传 nil 走原通道。
         try checkCancelled(isCancelled)
         onProgress?("正在写文件…", 0.50)
         let filesWritten = try writePayloadFiles(
-            payloads: compiled.payloads, container: container, pairingPath: pairingPath)
+            payloads: compiled.payloads, container: container, pairingPath: pairingPath,
+            escapeHandle: nil)
         report["files_written"] = filesWritten
         InstallLog.shared.append("restore: 测试版：文件写完（\(elapsed())）：写了 \(filesWritten) 个。")
 
