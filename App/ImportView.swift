@@ -270,7 +270,7 @@ private struct ImportDetailView: View {
     private var verifySummaryLine: String {
         guard let report = installReport else { return "尚未安装，暂无核对结果。" }
         if report.mode == .backup {
-            return "描述符 \(String(report.descriptorUUID.prefix(8))) · 备份还原"
+            return "描述符 \(String(report.descriptorUUID.prefix(8))) · 27.2"
         }
         let inject = report.injectResults.allSatisfy(\.ok) ? "注入成功" : "注入有失败"
         let prefs = report.preferencesWritten ? "偏好成功" : "偏好未写入"
@@ -438,9 +438,7 @@ private struct ImportDetailView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         VStack(alignment: .leading, spacing: 8) {
-                            Text((installReport?.mode == .test
-                                ? "测试版装完要重启手机，壁纸才会进图库。"
-                                : "备份还原装完要重启手机，壁纸才会进图库。") + "点一下直接重启，不用手动关机再开机。")
+                            Text("27.2装完要重启手机，壁纸才会进图库。点一下直接重启，不用手动关机再开机。")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             HStack {
