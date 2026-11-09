@@ -681,7 +681,7 @@ private struct StatusLogPage: View {
     /// nil 就是签名里没这个权限（全能签没加上），27.2 那条路走不通。结果
     /// 同时写进安装日志，重启 App 还能看。
     private func runAppGroupTest() {
-        let groupID = "group.wb.uniusc8301.tool7.wallive"
+        let groupID = "group.com.usc.1787713824"
         if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) {
             appGroupResult = "通了：App Group 容器路径 \(url.path)"
             InstallLog.shared.append("appgroup: OK \(url.path)")
