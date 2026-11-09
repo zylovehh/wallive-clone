@@ -489,9 +489,9 @@ enum RestoreTest {
         //    备份 0 文件，FileService 是唯一可能拿到真表的路。27.0.1 不走
         //    这级，老路不动。拿不到就改走原来的链：备份（主路）→拷回→已存
         //    的表，三级全断、且确认一张存过的表都没有时才造空名单（第 4 级）。
-        var savedDB: URL
-        var savedWAL: URL?
-        var container: String
+        let savedDB: URL
+        let savedWAL: URL?
+        let container: String
 
         // 0. 直读取表（27.2 快路）：上次装成功时把 PosterBoard 容器路径记在
         //    共享抽屉里（重装 App 也不丢）。这次先对它吃沙箱扩展，成了就把表
@@ -542,12 +542,7 @@ enum RestoreTest {
             }
         }
         var fileServiceResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
-        if let direct = directResult {
-            savedDB = direct.db
-            savedWAL = direct.wal
-            container = direct.container
-            report["table_source"] = "direct-read"
-        } else if isFileServiceEligible {
+        if directResult == nil, isFileServiceEligible {
             do {
                 fileServiceResult = try exportViaFileServiceTimed(
                     pairingPath: pairingPath, stamp: stamp, report: &report)
@@ -573,8 +568,11 @@ enum RestoreTest {
                 InstallLog.shared.append("restore: 备份拿表没成（\(detail)），改走拷回通道。")
             }
         }
-        if directResult != nil {
-            // 直读已在最上面把表拿好了，老链整条跳过，别再碰备份和隧道。
+        if let direct = directResult {
+            savedDB = direct.db
+            savedWAL = direct.wal
+            container = direct.container
+            report["table_source"] = "direct-read"
         } else if let fs = fileServiceResult {
             savedDB = fs.savedDB
             savedWAL = fs.savedWAL
