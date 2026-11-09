@@ -6,5 +6,9 @@
 	<array>
 		<string>packet-tunnel</string>
 	</array>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.wb.uniusc8301.tool7.wallive</string>
+	</array>
 </dict>
 </plist>

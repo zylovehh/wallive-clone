@@ -496,6 +496,7 @@ private struct StatusLogPage: View {
     @State private var probeTask: Task<Void, Never>?
     @State private var springboardRunning = false
     @State private var springboardResult = ""
+    @State private var appGroupResult = ""
 
     var body: some View {
         ScrollView {
@@ -588,6 +589,30 @@ private struct StatusLogPage: View {
                 .padding()
                 .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                // App Group 测试：27.2 新路子（worse_query）要一个普通 App Group
+                // 才能进 SystemGroup。这卡只测一件事：全能签签出来的包里到底有
+                // 没有 App Group 权限。点一下，调系统公开接口拿 App Group 容器
+                // 路径；拿到了就是通了，拿不到（nil）就是签名里没这个权限，27.2
+                // 那条路走不通。不用配对，不用联网，点完结果写进下面安装日志。
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("App Group 测试").font(.headline)
+                    Text("测全能签签出来的包里有没有 App Group 权限（27.2 新路子要用到）。不用配对，点一下就行，结果会写进下面安装日志。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        runAppGroupTest()
+                    } label: {
+                        Text("测试 App Group").frame(maxWidth: .infinity)
+                    }
+                    if !appGroupResult.isEmpty {
+                        Text(appGroupResult).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding()
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                 Text("安装日志（可长按复制）").font(.headline)
                 Text(InstallLog.shared.tail(60))
                     .font(.system(.caption, design: .monospaced))
@@ -649,6 +674,21 @@ private struct StatusLogPage: View {
 
     private func stopProbeFetch() {
         probeTask?.cancel()
+    }
+
+    /// App Group 测试：调系统公开接口拿 App Group 容器路径。同步调用，马上
+    /// 出结果。拿到了就是签名里有 App Group 权限（27.2 新路子能走）；返回
+    /// nil 就是签名里没这个权限（全能签没加上），27.2 那条路走不通。结果
+    /// 同时写进安装日志，重启 App 还能看。
+    private func runAppGroupTest() {
+        let groupID = "group.wb.uniusc8301.tool7.wallive"
+        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) {
+            appGroupResult = "通了：App Group 容器路径 \(url.path)"
+            InstallLog.shared.append("appgroup: OK \(url.path)")
+        } else {
+            appGroupResult = "没通：拿不到 App Group 容器路径（nil），签名里没有 App Group 权限。"
+            InstallLog.shared.append("appgroup: FAILED nil（签名里没有 App Group 权限）")
+        }
     }
 
     /// SpringBoard 重启测试：后台调 RestoreTest.springboardRespring。
