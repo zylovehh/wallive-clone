@@ -1,19 +1,22 @@
 import Foundation
 
-/// 安装方式三选一：自动 / 直写 / 备份还原。
+/// 安装方式四选一：自动 / 直写 / 备份还原 / 测试版。
 ///
 /// 和 `PosterBoardApplyModeSettings` 的分工：
 /// - 那个存的是"直写还是备份"的偏好（默认直写），`resolved()` 按实际
 ///   目标机解析：AirLift 被藏起来时自动走备份，不抹掉用户给另一台
 ///   设备留的偏好。
-/// - 这个存的是用户在界面上点的三态。点"自动"就是走上面那套解析；
+/// - 这个存的是用户在界面上点的四态。点"自动"就是走上面那套解析；
 ///   点"直写"或"备份还原"是明说——但"直写"点在一台直写已堵的设备上
 ///   也装不上，提示行会先说清楚，装的时候还是按用户点的来，
 ///   失败原样报，不悄悄换路。
+/// - 点"测试版"是明说走只写描述符的新路子（不读表、不插行、不写回），
+///   不经过上面那套解析，装完要重启手机。
 enum ApplyModeChoice: String, CaseIterable, Identifiable {
     case auto
     case airlift
     case backup
+    case test
 
     var id: String { rawValue }
 
@@ -22,6 +25,7 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
         case .auto: return "自动"
         case .airlift: return "直写（iOS 27）"
         case .backup: return "iOS 27.2"
+        case .test: return "测试版"
         }
     }
 
@@ -38,6 +42,7 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
 
     /// 这次安装实际走哪条路。版本读不到时 `AirliftAvailability` 按藏起来
     /// 处理（fail closed），所以自动会落到备份路——不要猜版本走直写。
+    /// 测试版不参与自动解析：点了就是测试版，直接返回。
     func resolvedMode(deviceVersion: String, buildVersion: String) -> PosterBoardApplyMode {
         switch self {
         case .auto:
@@ -47,6 +52,8 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
             return .airlift
         case .backup:
             return .backup
+        case .test:
+            return .test
         }
     }
 
@@ -55,6 +62,10 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
     func hintText(deviceVersion: String, buildVersion: String) -> String {
         let mode = resolvedMode(deviceVersion: deviceVersion, buildVersion: buildVersion)
         guard !deviceVersion.isEmpty else {
+            // 测试版不看设备版本：点了就是测试版，别说成备份还原。
+            if self == .test {
+                return "这次将用：测试版（只写描述符、不写表，27.2 新路子）。"
+            }
             return "设备版本读不到，这次将用备份还原（读不到版本时默认走备份）。"
         }
         switch (self, mode) {
@@ -76,6 +87,8 @@ enum ApplyModeChoice: String, CaseIterable, Identifiable {
             }
             // 27.0.1 上手动选备份：走改表还原（不用整机备份），不用只等 27.2。
             return "这次将用：备份 27.2（支持 iOS 27.2 及以上）。"
+        case (.test, .test):
+            return "这次将用：测试版（只写描述符、不写表，27.2 新路子）。"
         default:
             // 正常走不到这里（强制选的模式就是返回的模式）；兜底也按
             // 界面上的叫法写（带 iOS 版本号），不用 `mode.title`（那是不带版本号的"备份还原"）。

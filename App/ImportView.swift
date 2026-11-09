@@ -244,12 +244,18 @@ private struct ImportDetailView: View {
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
 
-    /// 这次安装实际走哪条路（按三态选择 + 设备版本解析）。
+    /// 这次安装实际走哪条路（按四态选择 + 设备版本解析）。
     /// 设备版本读不到时按备份算（fail closed），不猜版本走直写。
     private var effectiveMode: PosterBoardApplyMode {
         state.applyChoice.resolvedMode(
             deviceVersion: state.deviceInfo?.productVersion ?? "",
             buildVersion: state.deviceInfo?.buildVersion ?? "")
+    }
+
+    /// 备份和测试版装完都要重启手机才进图库：这个条件为真时显示
+    /// “重启手机”按钮。直写那条路不用重启，不显示。
+    private var needsRebootButton: Bool {
+        installReport?.mode == .backup || installReport?.mode == .test
     }
 
     /// 模式提示行：这次实际会用的模式 + 为什么。
@@ -427,12 +433,14 @@ private struct ImportDetailView: View {
                             Text(verifySummaryLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
-                    if installReport?.mode == .backup {
+                    if needsRebootButton {
                         Text("安装成功，再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合。")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("备份还原装完要重启手机，壁纸才会进图库。点一下直接重启，不用手动关机再开机。")
+                            Text((installReport?.mode == .test
+                                ? "测试版装完要重启手机，壁纸才会进图库。"
+                                : "备份还原装完要重启手机，壁纸才会进图库。") + "点一下直接重启，不用手动关机再开机。")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             HStack {
@@ -452,7 +460,9 @@ private struct ImportDetailView: View {
                             }
                             Button("取消", role: .cancel) {}
                         } message: {
-                            Text("重启后 PosterBoard 会重新读取新表，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。")
+                            Text(installReport?.mode == .test
+                                ? "重启后 PosterBoard 会重新读取描述符，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。"
+                                : "重启后 PosterBoard 会重新读取新表，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。")
                         }
                     } else if let reason = installFailedReason {
                         Text("安装失败：\(reason)。再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
@@ -564,6 +574,9 @@ private struct ImportDetailView: View {
                 // 登记这两项没有，核对看日志框。成功只写四个字，载荷数、行数、
                 // 描述符这些长日志留在日志框里，不显示在结果区。
                 installResult = "安装成功"
+            } else if report.mode == .test {
+                // 测试版：只写了描述符、没碰表，刷新那项没有，重启手机才进图库。
+                installResult = "测试版安装成功：只写了描述符、没碰数据库表。偏好已写（PBF 轻量刷新）。重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
             } else {
                 let dirLines = report.injectResults.map { result in
                     let short = shortTargetDir(result.targetParentDir)
@@ -594,14 +607,14 @@ private struct ImportDetailView: View {
                 installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。\(verifySummary) \(refreshSummary)"
                 }
         } else if Task.isCancelled {
-            // 用户点了停止（`try?` 把取消错误吞成了 nil）。备份路只报“已停止”，
-            // 直写那条路的文案不动。
-            installResult = effectiveMode == .backup ? "已停止" : "已停止取备份。下次取备份如果一直连不上，重启手机一次再试。"
+            // 用户点了停止（`try?` 把取消错误吞成了 nil）。备份路和测试版
+            // 只报“已停止”，直写那条路的文案不动。
+            installResult = effectiveMode == .airlift ? "已停止取备份。下次取备份如果一直连不上，重启手机一次再试。" : "已停止"
             installLogText = InstallLog.shared.tail(60)
-        } else if effectiveMode == .backup && !state.statusMessage.isEmpty {
-            // 备份路失败：结果区写失败原因，核对区也进失败那版。
+        } else if (effectiveMode == .backup || effectiveMode == .test) && !state.statusMessage.isEmpty {
+            // 备份路和测试版失败：结果区写失败原因，核对区也进失败那版。
             installResult = state.statusMessage
-            installFailedReason = backupFailureReason(from: state.statusMessage)
+            installFailedReason = installFailureReason(from: state.statusMessage)
             installLogText = InstallLog.shared.tail(60)
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
@@ -634,9 +647,13 @@ private struct ImportDetailView: View {
         return lines.suffix(3).joined(separator: "\n")
     }
 
-    /// 备份路失败原因：statusMessage 是“备份安装失败：<原因>”，核对区只留 <原因>。
-    private func backupFailureReason(from statusMessage: String) -> String {
+    /// 备份路和测试版失败原因：statusMessage 是“备份安装失败：<原因>”
+    /// 或“测试版安装失败：<原因>”，核对区只留 <原因>。
+    private func installFailureReason(from statusMessage: String) -> String {
         if let range = statusMessage.range(of: "备份安装失败：") {
+            return String(statusMessage[range.upperBound...])
+        }
+        if let range = statusMessage.range(of: "测试版安装失败：") {
             return String(statusMessage[range.upperBound...])
         }
         return statusMessage

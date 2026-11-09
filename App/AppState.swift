@@ -21,8 +21,9 @@ final class AppState: ObservableObject {
     @Published var installHistory: [String] = []
     @Published var installReports: [InstallReport] = []
     @Published var statusMessage = ""
-    /// 安装方式三选一（自动 / 直写 / 备份还原），存 UserDefaults，默认自动。
+    /// 安装方式四选一（自动 / 直写 / 备份还原 / 测试版），存 UserDefaults，默认自动。
     /// "自动"走 `PosterBoardApplyModeSettings.resolved()`：直写被藏时自动切备份。
+    /// "测试版"不经过那套解析，直接走只写描述符的新路子，装完要重启手机。
     @Published var applyChoice = ApplyModeChoice.current {
         didSet { ApplyModeChoice.current = applyChoice }
     }
@@ -137,19 +138,24 @@ final class AppState: ObservableObject {
     /// 与旧 install() 的区别：逐目录结果记进 installReports，诊断页可显示；
     /// 暂存步骤与旧入口相同（DescriptorInstaller.stage），不改写盘逻辑、
     /// 配对、偏好键与路径、结构版本映射、标识策略。
-    /// 先读设备身份、按三态选择定模式：直写走下面原有流程一字不动；
+    /// 先读设备身份、按四态选择定模式：直写走下面原有流程一字不动；
     /// 备份走 `BackupInstallFlow`（改表还原：拿表 → 插行 → 写文件 → 写回表
     /// → 写偏好 → 刷新），不用整机备份；刷新确认了不用重启手机。
+    /// 测试版走 `BackupInstallFlow.installTest`（只写描述符、不写表），
+    /// 装完要重启手机（报告里 `mode` 是 `.test`）。
     func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
         guard let data = packageData, hasPairingFile else { return nil }
         // 安装开始先读一次设备身份（只读不写）。读不到就用缓存的，
         // 连缓存都没有就按空版本算——`resolved()` 会 fail closed 走备份路，
-        // 不猜版本走直写。
+        // 不猜版本走直写。测试版不看设备版本，点了就是测试版。
         onProgress?("正在读设备版本…", 0.02)
         await refreshDeviceInfo()
         let version = deviceInfo?.productVersion ?? ""
         let build = deviceInfo?.buildVersion ?? ""
         let mode = applyChoice.resolvedMode(deviceVersion: version, buildVersion: build)
+        if mode == .test {
+            return try await installWithReportTest(data: data, onProgress: onProgress)
+        }
         if mode == .backup {
             return try await installWithReportBackup(data: data, onProgress: onProgress)
         }
@@ -168,6 +174,44 @@ final class AppState: ObservableObject {
             throw CancellationError()
         } catch {
             statusMessage = "安装失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// 测试版安装：走只写描述符（不读表、不插行、不写回），写完偏好等
+    /// PosterBoard 重扫，装完要重启手机。结果同样记进 installReports，
+    /// 报告里 `mode` 是 `.test`。失败原样报，不悄悄切回别的模式。
+    private func installWithReportTest(data: Data,
+                                       onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
+        do {
+            InstallLog.shared.clear()
+            let outcome = try await BackupInstallFlow.installTest(
+                packageData: data,
+                pairingPath: pairingFileURL.path,
+                log: { InstallLog.shared.append($0) },
+                onProgress: onProgress)
+            let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
+                + "Extensions/\(outcome.extensionID)/configurations"
+            let report = InstallReport(
+                descriptorUUID: outcome.descriptorUUID,
+                injectResults: [InjectResult(targetParentDir: configurationsDir,
+                                             ok: true, error: nil)] + outcome.injectResults,
+                preferencesWritten: outcome.preferencesWritten,
+                verifyResults: [],
+                registration: nil,
+                refresh: nil,
+                mode: .test,
+                backupSummary: "测试版已完成（\(outcome.payloadCount) 个载荷，"
+                    + "只写描述符、没碰数据库表）。" + (outcome.needsReboot
+                        ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
+                        : "去锁屏图库查看，出现后再点设为墙纸组合。"))
+            installHistory.append(report.descriptorUUID)
+            installReports.append(report)
+            return report
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            statusMessage = "测试版安装失败：\(error.localizedDescription)"
             return nil
         }
     }

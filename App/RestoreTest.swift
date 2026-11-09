@@ -76,6 +76,9 @@ struct RestoreOutcome {
     /// 刷新失败且 PosterBoard 杀掉后没回来时为 true：只有重启手机能让它
     /// 重读新表，导入页备份装完给用户一个“重启手机”按钮（用户亲手点才重启）。
     let rebootNeeded: Bool
+    /// 这次走的是哪条路（默认备份还原，测试版是 `.test`）。报告 JSON 里
+    /// 同样记 `mode` / `method`（"test" / "backup"）。
+    let mode: PosterBoardApplyMode = .backup
     /// 描述符注入逐目标结果（主扩展 + 现代扩展）。
     let injectResults: [InjectResult]
     let json: String
@@ -217,6 +220,53 @@ enum RestoreTest {
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
                 injectResults: [], json: jsonString(report))
+        }
+    }
+
+    /// 跑一次测试版（只写描述符、不写表，27.2 新路子）。和 runRestore
+    /// 同一个包裹层：失败原样报，不悄悄切回别的模式；成功时
+    /// rebootNeeded 一定是 true（写完偏好只做轻量刷新，27.2 上
+    /// SpringBoard 重启带不动 PosterBoard、杀 PosterBoard 又回不来，
+    /// 只有重启手机能让它重读描述符）。
+    /// 调用方必须已经在后台线程（FFI 都会阻塞）。
+    static func runRestoreTestMode(packageData: Data, pairingPath: String,
+                                   onProgress: ((String, Double) -> Void)? = nil,
+                                   isCancelled: @escaping () -> Bool = { false }) -> RestoreOutcome {
+        var report: [String: Any] = ["channel": "restore_test_mode", "success": false,
+                                     "mode": "test", "method": "test"]
+        do {
+            let outcome = try restoreTestMode(packageData: packageData, pairingPath: pairingPath, report: &report,
+                                              onProgress: onProgress, isCancelled: isCancelled)
+            report["success"] = true
+            InstallLog.shared.append("restore: 测试版 json=\(jsonString(report))")
+            return outcome
+        } catch is CancellationError {
+            InstallLog.shared.append("restore: 测试版已停止（用户点了停止）。")
+            return RestoreOutcome(
+                success: false,
+                summary: "已停止。",
+                descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
+                injectResults: [], json: jsonString(report), mode: .test)
+        } catch let e as StepError {
+            report["step"] = e.step
+            report["error"] = e.detail
+            InstallLog.shared.append("restore: 测试版 FAILED \(e.step)：\(e.detail) json=\(jsonString(report))")
+            return RestoreOutcome(
+                success: false,
+                summary: "测试版停在\(e.step)：\(e.detail)完整结果见下面日志框。",
+                descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
+                injectResults: [], json: jsonString(report), mode: .test)
+        } catch {
+            report["error"] = error.localizedDescription
+            InstallLog.shared.append("restore: 测试版 FAILED \(error.localizedDescription) json=\(jsonString(report))")
+            return RestoreOutcome(
+                success: false,
+                summary: "测试版失败：\(error.localizedDescription)完整结果见下面日志框。",
+                descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
+                storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
+                injectResults: [], json: jsonString(report), mode: .test)
         }
     }
 
@@ -633,13 +683,54 @@ enum RestoreTest {
         onProgress?("正在插行…", 0.50)
 
         // 5. 插行：复用备份路的 stitch（金块 update_sqlite 的移植）。
+        //    第一次不过先重试一次：先试重新取表（拷回 30 秒），取到了就
+        //    用新表合库再插；取不到就用已存表（merged）换个目录再插一次。
+        //    两次都不过，不直接报失败：自动切到测试版（只写描述符、不写
+        //    表）——描述符在第 4b 步已经注入过了，切过去不再重复注入，
+        //    直接走 finishTestMode 的收尾（写偏好 → 等 5 秒 → 报重启手机）。
         let stitchDir = workDir.appendingPathComponent("stitch")
-        let staged: URL
-        do {
-            staged = try PosterBoardStore.stitch(
-                database: merged, items: compiled.configs, workingDirectory: stitchDir)
-        } catch {
-            throw StepError(step: "插行", detail: "\(error.localizedDescription)")
+        var staged: URL? = nil
+        var lastStitchError: Error? = nil
+        for attempt in 1...2 {
+            try checkCancelled(isCancelled)
+            let attemptDir = attempt == 1
+                ? stitchDir
+                : workDir.appendingPathComponent("stitch-retry")
+            do {
+                if attempt == 1 {
+                    staged = try PosterBoardStore.stitch(
+                        database: merged, items: compiled.configs, workingDirectory: attemptDir)
+                } else {
+                    var retryDB = merged
+                    do {
+                        let fresh = try exportAndSaveTimed(
+                            pairingPath: pairingPath, stamp: stamp, report: &report)
+                        let retryDir = workDir.appendingPathComponent("restitch")
+                        try fm.createDirectory(at: retryDir, withIntermediateDirectories: true)
+                        retryDB = try mergeStore(savedDB: fresh.savedDB, savedWAL: fresh.savedWAL,
+                                                 workDir: retryDir)
+                        InstallLog.shared.append("restore: 插行重试：重新取表成了，用新表再插一次。")
+                    } catch {
+                        InstallLog.shared.append("restore: 插行重试：重新取表没成（\(error.localizedDescription)），用已存表再插一次。")
+                    }
+                    staged = try PosterBoardStore.stitch(
+                        database: retryDB, items: compiled.configs, workingDirectory: attemptDir)
+                }
+                break
+            } catch {
+                lastStitchError = error
+                InstallLog.shared.append("restore: 插行第 \(attempt) 次没成（\(error.localizedDescription)）\(attempt == 1 ? "，重试一次。" : "。")")
+            }
+        }
+        guard let staged else {
+            // 两次都不过：自动切测试版。描述符已经注入过了，不重复注入。
+            InstallLog.shared.append("restore: 插行两次都不过，自动切到测试版（只写描述符）。")
+            report["stitch_error"] = lastStitchError?.localizedDescription ?? "插行失败"
+            return try finishTestMode(report: &report, container: container, pairingPath: pairingPath,
+                                      firstConfig: firstConfig, filesWritten: filesWritten,
+                                      descriptorResults: descriptorResults,
+                                      restoreStart: restoreStart, onProgress: onProgress,
+                                      isCancelled: isCancelled)
         }
         // 验一下新行真的在：按 UUID 查 posterId。
         let newPosterId = try posterIdOfStitched(staged: staged, uuid: firstConfig.uuid)
@@ -707,6 +798,8 @@ enum RestoreTest {
                          ok: $0["ok"] as? Bool ?? false,
                          error: $0["error"] as? String)
         }
+        report["mode"] = "backup"
+        report["method"] = "backup"
         report["elapsed_seconds"] = Date().timeIntervalSince(restoreStart)
         InstallLog.shared.append("restore: 全部完成（\(elapsed())）。")
         let summary = "备份还原成功：新 posterId \(newPosterId)，描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写、表已写回\(usedStored ? "（这次用的是手机里已存的表，不是刚拷回来的）" : "")。\(refreshConfirmed ? (refreshMethod == "springboard" ? "桌面已重启，去图库长按看有没有这张壁纸。" : "PosterBoard 已刷新，去图库长按看有没有这张壁纸。") : rebootNeeded ? "刷新没确认：PosterBoard 杀掉后没回来，只有重启手机能让它重读新表，重启后去图库长按看有没有这张壁纸。" : "刷新没确认，重启手机，再去图库长按看有没有这张壁纸。")完整结果见下面日志框."
@@ -717,6 +810,158 @@ enum RestoreTest {
                               preferencesWritten: true, refreshConfirmed: refreshConfirmed, rebootNeeded: rebootNeeded,
                               injectResults: descriptorInjects,
                               json: jsonString(report))
+    }
+
+    // MARK: - 测试版（只写描述符、不写表，27.2 新路子）
+
+    /// 测试版主流程：拿容器 → 编包 → 写 configurations → 注入描述符 →
+    /// 写偏好（PBF 轻量刷新）→ 等 5 秒让 PosterBoard 重扫 → 报重启手机。
+    /// 不读表、不插行、不写回：拿表（备份/拷回/已存表/造空名单）四级
+    /// 全跳过，表一个字不动。容器路径单独问手机要一次（拿不到就按
+    /// 现有流程的报错方式原样报，不悄悄切回别的模式）。
+    /// 不杀 PosterBoard、不重启桌面：27.2 上 SpringBoard 重启带不动
+    /// PosterBoard，杀 PosterBoard 又回不来（V8 结论），直接报
+    /// rebootNeeded=true，导入页弹出已有的“重启手机”按钮。
+    private static func restoreTestMode(packageData: Data, pairingPath: String,
+                                        report: inout [String: Any],
+                                        onProgress: ((String, Double) -> Void)?,
+                                        isCancelled: @escaping () -> Bool) throws -> RestoreOutcome {
+        try checkCancelled(isCancelled)
+        let restoreStart = Date()
+        let elapsed: () -> String = { String(format: "%.1fs", Date().timeIntervalSince(restoreStart)) }
+
+        // 1. 拿容器路径：只问应用记录，不拿表。
+        onProgress?("正在问手机要壁纸位置…", 0.10)
+        let container = try fetchContainerPath(pairingPath: pairingPath, isCancelled: isCancelled)
+        report["container"] = container
+        InstallLog.shared.append("restore: 测试版：容器路径已拿到（\(elapsed())）：\(container)。")
+
+        // 2. 编包：先暂存、再编成 configurations 载荷（复用备份路）。
+        try checkCancelled(isCancelled)
+        onProgress?("正在编包…", 0.30)
+        let installer = DescriptorInstaller(zip: ZipFoundationAdapter())
+        let stage: URL
+        let descriptorUUID: String
+        do {
+            (stage, descriptorUUID) = try installer.stage(packageData)
+        } catch let error as TendiesPackage.Error {
+            switch error {
+            case .notATendiesPackage:
+                throw StepError(step: "解包", detail: "这不是一个 .tendies / .wallive 包。")
+            case .missingWallpaperDirectory:
+                throw StepError(step: "解包", detail: "包里找不到壁纸目录，结构不对。")
+            case .missingWallpaperPlist:
+                throw StepError(step: "解包", detail: "包里找不到 Wallpaper.plist，结构不对。")
+            }
+        }
+        let compiled: (payloads: [BackupPayload], configs: [PosterBoardConfigItem])
+        do {
+            compiled = try PosterBoardCompiler.compile(
+                stageDirectory: stage, structureVersion: storeVersion,
+                log: { InstallLog.shared.append($0) })
+        } catch {
+            throw StepError(step: "编包", detail: "\(error.localizedDescription)")
+        }
+        guard !compiled.configs.isEmpty else {
+            throw StepError(step: "编包", detail: "包里没找到描述符，编不出还原包（老格式的包备份路不接）。")
+        }
+        let firstConfig = compiled.configs[0]
+        report["descriptor_uuid"] = firstConfig.uuid
+        report["extension_id"] = firstConfig.extensionID
+        report["payload_count"] = compiled.payloads.count
+
+        // 3. 写文件：载荷按父目录分组，走直写那条 AirTraffic 写通道。
+        try checkCancelled(isCancelled)
+        onProgress?("正在写文件…", 0.50)
+        let filesWritten = try writePayloadFiles(
+            payloads: compiled.payloads, container: container, pairingPath: pairingPath)
+        report["files_written"] = filesWritten
+        InstallLog.shared.append("restore: 测试版：文件写完（\(elapsed())）：写了 \(filesWritten) 个。")
+
+        // 4. 写描述符：和备份路第 4b 步同一条通道（主目标失败就停）。
+        let descriptorResults = try injectDescriptors(
+            stage: stage, descriptorUUID: descriptorUUID, config: firstConfig,
+            container: container, pairingPath: pairingPath)
+        report["descriptors"] = descriptorResults
+        InstallLog.shared.append("restore: 测试版：描述符已注入（\(elapsed())）：\(firstConfig.uuid)。")
+
+        // 5. 收尾：写偏好（PBF 轻量刷新）→ 等 5 秒 → 报重启手机。
+        return try finishTestMode(report: &report, container: container, pairingPath: pairingPath,
+                                  firstConfig: firstConfig, filesWritten: filesWritten,
+                                  descriptorResults: descriptorResults,
+                                  restoreStart: restoreStart, onProgress: onProgress,
+                                  isCancelled: isCancelled)
+    }
+
+    /// 单独问手机要 PosterBoard 容器路径（测试版用：不拿表，只拿路径）。
+    /// 问应用记录 30 秒超时；拿不到、或者不是应用容器路径，就按现有流程
+    /// 的报错方式原样报（StepError，不悄悄切回别的模式）。
+    private static func fetchContainerPath(pairingPath: String,
+                                           isCancelled: @escaping () -> Bool) throws -> String {
+        let entry: [String: Any]
+        do {
+            entry = try runBackupCall(timeout: 30, isCancelled: isCancelled) {
+                try await BackupFFI.appFactoryEntry(
+                    pairingPath: pairingPath, bundleID: "com.apple.PosterBoard",
+                    log: { InstallLog.shared.append($0) })
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw StepError(step: "拿容器",
+                            detail: "容器路径拿不到（问手机要应用记录没成：\((error as? StepError)?.detail ?? error.localizedDescription)）。")
+        }
+        guard let container = entry["Container"] as? String, !container.isEmpty else {
+            throw StepError(step: "拿容器", detail: "PosterBoard 的容器路径拿不到（应用记录里没有 Container）。")
+        }
+        guard container.hasPrefix("/var/mobile/Containers/Data/Application/")
+            || container.hasPrefix("/private/var/mobile/Containers/Data/Application/") else {
+            throw StepError(step: "拿容器", detail: "PosterBoard 的容器路径不对（不是应用容器路径：\(container)）。")
+        }
+        return container
+    }
+
+    /// 测试版收尾（独立入口和插行失败自动切换共用）：写偏好 → 等 5 秒 →
+    /// 报重启手机。描述符一定已经注入过了（调用方负责），这里不再注入，
+    /// 不重复写。写偏好失败就停（StepError）；等 5 秒前后都查取消。
+    /// 成功时 rebootNeeded 一定是 true，refreshConfirmed 是 false——
+    /// 不试 SpringBoard 重启、不杀 PosterBoard（27.2 上两条都是死路）。
+    private static func finishTestMode(report: inout [String: Any],
+                                       container: String, pairingPath: String,
+                                       firstConfig: PosterBoardConfigItem,
+                                       filesWritten: Int,
+                                       descriptorResults: [[String: Any]],
+                                       restoreStart: Date,
+                                       onProgress: ((String, Double) -> Void)?,
+                                       isCancelled: @escaping () -> Bool) throws -> RestoreOutcome {
+        let elapsed: () -> String = { String(format: "%.1fs", Date().timeIntervalSince(restoreStart)) }
+        try checkCancelled(isCancelled)
+        onProgress?("正在写偏好…", 0.85)
+        try writePosterBoardPreferences(container: container, pairingPath: pairingPath)
+        report["preferences_written"] = true
+        InstallLog.shared.append("restore: 测试版：已写偏好（PBF 轻量刷新），等 PosterBoard 重扫（\(elapsed())）。")
+        try checkCancelled(isCancelled)
+        onProgress?("等 PosterBoard 重扫…", 0.95)
+        Thread.sleep(forTimeInterval: 5)
+        try checkCancelled(isCancelled)
+        onProgress?("测试版完成", 1.0)
+        let descriptorInjects = descriptorResults.map {
+            InjectResult(targetParentDir: $0["target"] as? String ?? "",
+                         ok: $0["ok"] as? Bool ?? false,
+                         error: $0["error"] as? String)
+        }
+        report["mode"] = "test"
+        report["method"] = "test"
+        report["elapsed_seconds"] = Date().timeIntervalSince(restoreStart)
+        InstallLog.shared.append("restore: 测试版全部完成（\(elapsed())）。")
+        let summary = "测试版成功：描述符 \(firstConfig.uuid)，文件写了 \(filesWritten) 个、描述符已注入、偏好已写（PBF 轻量刷新），没碰数据库表。重启手机后去图库长按看有没有这张壁纸。完整结果见下面日志框。"
+        return RestoreOutcome(success: true, summary: summary,
+                              descriptorUUID: firstConfig.uuid, posterId: nil,
+                              extensionID: firstConfig.extensionID, payloadCount: filesWritten,
+                              storeSummary: nil,
+                              preferencesWritten: true, refreshConfirmed: false, rebootNeeded: true,
+                              injectResults: descriptorInjects,
+                              json: jsonString(report), mode: .test)
     }
 
     // MARK: - 拿表（Phase 0 备份优先，拷回是备选）
