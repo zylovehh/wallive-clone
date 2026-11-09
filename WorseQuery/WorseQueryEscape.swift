@@ -23,7 +23,7 @@ enum WorseQueryEscape {
 
     /// 逃逸用的 App Group：用户已证实全能签会保留这个组
     /// （2026-11-09 提交 001696d 的 zsign 实测结论，按用户最新确认为准）。
-    static let appGroup = "group.wb.uniusc8301.tool7.wallive"
+    static let appGroup = "group.com.usc.1787713824"
 
     /// 错误码 → 中文说明（对应上游 ContentView 的 switch）。
     static func describe(_ handle: Int64) -> String {

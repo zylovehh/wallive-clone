@@ -21,7 +21,7 @@ iOS 26.0–26.7.2 / 27.2。
 2. 成了：写文件、写回表走本地直写（失败自动回落 AirTraffic / FFI 原通道）；
 3. 没成：整个流程照走原通道，行为与引入前完全一致。
 
-App Group 用 `group.wb.uniusc8301.tool7.wallive`（entitlements 里已声明）。
+App Group 用 `group.com.usc.1787713824`（entitlements 里已声明）。
 
 ## GPL-3.0 开源义务
 
