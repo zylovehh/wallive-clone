@@ -247,7 +247,7 @@ enum RestoreTest {
                 summary: "已停止。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], json: jsonString(report), mode: .test)
+                injectResults: [], json: jsonString(report))
         } catch let e as StepError {
             report["step"] = e.step
             report["error"] = e.detail
@@ -257,7 +257,7 @@ enum RestoreTest {
                 summary: "测试版停在\(e.step)：\(e.detail)完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], json: jsonString(report), mode: .test)
+                injectResults: [], json: jsonString(report))
         } catch {
             report["error"] = error.localizedDescription
             InstallLog.shared.append("restore: 测试版 FAILED \(error.localizedDescription) json=\(jsonString(report))")
@@ -266,7 +266,7 @@ enum RestoreTest {
                 summary: "测试版失败：\(error.localizedDescription)完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], json: jsonString(report), mode: .test)
+                injectResults: [], json: jsonString(report))
         }
     }
 
@@ -961,7 +961,7 @@ enum RestoreTest {
                               storeSummary: nil,
                               preferencesWritten: true, refreshConfirmed: false, rebootNeeded: true,
                               injectResults: descriptorInjects,
-                              json: jsonString(report), mode: .test)
+                              json: jsonString(report))
     }
 
     // MARK: - 拿表（Phase 0 备份优先，拷回是备选）
