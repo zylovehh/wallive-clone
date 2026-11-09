@@ -254,7 +254,9 @@ final class AppState: ObservableObject {
             InstallLog.shared.clear()
             let outcome = try await BackupInstallFlow.install(
                 packageData: data,
-                pairingPath: pairingFileURL.path,
+                // 没配对时传空串：让还原流程明确知道没配对，走直写，
+                // 绝不拿着一个不存在的配对文件路径去碰配对隧道。
+                pairingPath: hasPairingFile ? pairingFileURL.path : "",
                 log: { InstallLog.shared.append($0) },
                 onProgress: onProgress)
             let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
