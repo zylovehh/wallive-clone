@@ -90,14 +90,14 @@ struct InstallView: View {
         installLog = ""
         defer { installing = false }
         if let uuid = await state.install(host: host, forceRefresh: forceRefresh) {
-            // 装完补一次只重启桌面：配对在走 FFI 路没确认时补网页法，
-            // 没配对直接用网页法（跟 Vellum 同款）；都没动静再重启手机。
+            // 装完补一次只重启桌面：配对在走 FFI 路没确认时补网页法。
+            // 没配对不再自动跑网页重启：27.0.1 真机验证网页法照样卡死锁屏
+            // 图库（Vellum 同款也不行），退回提示用户重启手机。
             if state.hasPairingFile {
                 result = "安装完成，描述符 UUID：\(uuid)。正在只重启桌面（不重启手机），稍后去锁屏查看。"
                 DesktopRestart.trigger()
             } else {
-                result = "安装完成，描述符 UUID：\(uuid)。正在用网页方式重启桌面（跟 Vellum 同款，20 秒内生效）；桌面没动静的话，重启一次手机再看。"
-                DesktopRestart.trigger()
+                result = "安装完成，描述符 UUID：\(uuid)。锁屏再解锁一次，去图库看看（PosterBoard 会自己重扫）；没出现的话重启一次手机再看。"
             }
         } else if state.statusMessage.isEmpty {
             result = "安装未完成：先去“导入”选包；失败原因看提示或安装日志。"

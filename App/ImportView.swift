@@ -574,14 +574,14 @@ private struct ImportDetailView: View {
                 // 登记这两项没有，核对看日志框。成功只写四个字，载荷数、行数、
                 // 描述符这些长日志留在日志框里，不显示在结果区。
                 installResult = "安装成功"
-                // 刷新没确认就补一次只重启桌面。Vellum 没配对时用的也是这招
-                //（原话："没有配对文件，跳过隧道重启（只用系统自带的重启桌面
-                // 方式）"），桌面没动静就退回重启手机。网页 20 秒自动撤
-                //（见 DesktopRestart.trigger），不会一直在后台压内存。
+                // 刷新没确认就补一次只重启桌面；仅限配对路。没配对不再自动跑
+                // 网页重启：27.0.1 真机验证网页法照样卡死锁屏图库（Vellum 同款
+                // 也不行），退回提示用户重启手机。
                 if !(report.refresh?.confirmed ?? false) {
-                    DesktopRestart.trigger()
-                    if !state.hasPairingFile {
-                        installResult = "安装成功：正在用网页方式重启桌面（约几秒）。桌面没动静的话，重启一次手机再看。"
+                    if state.hasPairingFile {
+                        DesktopRestart.trigger()
+                    } else {
+                        installResult = "安装成功：锁屏再解锁一次，去锁屏图库看看（PosterBoard 会自己重扫）；没出现的话重启一次手机。"
                     }
                 }
             } else if report.mode == .test {
