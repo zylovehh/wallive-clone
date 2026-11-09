@@ -503,7 +503,25 @@ enum RestoreTest {
         defer { WorseQueryEscape.release(escapeHandle) }
 
         var directResult: (db: URL, wal: URL?, container: String)? = nil
-        if isFileServiceEligible, let cached = cachedContainerPath() {
+
+        // 0a. 首装也快（Vellum 的思路）：不靠记路径，直接对“应用数据总目录”
+        //     吃沙箱扩展，然后自己翻一遍，找出藏着壁纸库的那个容器。头一回
+        //     装也走直读。翻不到或扩展不给，再试 0b 的缓存路径，都不行才走老链。
+        if isFileServiceEligible, directResult == nil {
+            onProgress?("正在直读取表…", 0.05)
+            InstallLog.shared.append("restore: 先试总目录直翻（自己找壁纸库，头一回也直读）…")
+            if let found = discoverAndReadDirect(workDir: workDir) {
+                escapeHandle = found.handle
+                directResult = (db: found.db, wal: found.wal, container: found.container)
+                report["escape"] = ["ok": true, "detail": "总目录直翻"]
+                InstallLog.shared.append("restore: 总目录直翻成了（\(elapsed())）：壁纸库在 \(found.container)。")
+            } else {
+                InstallLog.shared.append("restore: 总目录直翻没成（扩展没给或没翻到表），再试缓存路径。")
+            }
+        }
+
+        // 0b. 缓存路径直读：上次装成功记下的位置，对它吃扩展直接读表。
+        if isFileServiceEligible, directResult == nil, let cached = cachedContainerPath() {
             onProgress?("正在直读取表…", 0.05)
             InstallLog.shared.append("restore: 先试直读取表（用上次记下的壁纸位置）…")
             let esc = WorseQueryEscape.consume(target: cached, log: {
@@ -1251,6 +1269,38 @@ enum RestoreTest {
     private static func saveContainerPath(_ path: String) {
         UserDefaults(suiteName: WorseQueryEscape.appGroup)?.set(path, forKey: cachedContainerKey)
         UserDefaults.standard.set(path, forKey: cachedContainerKey)
+    }
+
+    /// 总目录直翻（Vellum 思路）：对“应用数据总目录”吃沙箱扩展（只读探
+    /// 测），然后翻一遍里面所有容器，找到藏着壁纸库的那一个，直接读表。
+    /// 头一回装也走直读，不依赖任何缓存。翻不到或扩展不给，返回 nil，
+    /// 调用方回落到缓存路径 / 老链。成了就把句柄一并交回，写文件/写回表
+    /// 复用同一个扩展。
+    private static func discoverAndReadDirect(workDir: URL)
+        -> (db: URL, wal: URL?, container: String, handle: Int64)? {
+        let fm = FileManager.default
+        // /var 和 /private/var 是同一个地方两种写法，先试规范写法。
+        for root in ["/private/var/mobile/Containers/Data/Application",
+                     "/var/mobile/Containers/Data/Application"] {
+            let esc = WorseQueryEscape.consume(target: root, requireWrite: false, log: {
+                InstallLog.shared.append("restore: \($0)")
+            })
+            guard let h = esc.handle else { continue }
+            // 翻一遍：哪个容器里躺着 61 号商店的表，哪个就是壁纸库。
+            let entries = (try? fm.contentsOfDirectory(atPath: root)) ?? []
+            for entry in entries {
+                let candidate = (root as NSString).appendingPathComponent(entry)
+                let dbPath = candidate + PosterBoard.storePath(storeVersion)
+                    + "/" + PosterBoard.databaseFileName
+                guard fm.fileExists(atPath: dbPath) else { continue }
+                if let read = readStoreDirect(container: candidate, workDir: workDir) {
+                    return (db: read.db, wal: read.wal, container: candidate, handle: h)
+                }
+            }
+            // 扩展给了但没翻到表：还回去，换个写法再试一次。
+            WorseQueryEscape.release(h)
+        }
+        return nil
     }
 
     /// 直读取表：容器路径已知、逃逸在手时，把真实表（含 -wal）直接从手机

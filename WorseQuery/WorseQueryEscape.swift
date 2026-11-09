@@ -96,10 +96,14 @@ enum WorseQueryEscape {
     /// 写进日志并放在返回值 failReason 里（27.2 砍掉老通道后，报错要带上它）。
     /// - Parameters:
     ///   - target: 目标路径（必须已存在，逃逸不建目录）。
+    ///   - requireWrite: true 时拿扩展先探测可写（写壁纸前用）；false 时只
+    ///     探测可读——对总目录这类只读路径翻找用，class 2 备用招也不参与，
+    ///     免得把熔断次数白烧掉。
     static func consume(target: String,
+                        requireWrite: Bool = true,
                         log: @escaping (String) -> Void = { _ in }) -> (handle: Int64?, failReason: String?, detail: String?) {
         let fm = FileManager.default
-        let class2Allowed = class2OptIn && !class2AutoDisabled
+        let class2Allowed = requireWrite && class2OptIn && !class2AutoDisabled
         if class2OptIn && class2AutoDisabled {
             log("class 2 备用招之前连败 \(class2FuseLimit) 次已自动停用；到状态页重新开关一次可重置。")
         }
@@ -117,10 +121,16 @@ enum WorseQueryEscape {
             let flagDesc = lastClass > 0 ? "\(lastClass == 7 ? "class 7" : "class 2 备用招") 第 \(lastIndex + 1) 组 flags" : ""
             log("逃逸成功：沙箱扩展句柄 \(handle)" + (flagDesc.isEmpty ? "" : "（\(flagDesc)）") + "。")
 
-            // 写前探测：拿到扩展不等于真能写，先试一下，不行就把扩展还回去
-            guard Self.probeWrite(target: target, fm: fm) else {
+            // 写前探测：拿到扩展不等于真能写，先试一下，不行就把扩展还回去。
+            // 只读模式（requireWrite=false）探可读就行——扩展是为了翻找，不是为了写。
+            let probeOK = requireWrite
+                ? Self.probeWrite(target: target, fm: fm)
+                : fm.isReadableFile(atPath: target)
+            guard probeOK else {
                 wq_release(handle)
-                log("扩展拿到了，但目标还是写不进，探测失败，扩展已还回去。本次安装终止。")
+                log(requireWrite
+                    ? "扩展拿到了，但目标还是写不进，探测失败，扩展已还回去。本次安装终止。"
+                    : "扩展拿到了，但目标读不了，探测失败，扩展已还回去。")
                 return (nil, "沙箱扩展已获取，但目标仍不可写（probe 失败）", flagDesc.isEmpty ? nil : flagDesc)
             }
             log("探测通过：目标现在真的可写。")
