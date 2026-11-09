@@ -504,10 +504,17 @@ enum RestoreTest {
 
         var directResult: (db: URL, wal: URL?, container: String)? = nil
 
+        // 开工先报本机版本和快路开关：手机上报的版本跟预期对不上时，
+        // 日志里一眼能查（V20 曾因此整段直读被跳过，直接走了老备份路）。
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        InstallLog.shared.append("restore: 本机系统版本 \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)，直读先试、不卡版本。")
+
         // 0a. 首装也快（Vellum 的思路）：不靠记路径，直接对“应用数据总目录”
         //     吃沙箱扩展，然后自己翻一遍，找出藏着壁纸库的那个容器。头一回
         //     装也走直读。翻不到或扩展不给，再试 0b 的缓存路径，都不行才走老链。
-        if isFileServiceEligible, directResult == nil {
+        //     不卡版本（27.0/27.1 也先试）：只读文件、验库过才用，试不成
+        //     自动回老路，不会弄坏东西。
+        if directResult == nil {
             onProgress?("正在直读取表…", 0.05)
             InstallLog.shared.append("restore: 先试总目录直翻（自己找壁纸库，头一回也直读）…")
             if let found = discoverAndReadDirect(workDir: workDir) {
@@ -521,7 +528,7 @@ enum RestoreTest {
         }
 
         // 0b. 缓存路径直读：上次装成功记下的位置，对它吃扩展直接读表。
-        if isFileServiceEligible, directResult == nil, let cached = cachedContainerPath() {
+        if directResult == nil, let cached = cachedContainerPath() {
             onProgress?("正在直读取表…", 0.05)
             InstallLog.shared.append("restore: 先试直读取表（用上次记下的壁纸位置）…")
             let esc = WorseQueryEscape.consume(target: cached, log: {
