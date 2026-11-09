@@ -1935,9 +1935,13 @@ enum RestoreTest {
             rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
         }
         let storeBase = container + PosterBoard.storePath(storeVersion)
-        let targets = AirliftInstaller.dualExtensions(for: config.extensionID).map {
+        let allTargets = AirliftInstaller.dualExtensions(for: config.extensionID).map {
             "\(storeBase)/Extensions/\($0)/descriptors"
         }
+        // 没配对：学 Vellum 只写主扩展一个描述符目录（真机对比 Vellum 不卡、
+        // 我们卡，两处结构差异之一就是多写了 CollectionsPosterApp 那份）。
+        // 配对路保持双扩展不变（配对装没出过卡死）。
+        let targets = pairingPath.isEmpty ? [allTargets[0]] : allTargets
         var results: [[String: Any]] = []
         for (index, targetParent) in targets.enumerated() {
             do {
@@ -2070,17 +2074,11 @@ enum RestoreTest {
             fromPropertyList: prefDict, format: .binary, options: 0)
         try plistData.write(to: prefURL)
         if pairingPath.isEmpty {
-            // 没配对：偏好走逃逸直写（目标在容器内，同一个扩展句柄盖得住）。
-            // 全局那份在容器外，直写够不着，没写——重启手机后会自己补齐。
-            guard let escapeHandle else {
-                throw StepError(step: "写偏好",
-                                detail: "没有配对记录，偏好只能走逃逸直写，但沙箱逃逸没成。重试一次；还不行就先恢复配对记录再装。")
-            }
-            try directWriteDir(sourceDir: stageDir.path,
-                               targetDir: container + "/Library/Preferences",
-                               log: { InstallLog.shared.append("restore: \($0)") })
+            // 没配对：学 Vellum 一个字偏好都不写（Vellum 日志里没有写偏好的动作，
+            // 真机对比它不卡、我们卡，这是第二处结构差异）。系统自己会重扫，
+            // 不需要这颗重载开关。
             InstallLog.shared.append(
-                "restore: 没配对：容器内偏好已直写；全局那份在容器外，直写够不着，没写（重启手机后系统会自己补）。")
+                "restore: 没配对：照 Vellum 不写偏好，等系统自己重扫。")
             return
         }
         do {
