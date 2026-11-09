@@ -37,9 +37,21 @@ private func wq_release(_ handle: Int64)
 
 enum WorseQueryEscape {
 
-    /// 逃逸用的 App Group：用户已证实全能签会保留这个组
-    /// （2026-11-09 提交 001696d 的 zsign 实测结论，按用户最新确认为准）。
-    static let appGroup = "group.com.usc.1787713824"
+    /// 逃逸用的 App Group：改成 Vellum 在同一台手机上实测可用的组
+    /// （2026-11-10 用户贴出的 Vellum 日志：group.com.tgqq.1767742703，
+    /// 容器 /private/var/mobile/Containers/Shared/AppGroup/35E720DF-…/ 真实存在）。
+    /// 旧的 group.com.usc.1787713824 在这台 27.2 手机上 containerURL 拿不到。
+    static let appGroup = "group.com.tgqq.1767742703"
+
+    /// 共享抽屉体检：27.2 逃逸的先决条件是 App Group 容器真实存在。
+    /// 返回容器路径（nil = 签名没把它配好）和一句给人看的结论。
+    static func groupHealth() -> (containerPath: String?, note: String) {
+        let fm = FileManager.default
+        if let root = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup) {
+            return (root.path, "共享抽屉正常，逃逸有门可走。路径：\(root.path)")
+        }
+        return (nil, "共享抽屉没开：签名时没把这个组配好。去全能签核对 App Group 设置（应为 \(appGroup)，可对照 Vellum 签名时用的组名）。")
+    }
 
     // ---- class 2 备用招的开关与熔断（存 UserDefaults）----
     private static let class2OptInKey = "wq.class2.optIn"
@@ -126,7 +138,12 @@ enum WorseQueryEscape {
                 log("class 2 备用招连败 \(failures) 次，已自动停用，防止反复折腾系统。")
             }
         }
-        let tried = lastClass == 2 ? "class 7 三组 + class 2 备用招都" : "class 7 三组 flags 都"
+        let tried: String
+        switch lastClass {
+        case 2: tried = "class 7 三组 + class 2 备用招都"
+        case 13: tried = "class 7 三组 + class 13 免组兜底路都"
+        default: tried = "class 7 三组 flags 都"
+        }
         log("逃逸没成（\(reason)，\(tried)试过，最后一组：class \(lastClass) 第 \(lastIndex + 1) 组）。27.2 不再回落老通道，本次安装终止。")
         return (nil, reason, "最后失败：class \(lastClass) 第 \(lastIndex + 1) 组 flags，\(tried)均试过")
     }

