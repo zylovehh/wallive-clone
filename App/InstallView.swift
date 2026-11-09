@@ -37,7 +37,9 @@ struct InstallView: View {
                     Task { await runInstall() }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(state.packageData == nil || !state.pairingLoaded || installing)
+                // 不配对也能装：按钮只看包和安装状态（没配对时走备份还原路，
+                // 直读取表 + 逃逸直写，不碰配对）。
+                .disabled(state.packageData == nil || installing)
                 Divider()
                 Text("清除已安装").font(.headline)
                 Text("两步走：先在锁屏长按进图库、上滑删掉那张锁屏，再点下面这个按钮重索引，图库才会刷新掉。")
@@ -91,7 +93,7 @@ struct InstallView: View {
             result = "安装完成，描述符 UUID：\(uuid)。正在只重启桌面（不重启手机），稍后去锁屏查看。"
             DesktopRestart.trigger()
         } else if state.statusMessage.isEmpty {
-            result = "安装未完成：请确认已选包、已生成配对记录、回环 VPN 已连接。"
+            result = "安装未完成：先去“导入”选包；失败原因看提示或安装日志。"
         }
         installLog = InstallLog.shared.tail(60)
     }

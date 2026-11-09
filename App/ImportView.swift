@@ -336,7 +336,8 @@ private struct ImportDetailView: View {
                             .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .frame(width: buttonWidth).padding(.vertical, 12).glassCapsule()
                             .buttonStyle(PressBounceButtonStyle())
-                            .disabled(state.packageData == nil || !state.pairingLoaded || installing)
+                            // 不配对也能装：按钮只看包和安装状态（没配对时走备份还原路）。
+                            .disabled(state.packageData == nil || installing)
                         Spacer()
                     }
                     if !installResult.isEmpty {
@@ -616,7 +617,7 @@ private struct ImportDetailView: View {
             installFailedReason = installFailureReason(from: state.statusMessage)
             installLogText = InstallLog.shared.tail(60)
         } else if state.statusMessage.isEmpty {
-            installResult = "安装未完成：请确认已导入配对记录、回环 VPN 已连接，再试一次。"
+            installResult = "安装未完成：再试一次；还不行就看提示和下面日志框里的原因。"
         }
     }
 

@@ -126,8 +126,22 @@ final class AppState: ObservableObject {
     }
 
     /// 安装当前包：本地暂存 → 经配对隧道写盘。返回实际装上的描述符 UUID。
+    /// 没配对也能装：没有配对记录时改走备份还原那条路（直读取表 + 逃逸
+    /// 直写，全程不碰配对隧道）；直写这条路没有配对走不了，不在这硬试。
     func install(host: String, forceRefresh: Bool = true) async -> String? {
-        guard let data = packageData, hasPairingFile else { return nil }
+        guard let data = packageData else { return nil }
+        if !hasPairingFile {
+            do {
+                InstallLog.shared.append("install: 没配对记录，改走备份还原路（不用配对）。")
+                let outcome = try await BackupInstallFlow.install(
+                    packageData: data, pairingPath: "",
+                    log: { InstallLog.shared.append($0) })
+                return outcome.descriptorUUID
+            } catch {
+                statusMessage = "安装失败：\(error.localizedDescription)"
+                return nil
+            }
+        }
         do {
             let uuid = try await InstallFlow.install(
                 packageData: data, zip: zip,
@@ -150,7 +164,7 @@ final class AppState: ObservableObject {
     /// 测试版走 `BackupInstallFlow.installTest`（只写描述符、不写表），
     /// 装完要重启手机（报告里 `mode` 是 `.test`）。
     func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
-        guard let data = packageData, hasPairingFile else { return nil }
+        guard let data = packageData else { return nil }
         // 安装开始先读一次设备身份（只读不写）。读不到就用缓存的，
         // 连缓存都没有就按空版本算——`resolved()` 会 fail closed 走备份路，
         // 不猜版本走直写。测试版不看设备版本，点了就是测试版。
@@ -159,6 +173,12 @@ final class AppState: ObservableObject {
         let version = deviceInfo?.productVersion ?? ""
         let build = deviceInfo?.buildVersion ?? ""
         let mode = applyChoice.resolvedMode(deviceVersion: version, buildVersion: build)
+        // 没配对也能装：直写和测试版两条路都要配对隧道，只有备份还原
+        //（直读取表 + 逃逸直写）不碰配对。没配对时固定走备份还原。
+        if !hasPairingFile && mode != .backup {
+            InstallLog.shared.append("install: 没配对记录，这次固定走备份还原路（不用配对）。")
+            return try await installWithReportBackup(data: data, onProgress: onProgress)
+        }
         if mode == .test {
             return try await installWithReportTest(data: data, onProgress: onProgress)
         }

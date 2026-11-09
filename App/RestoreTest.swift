@@ -476,6 +476,9 @@ enum RestoreTest {
         try checkCancelled(isCancelled)
         let fm = FileManager.default
         let stamp = timeStamp()
+        // 有没有配对记录：pairingPath 为空 = 没配对。没配对时只走不碰
+        // 配对隧道的路（直读、逃逸直写、本地已存表），FFI 那些路跳过。
+        let hasPairing = !pairingPath.isEmpty
         let workDir = fm.temporaryDirectory.appendingPathComponent("wallive-clone-restore-\(stamp)")
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
@@ -549,7 +552,7 @@ enum RestoreTest {
             }
         }
         var fileServiceResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
-        if directResult == nil, isFileServiceEligible {
+        if directResult == nil, hasPairing, isFileServiceEligible {
             do {
                 fileServiceResult = try exportViaFileServiceTimed(
                     pairingPath: pairingPath, stamp: stamp, report: &report)
@@ -562,7 +565,7 @@ enum RestoreTest {
             }
         }
         var backupResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
-        if fileServiceResult == nil && directResult == nil {
+        if hasPairing, fileServiceResult == nil && directResult == nil {
             do {
                 backupResult = try fetchTableViaBackup(
                     pairingPath: pairingPath, workDir: workDir, report: &report,
@@ -592,6 +595,35 @@ enum RestoreTest {
             container = backup.container
             report["table_source"] = "backup"
             InstallLog.shared.append("restore: 拿表走备份这条路成了（表已从备份里抽出来）。")
+        } else if !hasPairing {
+            // 没配对：备份、拷回、造空名单这些路都要配对隧道，一个都不试。
+            // 直读没成时只看本地有没有存过的表（Documents 被重装清空过就
+            // 没有），有就接着做，没有就给句明白话。
+            InstallLog.shared.append(
+                "restore: 直读取表没成，又没有配对记录（备份取表那些路都要配对，跳过），先看本地存没存过表。")
+            do {
+                let fallback = try storedTableFallback(
+                    report: &report,
+                    exportError: StepError(step: "拿表",
+                                           detail: "直读取表没成，又没有配对记录，备份取表走不了。"))
+                savedDB = fallback.db
+                savedWAL = fallback.wal
+                container = fallback.container
+                report["table_source"] = "stored"
+                report["stored_db_path"] = fallback.db.path
+                report["stored_db_kind"] = fallback.kind
+                if let d = fallback.savedDate {
+                    report["stored_db_saved"] = isoDate(d)
+                }
+                InstallLog.shared.append(
+                    "restore: 没配对，用本地存过的表接着做：\(fallback.kind)"
+                    + (fallback.savedDate.map { "，存于 \(isoDate($0))" } ?? "") + "。")
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw StepError(step: "拿表",
+                                detail: "直读取表没成，本地也没有存过的表。没配对时只能走直读：确认回环 VPN 连着、App 的 App Group 签名没被改掉，再试一次；还不行就先恢复配对记录再装。")
+            }
         } else {
             // 拷回：先试探针 3 同一条通道拷回 v61 的表 + -wal、存盘。
             //    拷不回来就改用手机里已存的那张表接着做，不死等重拷——
@@ -690,6 +722,10 @@ enum RestoreTest {
             : ["ok": false, "reason": escapeFailReason ?? "?", "detail": escapeDetail]
 
         // 原表备份：写回之前先把这次用的原表（刚拷回来的、备份抽出来的，或已存的那份）再存一份，坏了能回来。
+        // 备份前先建目录：重装 App 会清掉 Documents，tableDir 跟着没了——
+        // 上次那个“文件不存在”报错就是摔在这（目标目录不在时，报错跟源文件
+        // 不在一个文案里，其实建好目录就好）。
+        try fm.createDirectory(at: tableDir, withIntermediateDirectories: true)
         let backupDB = tableDir.appendingPathComponent("backup-原表-\(stamp).sqlite3")
         try? fm.removeItem(at: backupDB)
         try fm.copyItem(at: savedDB, to: backupDB)
@@ -762,7 +798,8 @@ enum RestoreTest {
         //     descriptors/<新UUID>。主目标失败就停，别的目标只记进报告。
         let descriptorResults = try injectDescriptors(
             stage: stage, descriptorUUID: descriptorUUID, config: firstConfig,
-            container: container, pairingPath: pairingPath)
+            container: container, pairingPath: pairingPath,
+            escapeHandle: escapeHandle)
         report["descriptors"] = descriptorResults
         try checkCancelled(isCancelled)
         onProgress?("正在插行…", 0.50)
@@ -815,7 +852,7 @@ enum RestoreTest {
                                       firstConfig: firstConfig, filesWritten: filesWritten,
                                       descriptorResults: descriptorResults,
                                       restoreStart: restoreStart, onProgress: onProgress,
-                                      isCancelled: isCancelled)
+                                      isCancelled: isCancelled, escapeHandle: escapeHandle)
         }
         // 验一下新行真的在：按 UUID 查 posterId。
         let newPosterId = try posterIdOfStitched(staged: staged, uuid: firstConfig.uuid)
@@ -862,7 +899,8 @@ enum RestoreTest {
 
         // 7. 写偏好：照直装同一份 PosterBoard 偏好写一次（重载开关），
         //    让系统重载描述符、重新索引。容器内那份失败就停，全局那份尽力写。
-        try writePosterBoardPreferences(container: container, pairingPath: pairingPath)
+        try writePosterBoardPreferences(container: container, pairingPath: pairingPath,
+                                        escapeHandle: escapeHandle)
         report["preferences_written"] = true
         InstallLog.shared.append("restore: 偏好已写（\(elapsed())）。")
         try checkCancelled(isCancelled)
@@ -1032,11 +1070,13 @@ enum RestoreTest {
                                        descriptorResults: [[String: Any]],
                                        restoreStart: Date,
                                        onProgress: ((String, Double) -> Void)?,
-                                       isCancelled: @escaping () -> Bool) throws -> RestoreOutcome {
+                                       isCancelled: @escaping () -> Bool,
+                                       escapeHandle: Int64? = nil) throws -> RestoreOutcome {
         let elapsed: () -> String = { String(format: "%.1fs", Date().timeIntervalSince(restoreStart)) }
         try checkCancelled(isCancelled)
         onProgress?("正在写偏好…", 0.85)
-        try writePosterBoardPreferences(container: container, pairingPath: pairingPath)
+        try writePosterBoardPreferences(container: container, pairingPath: pairingPath,
+                                        escapeHandle: escapeHandle)
         report["preferences_written"] = true
         InstallLog.shared.append("restore: 测试版：已写偏好（PBF 轻量刷新），等 PosterBoard 重扫（\(elapsed())）。")
         try checkCancelled(isCancelled)
@@ -1872,7 +1912,8 @@ enum RestoreTest {
     /// 主目标失败就停（和直装一样）；别的目标只记进报告、继续。
     private static func injectDescriptors(stage: URL, descriptorUUID: String,
                                           config: PosterBoardConfigItem,
-                                          container: String, pairingPath: String) throws -> [[String: Any]] {
+                                          container: String, pairingPath: String,
+                                          escapeHandle: Int64? = nil) throws -> [[String: Any]] {
         let fm = FileManager.default
         let source = stage.appendingPathComponent("descriptors").appendingPathComponent(descriptorUUID)
         var isDir: ObjCBool = false
@@ -1900,8 +1941,21 @@ enum RestoreTest {
         var results: [[String: Any]] = []
         for (index, targetParent) in targets.enumerated() {
             do {
-                try injectFolderFFI(folderURL: copyDir, targetParentDir: targetParent,
-                                    destName: config.uuid, pairingPath: pairingPath)
+                if pairingPath.isEmpty {
+                    // 没配对：描述符照写文件同一条路逃逸直写（目标在容器内，
+                    // 同一个扩展句柄盖得住）。句柄不在手就直接报，不硬试。
+                    guard let escapeHandle else {
+                        throw StepError(step: "写描述符",
+                                        detail: "没有配对记录，描述符只能走逃逸直写，但沙箱逃逸没成。重试一次；还不行就先恢复配对记录再装。")
+                    }
+                    try directWriteDir(sourceDir: copyDir.path,
+                                       targetDir: targetParent + "/" + config.uuid,
+                                       log: { InstallLog.shared.append("restore: \($0)") })
+                    InstallLog.shared.append("restore: 没配对：描述符改走逃逸直写 \(targetParent)/\(config.uuid)")
+                } else {
+                    try injectFolderFFI(folderURL: copyDir, targetParentDir: targetParent,
+                                        destName: config.uuid, pairingPath: pairingPath)
+                }
                 results.append(["target": targetParent, "ok": true])
                 InstallLog.shared.append("restore: 描述符已注入 \(targetParent)/\(config.uuid)")
             } catch let e as StepError {
@@ -1985,7 +2039,8 @@ enum RestoreTest {
     /// 失败不算错（和直装一样）。
     /// 同步版：直装那个是 async（跑在 runBlocking 里），这里调用方已在后台线程，
     /// 直接调 writeDirFFI。
-    private static func writePosterBoardPreferences(container: String, pairingPath: String) throws {
+    private static func writePosterBoardPreferences(container: String, pairingPath: String,
+                                                    escapeHandle: Int64? = nil) throws {
         let fm = FileManager.default
         let stageDir = fm.temporaryDirectory
             .appendingPathComponent("wallive-clone-restore-prefs-\(UUID().uuidString)")
@@ -2014,6 +2069,20 @@ enum RestoreTest {
         let plistData = try PropertyListSerialization.data(
             fromPropertyList: prefDict, format: .binary, options: 0)
         try plistData.write(to: prefURL)
+        if pairingPath.isEmpty {
+            // 没配对：偏好走逃逸直写（目标在容器内，同一个扩展句柄盖得住）。
+            // 全局那份在容器外，直写够不着，没写——重启手机后会自己补齐。
+            guard let escapeHandle else {
+                throw StepError(step: "写偏好",
+                                detail: "没有配对记录，偏好只能走逃逸直写，但沙箱逃逸没成。重试一次；还不行就先恢复配对记录再装。")
+            }
+            try directWriteDir(sourceDir: stageDir.path,
+                               targetDir: container + "/Library/Preferences",
+                               log: { InstallLog.shared.append("restore: \($0)") })
+            InstallLog.shared.append(
+                "restore: 没配对：容器内偏好已直写；全局那份在容器外，直写够不着，没写（重启手机后系统会自己补）。")
+            return
+        }
         do {
             try writeDirFFI(pairingPath: pairingPath, sourceDir: stageDir.path,
                             targetDir: container + "/Library/Preferences")
@@ -2069,6 +2138,14 @@ enum RestoreTest {
     /// 去图库看；文件、表、偏好在第 8 步之前已经全写好了，日志也已落盘，
     /// 重开 App 能看到装完了。
     private static func refreshAfterInstall(pairingPath: String) -> [String: Any] {
+        if pairingPath.isEmpty {
+            // 没配对：重启桌面那两条 FFI 都碰不了。文件、表、偏好在前面
+            // 已经全写好了，直接报重启手机兜底，绝不在没配对时碰 FFI。
+            InstallLog.shared.append(
+                "restore: 没配对记录，装完的自动刷新（重启桌面）做不了；文件、表、偏好都已写好，重启手机后去图库看。")
+            return ["attempted": false, "confirmed": false, "rebootNeeded": true, "method": "none",
+                    "error": "没有配对记录，没做自动刷新"]
+        }
         InstallLog.shared.append("restore: 刷新：先试 SpringBoard 重启…")
         var sb = springboardRespringSync(pairingPath: pairingPath)
         sb["method"] = "springboard"
