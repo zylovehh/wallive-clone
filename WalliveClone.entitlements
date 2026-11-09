@@ -9,6 +9,7 @@
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.usc.1787713824</string>
+		<string>group.wb.uniusc8301.tool7.wallive</string>
 	</array>
 </dict>
 </plist>

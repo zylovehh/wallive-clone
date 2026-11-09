@@ -607,6 +607,16 @@ enum RestoreTest {
         // V8：拿表完成，记来源和容器——出问题先看这行是哪条路拿的表。
         InstallLog.shared.append("restore: 拿表完成（\(elapsed())）：来源 \(report["table_source"] as? String ?? "?")，容器 \(container)。")
 
+        // 1b. 沙箱逃逸（27.2 新路子，worse_query）：对 PosterBoard 容器吃一个
+        //     沙箱扩展。成了，后面的写文件/写回表就直接本地写容器，不走
+        //     AirTraffic；没成，后面照走原通道，一行不动。扩展在流程结束
+        //     （含中途抛错）统一释放。
+        InstallLog.shared.append("restore: 试沙箱逃逸直写（worse_query，App Group \(WorseQueryEscape.appGroup)）…")
+        let escapeHandle = WorseQueryEscape.consume(target: container, log: {
+            InstallLog.shared.append("restore: \($0)")
+        })
+        defer { WorseQueryEscape.release(escapeHandle) }
+
         // 原表备份：写回之前先把这次用的原表（刚拷回来的、备份抽出来的，或已存的那份）再存一份，坏了能回来。
         let backupDB = tableDir.appendingPathComponent("backup-原表-\(stamp).sqlite3")
         try? fm.removeItem(at: backupDB)
@@ -664,9 +674,11 @@ enum RestoreTest {
         report["extension_id"] = firstConfig.extensionID
         report["payload_count"] = compiled.payloads.count
 
-        // 4. 写文件：载荷按父目录分组，走直写那条 AirTraffic 写通道。
+        // 4. 写文件：载荷按父目录分组。逃逸成了走本地直写容器（每步失败
+        //    自动回落 AirTraffic），没成照走直写那条 AirTraffic 写通道。
         let filesWritten = try writePayloadFiles(
-            payloads: compiled.payloads, container: container, pairingPath: pairingPath)
+            payloads: compiled.payloads, container: container, pairingPath: pairingPath,
+            escapeHandle: escapeHandle)
         report["files_written"] = filesWritten
         InstallLog.shared.append("restore: 文件写完（\(elapsed())）：写了 \(filesWritten) 个。")
 
@@ -751,8 +763,17 @@ enum RestoreTest {
         fm.createFile(atPath: writebackDir.appendingPathComponent(stagedName + "-shm").path,
                       contents: Data())
         let targetStoreDir = container + PosterBoard.storePath(storeVersion)
-        let writebackJSON = try callWritebackFFI(
-            pairingPath: pairingPath, stagedDir: writebackDir.path, targetDir: targetStoreDir)
+        // 写回表：逃逸成了先试本地直写（把改好的表 + 0 字节 -wal/-shm 直接
+        // 拷进商店目录），失败或没逃逸就走原 FFI 通道，链路不变。
+        let writebackJSON: [String: Any]
+        if let escapeHandle, directWriteback(stagedDir: writebackDir.path,
+                                             targetDir: targetStoreDir,
+                                             log: { InstallLog.shared.append("restore: \($0)") }) {
+            writebackJSON = ["success": true, "channel": "worse_query_direct"]
+        } else {
+            writebackJSON = try callWritebackFFI(
+                pairingPath: pairingPath, stagedDir: writebackDir.path, targetDir: targetStoreDir)
+        }
         report["writeback"] = writebackJSON
         guard writebackJSON["success"] as? Bool == true else {
             throw StepError(step: "写回表",
@@ -1539,7 +1560,8 @@ enum RestoreTest {
     /// 载荷按父目录分组，每组平铺进一个临时目录，调一次
     /// al_exploit_write_dir 写进容器里对应的目录。返回写了几个文件。
     private static func writePayloadFiles(payloads: [BackupPayload], container: String,
-                                          pairingPath: String) throws -> Int {
+                                          pairingPath: String,
+                                          escapeHandle: Int64?) throws -> Int {
         let fm = FileManager.default
         var groups: [String: [(leaf: String, data: Data)]] = [:]
         for payload in payloads {
@@ -1562,9 +1584,25 @@ enum RestoreTest {
                 for file in files {
                     try file.data.write(to: groupDir.appendingPathComponent(file.leaf))
                 }
-                try writeDirFFI(pairingPath: pairingPath, sourceDir: groupDir.path,
-                                targetDir: container + "/" + parent)
-                written += files.count
+                // 逃逸成了先试本地直写：把暂存组目录直接拷进容器对应目录。
+                // 任一失败记日志、回落 AirTraffic，不让一次直写失败断流程。
+                var directOK = false
+                if escapeHandle != nil {
+                    do {
+                        try directWriteDir(sourceDir: groupDir.path,
+                                           targetDir: container + "/" + parent,
+                                           log: { InstallLog.shared.append("restore: \($0)") })
+                        directOK = true
+                        written += files.count
+                    } catch {
+                        InstallLog.shared.append("restore: 直写 \(parent) 没成（\(error.localizedDescription)），回落 AirTraffic。")
+                    }
+                }
+                if !directOK {
+                    try writeDirFFI(pairingPath: pairingPath, sourceDir: groupDir.path,
+                                    targetDir: container + "/" + parent)
+                    written += files.count
+                }
             } catch let e as StepError {
                 try? fm.removeItem(at: groupDir)
                 throw e
@@ -1575,6 +1613,46 @@ enum RestoreTest {
             try? fm.removeItem(at: groupDir)
         }
         return written
+    }
+
+    /// 逃逸直写：把暂存目录整个拷到容器内目标目录（目录已存在则逐文件覆盖）。
+    /// 只在拿着沙箱扩展句柄时用，普通 FileManager 就够了。
+    private static func directWriteDir(sourceDir: String, targetDir: String,
+                                       log: @escaping (String) -> Void) throws {
+        let fm = FileManager.default
+        let src = URL(fileURLWithPath: sourceDir)
+        let dst = URL(fileURLWithPath: targetDir)
+        try fm.createDirectory(at: dst, withIntermediateDirectories: true)
+        let items = try fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil)
+        for item in items {
+            let dest = dst.appendingPathComponent(item.lastPathComponent)
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.copyItem(at: item, to: dest)
+        }
+        log("直写 \(dst.path)（\(items.count) 个文件）。")
+    }
+
+    /// 逃逸直写写回表：stagedDir 里的表（+ 0 字节 -wal/-shm）直接拷进
+    /// 商店目录。成功返回 true；任何失败记日志、返回 false（调用方回落 FFI）。
+    private static func directWriteback(stagedDir: String, targetDir: String,
+                                        log: @escaping (String) -> Void) -> Bool {
+        let fm = FileManager.default
+        do {
+            let staged = URL(fileURLWithPath: stagedDir)
+            let dst = URL(fileURLWithPath: targetDir)
+            try fm.createDirectory(at: dst, withIntermediateDirectories: true)
+            let items = try fm.contentsOfDirectory(at: staged, includingPropertiesForKeys: nil)
+            for item in items {
+                let dest = dst.appendingPathComponent(item.lastPathComponent)
+                if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                try fm.copyItem(at: item, to: dest)
+            }
+            log("写回表走 worse_query 直写（\(items.count) 个文件进 \(dst.path)）。")
+            return true
+        } catch {
+            log("写回表直写没成（\(error.localizedDescription)），回落原 FFI 通道。")
+            return false
+        }
     }
 
     /// al_exploit_write_dir 的同步小包装（调用方已在后台线程）。
