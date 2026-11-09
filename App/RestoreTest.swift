@@ -492,8 +492,44 @@ enum RestoreTest {
         let savedDB: URL
         let savedWAL: URL?
         let container: String
+
+        // 0. 直读取表（27.2 快路）：上次装成功时把 PosterBoard 容器路径记在
+        //    共享抽屉里（重装 App 也不丢）。这次先对它吃沙箱扩展，成了就把表
+        //    直接从手机文件里读出来——备份、拷回、隧道全不碰，几秒完事。
+        //    路径过期或逃逸没成，才落回下面的老链。逃逸句柄从这步起全程
+        //    持有，后面的写文件/写回表复用同一个，不再重复吃扩展。
+        var escapeHandle: Int64? = nil
+        var escapeFailReason: String? = nil
+        defer { WorseQueryEscape.release(escapeHandle) }
+
+        var directResult: (db: URL, wal: URL?, container: String)? = nil
+        if isFileServiceEligible, let cached = cachedContainerPath() {
+            onProgress?("正在直读取表…", 0.05)
+            InstallLog.shared.append("restore: 先试直读取表（用上次记下的壁纸位置）…")
+            let esc = WorseQueryEscape.consume(target: cached, log: {
+                InstallLog.shared.append("restore: \($0)")
+            })
+            if let h = esc.handle {
+                if let read = readStoreDirect(container: cached, workDir: workDir) {
+                    escapeHandle = h
+                    directResult = (db: read.db, wal: read.wal, container: cached)
+                    report["escape"] = ["ok": true, "detail": esc.detail ?? ""]
+                    InstallLog.shared.append("restore: 直读取表成了（\(elapsed())）：没走备份、没走拷回、没走隧道。")
+                } else {
+                    WorseQueryEscape.release(h)
+                    InstallLog.shared.append("restore: 沙箱逃过来了，但那个位置没读到表（可能路径变了），改走原来的链。")
+                }
+            } else {
+                InstallLog.shared.append("restore: 直读取表没成（\(esc.failReason ?? "?")），改走原来的链。")
+            }
+        }
         var fileServiceResult: (savedDB: URL, savedWAL: URL?, container: String)? = nil
-        if isFileServiceEligible {
+        if let direct = directResult {
+            savedDB = direct.db
+            savedWAL = direct.wal
+            container = direct.container
+            report["table_source"] = "direct-read"
+        } else if isFileServiceEligible {
             do {
                 fileServiceResult = try exportViaFileServiceTimed(
                     pairingPath: pairingPath, stamp: stamp, report: &report)
@@ -606,21 +642,27 @@ enum RestoreTest {
         onProgress?("正在写文件…", 0.30)
         // V8：拿表完成，记来源和容器——出问题先看这行是哪条路拿的表。
         InstallLog.shared.append("restore: 拿表完成（\(elapsed())）：来源 \(report["table_source"] as? String ?? "?")，容器 \(container)。")
+        // 把这次用的容器路径记下来（共享抽屉存一份，重装 App 也不丢）：
+        // 下次拿表先走直读，不再碰备份和隧道。
+        saveContainerPath(container)
 
-        // 1b. 沙箱逃逸（27.2 新路子，worse_query）：对 PosterBoard 容器吃一个
-        //     沙箱扩展。成了，后面的写文件/写回表直接本地写容器；没成，
-        //     27.2 不再回落 AirTraffic/FFI 老通道（2026-11-09 用户拍板），
-        //     直接终止并报出逃逸失败原因。扩展在流程结束（含中途抛错）统一释放。
-        InstallLog.shared.append("restore: 试沙箱逃逸直写（worse_query，App Group \(WorseQueryEscape.appGroup)）…")
-        let escape = WorseQueryEscape.consume(target: container, log: {
-            InstallLog.shared.append("restore: \($0)")
-        })
-        let escapeHandle = escape.handle
-        let escapeFailReason = escape.failReason
+        // 1b. 沙箱逃逸：直读取表没成时才走到这（直读成了句柄已经在手，
+        //     目标是同一个容器，不重复吃扩展）。没成的，27.2 不再回落
+        //     AirTraffic/FFI 老通道（2026-11-09 用户拍板），直接终止并报
+        //     出逃逸失败原因。扩展在流程结束（含中途抛错）统一释放。
+        var escapeDetail = ""
+        if escapeHandle == nil {
+            InstallLog.shared.append("restore: 试沙箱逃逸直写（worse_query，App Group \(WorseQueryEscape.appGroup)）…")
+            let escape = WorseQueryEscape.consume(target: container, log: {
+                InstallLog.shared.append("restore: \($0)")
+            })
+            escapeHandle = escape.handle
+            escapeFailReason = escape.failReason
+            escapeDetail = escape.detail ?? ""
+        }
         report["escape"] = escapeHandle != nil
-            ? ["ok": true, "detail": escape.detail ?? ""]
-            : ["ok": false, "reason": escapeFailReason ?? "?", "detail": escape.detail ?? ""]
-        defer { WorseQueryEscape.release(escapeHandle) }
+            ? ["ok": true, "detail": escapeDetail]
+            : ["ok": false, "reason": escapeFailReason ?? "?", "detail": escapeDetail]
 
         // 原表备份：写回之前先把这次用的原表（刚拷回来的、备份抽出来的，或已存的那份）再存一份，坏了能回来。
         let backupDB = tableDir.appendingPathComponent("backup-原表-\(stamp).sqlite3")
@@ -1183,6 +1225,72 @@ enum RestoreTest {
     private static var isFileServiceEligible: Bool {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return v.majorVersion == 27 && v.minorVersion >= 2
+    }
+
+    // MARK: - 直读取表（27.2 快路：容器路径缓存 + 逃逸直读）
+
+    /// 容器路径缓存键。
+    private static let cachedContainerKey = "restore.posterboard.containerPath"
+
+    /// 上次成功安装记下的 PosterBoard 容器路径。共享抽屉里存一份、
+    /// 本机也存一份，读的时候共享抽屉优先（重装 App 后本机的就没了，
+    /// 共享抽屉还在）。路径形状不对就当没有。
+    private static func cachedContainerPath() -> String? {
+        let group = UserDefaults(suiteName: WorseQueryEscape.appGroup)
+        let candidates = [
+            group?.string(forKey: cachedContainerKey),
+            UserDefaults.standard.string(forKey: cachedContainerKey),
+        ]
+        for p in candidates.compactMap({ $0 }) {
+            if p.contains("Containers/Data/Application/") { return p }
+        }
+        return nil
+    }
+
+    /// 记下这次用的容器路径，下次拿表走直读。
+    private static func saveContainerPath(_ path: String) {
+        UserDefaults(suiteName: WorseQueryEscape.appGroup)?.set(path, forKey: cachedContainerKey)
+        UserDefaults.standard.set(path, forKey: cachedContainerKey)
+    }
+
+    /// 直读取表：容器路径已知、逃逸在手时，把真实表（含 -wal）直接从手机
+    /// 文件里拷出来，不走备份、不走隧道。拷完先验（integrity_check 过了
+    /// 才算），验不过当没读到，调用方自动回落老链，绝不拿坏表往下装。
+    private static func readStoreDirect(container: String, workDir: URL) -> (db: URL, wal: URL?)? {
+        let fm = FileManager.default
+        let storeDir = container + PosterBoard.storePath(storeVersion)
+        let dbPath = storeDir + "/" + PosterBoard.databaseFileName
+        guard fm.fileExists(atPath: dbPath) else { return nil }
+        let outDir = workDir.appendingPathComponent("direct-read")
+        do {
+            try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
+        } catch { return nil }
+        let dbOut = outDir.appendingPathComponent(PosterBoard.databaseFileName)
+        var walOut: URL? = nil
+        let walPath = dbPath + "-wal"
+        if fm.fileExists(atPath: walPath) {
+            let w = outDir.appendingPathComponent(PosterBoard.databaseFileName + "-wal")
+            if (try? fm.copyItem(atPath: walPath, toPath: w.path)) != nil { walOut = w }
+        }
+        do {
+            try fm.copyItem(atPath: dbPath, toPath: dbOut.path)
+        } catch { return nil }
+        // 验库：能打开、integrity_check 是 ok 才算读到真表。
+        var db: OpaquePointer?
+        guard sqlite3_open(dbOut.path, &db) == SQLITE_OK, let db else { return nil }
+        defer { sqlite3_close(db) }
+        _ = sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
+        var stmt: OpaquePointer?
+        var integrity = ""
+        if sqlite3_prepare_v2(db, "PRAGMA integrity_check;", -1, &stmt, nil) == SQLITE_OK,
+           let stmt {
+            if sqlite3_step(stmt) == SQLITE_ROW, let t = sqlite3_column_text(stmt, 0) {
+                integrity = String(cString: t)
+            }
+            sqlite3_finalize(stmt)
+        }
+        guard integrity == "ok" else { return nil }
+        return (dbOut, walOut)
     }
 
     /// 调 al_fileservice_posterboard_export 走 FileService 读 v61 的表 + -wal，返回存盘路径和容器路径。
