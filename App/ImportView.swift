@@ -246,44 +246,16 @@ private struct ImportDetailView: View {
     // 详情页两个按钮同宽：按最长的“制作深景包”定。
     private let buttonWidth: CGFloat = 220
 
-    /// 这次安装实际走哪条路（按四态选择 + 设备版本解析）。
-    /// 设备版本读不到时按备份算（fail closed），不猜版本走直写。
-    private var effectiveMode: PosterBoardApplyMode {
-        state.applyChoice.resolvedMode(
-            deviceVersion: state.deviceInfo?.productVersion ?? "",
-            buildVersion: state.deviceInfo?.buildVersion ?? "")
-    }
-
-    /// 备份和测试版装完都要重启手机才进图库：这个条件为真时显示
-    /// “重启手机”按钮。直写那条路不用重启，不显示。
+    /// 备份路装完要重启手机才进图库（装完本地刷新没成时）：显示“重启手机”按钮。
     private var needsRebootButton: Bool {
-        installReport?.mode == .backup || installReport?.mode == .test
-    }
-
-    /// 模式提示行：这次实际会用的模式 + 为什么。
-    private var modeHintText: String {
-        state.applyChoice.hintText(
-            deviceVersion: state.deviceInfo?.productVersion ?? "",
-            buildVersion: state.deviceInfo?.buildVersion ?? "")
+        installReport?.mode == .backup
     }
 
     /// 核对区折叠时只显示的一行摘要：描述符短号 + 注入/偏好/登记/刷新各一词。
     /// 备份路没有读回核对 / 登记那几项，折叠行只写模式；要不要重启看下面的结论行。
     private var verifySummaryLine: String {
         guard let report = installReport else { return "尚未安装，暂无核对结果。" }
-        if report.mode == .backup {
-            return "描述符 \(String(report.descriptorUUID.prefix(8))) · 27.2"
-        }
-        let inject = report.injectResults.allSatisfy(\.ok) ? "注入成功" : "注入有失败"
-        let prefs = report.preferencesWritten ? "偏好成功" : "偏好未写入"
-        let reg = report.registration.map { "登记 \($0.remoteRecords)/\($0.packageRecords)/\($0.names)" } ?? "登记未执行"
-        let refresh: String
-        if let r = report.refresh {
-            refresh = r.confirmed ? "刷新已确认" : "刷新未确认"
-        } else {
-            refresh = "刷新未执行"
-        }
-        return "描述符 \(String(report.descriptorUUID.prefix(8))) · \(inject) · \(prefs) · \(reg) · \(refresh)"
+        return "描述符 \(String(report.descriptorUUID.prefix(8))) · 27.2"
     }
 
     var body: some View {
@@ -319,29 +291,19 @@ private struct ImportDetailView: View {
                             .buttonStyle(PressBounceButtonStyle())
                         Spacer()
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("安装方式").font(.headline)
-                        Picker("安装方式", selection: $state.applyChoice) {
-                            ForEach(ApplyModeChoice.allCases) { choice in
-                                Text(choice.title).tag(choice)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(installing)
-                        Text(modeHintText)
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     HStack {
                         Spacer()
                         Button("安装壁纸") { installTask = Task { await runInstall() } }
                             .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .frame(width: buttonWidth).padding(.vertical, 12).glassCapsule()
                             .buttonStyle(PressBounceButtonStyle())
-                            // 不配对也能装：按钮只看包和安装状态（没配对时走备份还原路）。
+                            // 不配对也能装：按钮只看包和安装状态。
                             .disabled(state.packageData == nil || installing)
                         Spacer()
                     }
+                    Text("支持 iOS 27.0 – 27.2")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
                     if !installResult.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
@@ -463,9 +425,7 @@ private struct ImportDetailView: View {
                                 }
                                 Button("取消", role: .cancel) {}
                             } message: {
-                                Text(installReport?.mode == .test
-                                    ? "重启后 PosterBoard 会重新读取描述符，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。"
-                                    : "重启后 PosterBoard 会重新读取新表，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。")
+                                Text("重启后 PosterBoard 会重新读取描述符，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。")
                             }
                         } else {
                             // 没配对（V1.10 起）：跟人家一样刷新桌面，不再让重启手机。
@@ -503,7 +463,6 @@ private struct ImportDetailView: View {
         }
         .background(AppBackgroundView())
         .navigationTitle("壁纸包详情")
-        .task { await state.refreshDeviceInfo() }
         .overlay {
             if installing {
                 ZStack {
@@ -591,63 +550,24 @@ private struct ImportDetailView: View {
         }) {
             installReport = report
             installLogText = InstallLog.shared.tail(60)
-            if report.mode == .backup {
-                // 备份路现在也写偏好、也调刷新（RestoreTest 里做的）；读回核对和
-                // 登记这两项没有，核对看日志框。成功只写四个字，载荷数、行数、
-                // 描述符这些长日志留在日志框里，不显示在结果区。
-                installResult = "安装成功"
-                // V1.6：备用刷新（网页重启桌面）整个去掉，跟 Vellum 对齐——
-                // 配对路只认配对刷新那一下；没配对不刷，让用户重启手机
-                //（重启是全新读取，表和文件都写好了，新旧壁纸都该在）。
-                if !(report.refresh?.confirmed ?? false) {
-                    if state.hasPairingFile {
-                        installResult = "安装成功：配对刷新没确认。重启手机，然后锁屏长按进图库查看。"
-                    } else {
-                        // 没配对（V1.10 起 Vellum 同款）：只写了描述符目录，表和偏好
-                        // 没碰；装完跟人家一样自动刷新桌面，详情页另留手动按钮。
-                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库看。"
-                        DesktopRestart.trigger()
-                    }
-                }
-            } else if report.mode == .test {
-                // 测试版：只写了描述符、没碰表，刷新那项没有，重启手机才进图库。
-                installResult = "测试版安装成功：只写了描述符、没碰数据库表。偏好已写（PBF 轻量刷新）。重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
-            } else {
-                let dirLines = report.injectResults.map { result in
-                    let short = shortTargetDir(result.targetParentDir)
-                    return result.ok ? "\(short)：成功" : "\(short)：失败（\(result.error ?? "未知错误")）"
-                }.joined(separator: "；")
-                let verifySummary: String
-                if report.verifyResults.isEmpty {
-                    verifySummary = "读回核对未执行。"
-                } else if report.verifyResults.allSatisfy({ $0.allPresent }) {
-                    verifySummary = "已在设备上核对到：每个目标的描述符目录、Wallpaper.plist、标识文件均在。"
-                } else if report.verifyResults.contains(where: { $0.channelUnavailable }) {
-                    verifySummary = "读回通道不可用（系统不放行容器直读），核对不到目标，不代表描述符缺失。"
+            // 统一一条路：成功只写四个字，载荷数、描述符这些长日志留在日志框里。
+            installResult = "安装成功"
+            // 装完本地刷新没成时：有配对让用户重启手机；没配对跟人家一样
+            // 自动刷新桌面，详情页另留手动按钮。
+            if !(report.refresh?.confirmed ?? false) {
+                if state.hasPairingFile {
+                    installResult = "安装成功：刷新没确认。重启手机，然后锁屏长按进图库查看。"
                 } else {
-                    let missing = report.verifyResults.filter { !$0.allPresent }.map { shortTargetDir($0.targetParentDir) }.joined(separator: "、")
-                    verifySummary = "读回核对有缺失（\(missing)），写盘成功不代表图库已列出。"
+                    installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库看。"
+                    DesktopRestart.trigger()
                 }
-                let refreshSummary: String
-                if let refresh = report.refresh {
-                    if refresh.confirmed {
-                        refreshSummary = "进程刷新：已确认 PosterBoard 进程已重启（旧 pid \(refresh.oldPid.map { "\($0)" } ?? "?") → 新 pid \(refresh.newPid.map { "\($0)" } ?? "?")）。"
-                    } else {
-                        let refreshErrorText = refresh.error.map { "（\($0)）" } ?? ""
-                        refreshSummary = "进程刷新：未确认\(refreshErrorText)。"
-                    }
-                } else {
-                    refreshSummary = "进程刷新：未执行。"
-                }
-                installResult = "已写入设备：描述符 \(report.descriptorUUID)。已写目录：\(dirLines)。偏好写入：\(report.preferencesWritten ? "成功" : "未写入")。注意：这只代表写盘函数返回成功，不代表图库已列出。\(verifySummary) \(refreshSummary)"
-                }
+            }
         } else if Task.isCancelled {
-            // 用户点了停止（`try?` 把取消错误吞成了 nil）。备份路和测试版
-            // 只报“已停止”，直写那条路的文案不动。
-            installResult = effectiveMode == .airlift ? "已停止取备份。下次取备份如果一直连不上，重启手机一次再试。" : "已停止"
+            // 用户点了停止（`try?` 把取消错误吞成了 nil）。
+            installResult = "已停止"
             installLogText = InstallLog.shared.tail(60)
-        } else if (effectiveMode == .backup || effectiveMode == .test) && !state.statusMessage.isEmpty {
-            // 备份路和测试版失败：结果区写失败原因，核对区也进失败那版。
+        } else if !state.statusMessage.isEmpty {
+            // 安装失败：结果区写失败原因，核对区也进失败那版。
             installResult = state.statusMessage
             installFailedReason = installFailureReason(from: state.statusMessage)
             installLogText = InstallLog.shared.tail(60)
@@ -682,13 +602,9 @@ private struct ImportDetailView: View {
         return lines.suffix(3).joined(separator: "\n")
     }
 
-    /// 备份路和测试版失败原因：statusMessage 是“备份安装失败：<原因>”
-    /// 或“测试版安装失败：<原因>”，核对区只留 <原因>。
+    /// 安装失败原因：statusMessage 是“备份安装失败：<原因>”，核对区只留 <原因>。
     private func installFailureReason(from statusMessage: String) -> String {
         if let range = statusMessage.range(of: "备份安装失败：") {
-            return String(statusMessage[range.upperBound...])
-        }
-        if let range = statusMessage.range(of: "测试版安装失败：") {
             return String(statusMessage[range.upperBound...])
         }
         return statusMessage

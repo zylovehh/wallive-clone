@@ -21,12 +21,6 @@ final class AppState: ObservableObject {
     @Published var installHistory: [String] = []
     @Published var installReports: [InstallReport] = []
     @Published var statusMessage = ""
-    /// 安装方式四选一（自动 / 直写 / 备份还原 / 测试版），存 UserDefaults，默认自动。
-    /// "自动"走 `PosterBoardApplyModeSettings.resolved()`：直写被藏时自动切备份。
-    /// "测试版"不经过那套解析，直接走只写描述符的新路子，装完要重启手机。
-    @Published var applyChoice = ApplyModeChoice.current {
-        didSet { ApplyModeChoice.current = applyChoice }
-    }
     /// 这台设备的身份（UDID、iOS 版本、build）。读不到时为 nil，
     /// 界面显示"设备版本读不到"，安装按 fail closed 走备份路。
     @Published var deviceInfo: BackupFFI.DeviceInfo?
@@ -154,44 +148,6 @@ final class AppState: ObservableObject {
     func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
         guard let data = packageData else { return nil }
         return try await installWithReportBackup(data: data, onProgress: onProgress)
-    }
-
-    /// 测试版安装：走只写描述符（不读表、不插行、不写回），写完偏好等
-    /// PosterBoard 重扫，装完要重启手机。结果同样记进 installReports，
-    /// 报告里 `mode` 是 `.test`。失败原样报，不悄悄切回别的模式。
-    private func installWithReportTest(data: Data,
-                                       onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
-        do {
-            InstallLog.shared.clear()
-            let outcome = try await BackupInstallFlow.installTest(
-                packageData: data,
-                pairingPath: pairingFileURL.path,
-                log: { InstallLog.shared.append($0) },
-                onProgress: onProgress)
-            let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
-                + "Extensions/\(outcome.extensionID)/configurations"
-            let report = InstallReport(
-                descriptorUUID: outcome.descriptorUUID,
-                injectResults: [InjectResult(targetParentDir: configurationsDir,
-                                             ok: true, error: nil)] + outcome.injectResults,
-                preferencesWritten: outcome.preferencesWritten,
-                verifyResults: [],
-                registration: nil,
-                refresh: nil,
-                mode: .test,
-                backupSummary: "测试版已完成（\(outcome.payloadCount) 个载荷，"
-                    + "只写描述符、没碰数据库表）。" + (outcome.needsReboot
-                        ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
-                        : "去锁屏图库查看，出现后再点设为墙纸组合。"))
-            installHistory.append(report.descriptorUUID)
-            installReports.append(report)
-            return report
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            statusMessage = "测试版安装失败：\(error.localizedDescription)"
-            return nil
-        }
     }
 
     /// 备份路安装（V1.19 起是唯一安装路）：走 Vellum 同款那条（直读找库 +

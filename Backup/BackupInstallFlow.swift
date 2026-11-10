@@ -87,54 +87,6 @@ enum BackupInstallFlow {
                        injectResults: outcome.injectResults)
     }
 
-    /// 测试版安装：只写描述符、不写表（拿表/插行/写回全跳过），写完偏好
-    /// 等 5 秒，直接报重启手机。和 install() 同一个等法（后台跑
-    /// runRestoreTestMode，取消盒中转，进度由里面按步骤报）。
-    /// Outcome 里 refreshConfirmed 一定是 false，needsReboot 一定是 true。
-    static func installTest(packageData: Data,
-                            pairingPath: String,
-                            log: @escaping BackupLog = { _ in },
-                            onProgress: ((String, Double) -> Void)? = nil) async throws -> Outcome {
-        onProgress?("正在问手机要壁纸位置…", 0.05)
-        log("测试版：走只写描述符（不写表），写完偏好等 PosterBoard 重扫，再重启手机。")
-        try Task.checkCancellation()
-        let cancelBox = CancelBox()
-        let outcomeBox = OutcomeBox()
-        _ = Task.detached(priority: .userInitiated) {
-            let outcome = RestoreTest.runRestoreTestMode(
-                packageData: packageData, pairingPath: pairingPath,
-                onProgress: onProgress,
-                isCancelled: { cancelBox.isCancelled })
-            outcomeBox.finish(outcome)
-        }
-        let outcome: RestoreOutcome
-        do {
-            outcome = try await withTaskCancellationHandler {
-                try await waitForOutcome(outcomeBox)
-            } onCancel: {
-                cancelBox.cancel()
-            }
-        } catch {
-            cancelBox.cancel()
-            throw error
-        }
-        try Task.checkCancellation()
-        guard outcome.success else {
-            throw BackupError(outcome.summary)
-        }
-        guard let uuid = outcome.descriptorUUID, let ext = outcome.extensionID else {
-            throw BackupError("测试版跑完了，但没拿到描述符信息，日志里看详情。")
-        }
-        onProgress?("测试版完成", 1.0)
-        return Outcome(descriptorUUID: uuid,
-                       extensionID: ext,
-                       payloadCount: outcome.payloadCount ?? 0,
-                       storeSummary: outcome.storeSummary ?? "",
-                       preferencesWritten: outcome.preferencesWritten,
-                       refreshConfirmed: outcome.refreshConfirmed,
-                       injectResults: outcome.injectResults)
-    }
-
     /// 等后台 runRestore 写结果盒：先看盒里有没有（活刚好干完按成功算），
     /// 没有再查取消、睡 0.2 秒再看；上层 Task 取消（点了停止）就立刻抛，
     /// 不等后台那路回来，弹窗马上关。
