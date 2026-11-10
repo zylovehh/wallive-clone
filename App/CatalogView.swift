@@ -35,6 +35,7 @@ struct CatalogView: View {
     @State private var adminMessageIsError = false
     @State private var showingAdd = false
     @State private var itemToDelete: CatalogItem?
+    @State private var videoReplaceItem: CatalogItem?
 
     /// 自适应列数：手机两列，iPad 横屏 6 列、竖屏 4 列，卡片不再一张占满屏。
     /// 固定两列时 iPad 上一张卡能占半个屏还多，又高又空。
@@ -141,6 +142,13 @@ struct CatalogView: View {
             .sheet(isPresented: $showingAdd) {
                 AddWallpaperView(store: store, onAdded: { showingAdd = false })
             }
+            .sheet(item: $videoReplaceItem) { item in
+                ReplaceVideoView(store: store, item: item, onDone: {
+                    videoReplaceItem = nil
+                    adminMessage = "视频已换好。"
+                    adminMessageIsError = false
+                })
+            }
             .alert("删除这张壁纸？", isPresented: Binding(
                 get: { itemToDelete != nil },
                 set: { if !$0 { itemToDelete = nil } }
@@ -228,7 +236,8 @@ struct CatalogView: View {
                                 onPreview: { previewItem = item },
                                 onDownload: { await downloadAndInstall(item) },
                                 onTogglePin: { Task { await adminTogglePin(item) } },
-                                onDelete: { itemToDelete = item }
+                                onDelete: { itemToDelete = item },
+                                onReplaceVideo: { videoReplaceItem = item }
                             )
                         }
                     }
@@ -390,6 +399,7 @@ private struct CatalogCard: View {
     let onDownload: () async -> Void
     let onTogglePin: () -> Void
     let onDelete: () -> Void
+    let onReplaceVideo: () -> Void
 
     /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封��播。
     private var coverVideoURL: URL? {
@@ -506,12 +516,19 @@ private struct CatalogCard: View {
                 }
                 .buttonStyle(PressBounceButtonStyle())
                 .disabled(downloading)
-                // 管理员删除：只从目录表里删条目（只有登入的管理员能看到）。
+                // 管理员换视频/删壁纸：只有登入的管理员能看到。
+                // 有视频的显示“换视频”，没视频的显示“加视频”。
                 if isAdmin {
-                    Button("删除壁纸", action: onDelete)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .disabled(adminBusy)
+                    HStack(spacing: 16) {
+                        Button(item.previewURL.isEmpty ? "加视频" : "换视频", action: onReplaceVideo)
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                            .disabled(adminBusy)
+                        Button("删除壁纸", action: onDelete)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .disabled(adminBusy)
+                    }
                 }
             }
             .padding(10)
@@ -1075,3 +1092,209 @@ private struct PreviewPlayerView: View {
 }
 
 
+// MARK: - 换视频（管理员）
+
+/// 给已有壁纸换预览视频：选一个视频传到仓库，覆盖同名预览文件，
+/// 再把这条的预览和封面地址改成新视频，推表。
+/// 没视频的条目也能用，按钮会显示“加视频”。
+/// 只有登入的管理员能打开（入口在卡片上）；推表靠本机钥匙串里的 GitHub 钥匙。
+private struct ReplaceVideoView: View {
+    @ObservedObject var store: CatalogStore
+    @EnvironmentObject private var accountStore: AccountStore
+    @Environment(\.dismiss) private var dismiss
+    let item: CatalogItem
+    let onDone: () -> Void
+
+    @State private var videoItem: PhotosPickerItem?
+    @State private var videoData: Data?
+    // 选一次记一次数：相册选中项的编号在没授权时是空的，靠编号触发读取根本启动不了，
+    // 所以改靠次数触发——选了就加一，次数一变读取任务就启动，不管有没有编号。
+    @State private var videoPickVersion = 0
+    @State private var message = ""
+    // 出错时的错误代码与原始细节：长按可选，或点“复制错误代码”一键复制发给灵光。
+    @State private var errorDetail = ""
+    @State private var copiedError = false
+    @State private var busy = false
+    // 上传进度（0~1）；nil 表示当前不在上传。
+    @State private var uploadProgress: Double?
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("给「\(item.title)」换视频")
+                    .font(.headline)
+                Text(item.previewURL.isEmpty
+                     ? "这张现在没有预览视频，选一个传上去，卡片就播视频当封面。"
+                     : "选一个新视频传上去，旧的预览文件会被同名覆盖。")
+                    .font(.caption).foregroundStyle(.secondary)
+                PhotosPicker(selection: Binding(
+                    get: { videoItem },
+                    set: { newValue in
+                        videoItem = newValue
+                        if newValue != nil { videoPickVersion += 1 }
+                    }
+                ), matching: .videos) {
+                    Text(videoData == nil ? "选预览视频" : "已选预览视频")
+                }
+                .buttonStyle(.bordered)
+                .disabled(busy)
+                if busy {
+                    ProgressView()
+                    if let uploadProgress {
+                        ProgressView(value: uploadProgress)
+                            .progressViewStyle(.linear)
+                        Text("正在上传 \(Int((uploadProgress * 100).rounded()))%，大文件传得慢是正常的")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else if videoItem != nil && videoData == nil {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("视频还在读取，读完自动放开上传按钮。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !message.isEmpty {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !errorDetail.isEmpty {
+                        Text(errorDetail)
+                            .font(.caption2)
+                            .monospaced()
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(copiedError ? "已复制，去聊天里粘贴给灵光" : "复制错误代码") {
+                            UIPasteboard.general.string = errorDetail
+                            copiedError = true
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
+                }
+                Button(item.previewURL.isEmpty ? "加视频到目录" : "换视频并更新目录") { Task { await replace() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || videoData == nil)
+                Text("构建 \(AppBuild.tag)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("换视频")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .task(id: videoPickVersion) {
+                guard let pickerItem = videoItem else { return }
+                do {
+                    videoData = try await Self.loadVideoData(from: pickerItem)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    if Task.isCancelled { return }
+                    videoItem = nil
+                    fail("视频 30 秒没读出来，已停止等待。先在相册里把视频点开播一遍（最好连 WiFi），再重新选一次。", code: "E-304 换视频-视频读取超时", detail: String(describing: error))
+                }
+            }
+        }
+    }
+
+    /// 换视频流程：传视频（同名覆盖）→ 改这条的预览和封面地址 → 推表。
+    @MainActor
+    private func replace() async {
+        guard let token = accountStore.loadToken() else {
+            fail("先在管理员页保存 GitHub 钥匙。", code: "E-301 换视频-缺少钥匙")
+            return
+        }
+        guard let videoData else { return }
+        busy = true
+        defer { busy = false; uploadProgress = nil }
+        do {
+            let videoName = "\(item.id)-preview.\(Self.videoExtension(for: videoItem))"
+            try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token,
+                                                progress: { value in Task { @MainActor in uploadProgress = value } })
+            let videoURL = CatalogStore.wallpapersRawBase + videoName
+            let updated = CatalogItem(
+                id: item.id, title: item.title, tags: item.tags,
+                thumbnailURL: videoURL, previewURL: videoURL,
+                packageURL: item.packageURL, pinned: item.pinned, downloads: item.downloads)
+            let newItems = store.items.map { $0.id == item.id ? updated : $0 }
+            try await store.pushCatalog(newItems, token: token)
+            onDone()
+            dismiss()
+        } catch {
+            fail("没换上去，请点“复制错误代码”发给灵光。", code: "E-305 换视频-上传失败", detail: String(describing: error))
+        }
+    }
+
+    /// 预览视频扩展名：按所选视频的格式来，默认 mp4。
+    private static func videoExtension(for pickerItem: PhotosPickerItem?) -> String {
+        guard let pickerItem else { return "mp4" }
+        if pickerItem.supportedContentTypes.contains(.mpeg4Movie) { return "mp4" }
+        if pickerItem.supportedContentTypes.contains(.quickTimeMovie) { return "mov" }
+        return "mp4"
+    }
+
+    /// 视频读取（视频当预览用，绝不跳过）：先走文件导出，系统把视频拷到临时文件再读，
+    /// 不整段往内存里塞，本地小视频这条路最稳；导出文件读不到再回数据直读。
+    /// 两通道都不行就抛超时，绝不让界面无限转圈。
+    private static func loadVideoData(from pickerItem: PhotosPickerItem) async throws -> Data {
+        if let url = try await withReadTimeout(seconds: 30, work: {
+            try await pickerItem.loadTransferable(type: URL.self)
+        }) {
+            if let data = try? Data(contentsOf: url) {
+                return data
+            }
+        }
+        if let data = try await withReadTimeout(seconds: 30, work: {
+            try await pickerItem.loadTransferable(type: Data.self)
+        }) {
+            return data
+        }
+        throw URLError(.timedOut)
+    }
+
+    /// 给可能卡死的读取操作加真超时：到点就报错返回，不等卡住的任务。
+    private actor TimeoutGate {
+        private var done = false
+        func claim() -> Bool {
+            if done { return false }
+            done = true
+            return true
+        }
+    }
+
+    private static func withReadTimeout<T: Sendable>(seconds: TimeInterval,
+                                                     work: @escaping @Sendable () async throws -> T?) async throws -> T? {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T?, Error>) in
+            let gate = TimeoutGate()
+            Task.detached {
+                do {
+                    let result = try await work()
+                    if await gate.claim() {
+                        continuation.resume(returning: result)
+                    }
+                } catch {
+                    if await gate.claim() {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            Task.detached {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if await gate.claim() {
+                    continuation.resume(throwing: URLError(.timedOut))
+                }
+            }
+        }
+    }
+
+    /// 统一报错：正文说人话，附上错误代码和原始细节，方便一键复制发回给灵光。
+    private func fail(_ text: String, code: String, detail: String = "") {
+        message = text
+        errorDetail = detail.isEmpty ? code : "\(code) | \(detail)"
+        copiedError = false
+    }
+}
