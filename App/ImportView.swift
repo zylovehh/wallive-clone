@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 
 /// 液态透明胶囊：iOS 26+ 用透明系统玻璃，低版本回退半透明白。
 private struct LiquidGlassCapsule: ViewModifier {
@@ -234,6 +235,7 @@ private struct ImportDetailView: View {
     @State private var showFullResult = false
     @State private var showFullVerify = false
     @State private var installStep = "正在安装…"
+    @State private var desktopRefreshNote = ""
     @State private var installProgress = 0.0
     /// 正在跑的安装任务，进度框里的"停止"按钮用它取消。
     @State private var installTask: Task<Void, Never>?
@@ -439,30 +441,50 @@ private struct ImportDetailView: View {
                         Text("安装成功，再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合。")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("27.2装完要重启手机，壁纸才会进图库。点一下直接重启，不用手动关机再开机。")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            HStack {
-                                Button("重启手机") { showRebootConfirm = true }
-                                    .disabled(rebooting || !state.hasPairingFile)
-                                if rebooting { ProgressView() }
-                            }.buttonStyle(.bordered)
-                            if !rebootResult.isEmpty {
-                                Text(rebootResult).font(.caption)
+                        if state.hasPairingFile {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("27.2装完要重启手机，壁纸才会进图库。点一下直接重启，不用手动关机再开机。")
+                                    .font(.caption).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
+                                HStack {
+                                    Button("重启手机") { showRebootConfirm = true }
+                                        .disabled(rebooting)
+                                    if rebooting { ProgressView() }
+                                }.buttonStyle(.bordered)
+                                if !rebootResult.isEmpty {
+                                    Text(rebootResult).font(.caption)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .textSelection(.enabled)
+                                }
                             }
-                        }
-                        .alert("重启手机？", isPresented: $showRebootConfirm) {
-                            Button("重启手机", role: .destructive) {
-                                Task { await runReboot() }
+                            .alert("重启手机？", isPresented: $showRebootConfirm) {
+                                Button("重启手机", role: .destructive) {
+                                    Task { await runReboot() }
+                                }
+                                Button("取消", role: .cancel) {}
+                            } message: {
+                                Text(installReport?.mode == .test
+                                    ? "重启后 PosterBoard 会重新读取描述符，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。"
+                                    : "重启后 PosterBoard 会重新读取新表，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。")
                             }
-                            Button("取消", role: .cancel) {}
-                        } message: {
-                            Text(installReport?.mode == .test
-                                ? "重启后 PosterBoard 会重新读取描述符，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。"
-                                : "重启后 PosterBoard 会重新读取新表，壁纸才会出现在图库里。重启大概要一分钟，期间别碰手机。")
+                        } else {
+                            // 没配对（V1.10 起）：跟人家一样刷新桌面，不再让重启手机。
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("没配对装完跟人家一样：点「刷新桌面」，桌面会黑一下自己回来（App 闪退属正常），回来后锁屏长按进图库看。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                HStack {
+                                    Button("刷新桌面") {
+                                        desktopRefreshNote = "网页已加载，桌面马上会黑一下自己回来。20 秒后桌面还在的话就是这招没成，再点一次；还不行就重启手机。"
+                                        DesktopRestart.trigger()
+                                    }
+                                }.buttonStyle(.bordered)
+                                if !desktopRefreshNote.isEmpty {
+                                    Text(desktopRefreshNote).font(.caption)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .textSelection(.enabled)
+                                }
+                            }
                         }
                     } else if let reason = installFailedReason {
                         Text("安装失败：\(reason)。再去锁屏长按进图库核对新壁纸是否出现，出现后再点设为墙纸组合；没出现就把诊断区的结果和日志发来排查。")
@@ -581,8 +603,10 @@ private struct ImportDetailView: View {
                     if state.hasPairingFile {
                         installResult = "安装成功：配对刷新没确认。重启手机，然后锁屏长按进图库查看。"
                     } else {
-                        // 没配对（V1.9 起 Vellum 同款）：只写了描述符目录，表和偏好没碰。
-                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。重启手机，然后锁屏长按进图库查看。"
+                        // 没配对（V1.10 起 Vellum 同款）：只写了描述符目录，表和偏好
+                        // 没碰；装完跟人家一样刷新桌面，不再让重启手机。
+                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库看。"
+                        DesktopRestart.trigger()
                     }
                 }
             } else if report.mode == .test {

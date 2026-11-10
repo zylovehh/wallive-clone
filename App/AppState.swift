@@ -281,9 +281,7 @@ final class AppState: ObservableObject {
                 mode: .backup,
                 backupSummary: noPairing
                     ? "壁纸已写好（人家同款，只写描述符目录，表和偏好没碰）。"
-                        + (outcome.needsReboot
-                            ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
-                            : "去锁屏图库查看，出现后再点设为墙纸组合。")
+                        + "正在刷新桌面（跟人家一样），回来后去锁屏图库查看，出现后再点设为墙纸组合。"
                     : "备份还原已完成（\(outcome.payloadCount) 个载荷，"
                         + "商店：\(outcome.storeSummary)）。" + (outcome.needsReboot
                             ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
