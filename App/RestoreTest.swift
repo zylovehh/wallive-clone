@@ -982,6 +982,11 @@ enum RestoreTest {
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
 
+        // V1.16：先体检共享抽屉，把组容器在不在、路径是什么直接写出来——
+        //    逃逸被拒时不用再猜是不是签名没配组。
+        let health = WorseQueryEscape.groupHealth()
+        InstallLog.shared.append("vellum: 共享抽屉体检：\(health.note)")
+
         // 1. 逃逸 + 找壁纸库：总目录直翻（头一回也直读），翻到的容器读一次表
         //    验过才算系统在读的那份；翻不到再试上次记下的路径。
         onProgress?("正在找壁纸库…", 0.05)
@@ -1012,7 +1017,7 @@ enum RestoreTest {
         }
         guard let container else {
             throw StepError(step: "找壁纸库",
-                            detail: "直读没找到壁纸库。确认回环 VPN 连着、App 的 App Group 签名没被改掉（应为 \(WorseQueryEscape.appGroup)），再试一次。")
+                            detail: "直读没找到壁纸库。这条路不用 VPN：看上面「共享抽屉体检」——说容器不存在就是签名没配 App Group（应为 \(WorseQueryEscape.appGroup)，对照 Vellum 签名用的组名），配好重签再试；容器正常还报错就先重启手机再装一次。")
         }
         report["container"] = container
 
