@@ -261,7 +261,7 @@ final class CatalogStore: ObservableObject {
     /// 推之前先拉仓库最新表合并一次：别人同时加的条目不丢，自己删的条目不回来；
     /// 这样仓库刚变了也不会报 409，基本一次就推上去，不用等几秒再点一次。
     func pushCatalog(_ newItems: [CatalogItem], token: String) async throws {
-        let merged = await mergedCatalog(newItems, token: token)
+        let (merged, knownSHA) = await mergedCatalog(newItems, token: token)
         let dicts: [[String: Any]] = merged.map { item in
             ["id": item.id, "title": item.title, "tags": item.tags,
              "thumbnail": item.thumbnailURL, "preview": item.previewURL,
@@ -271,46 +271,49 @@ final class CatalogStore: ObservableObject {
             withJSONObject: ["items": dicts], options: [.withoutEscapingSlashes])
         try await githubPut(
             path: Self.catalogPath, contentBase64: data.base64EncodedString(),
-            message: "Update catalog via app", token: token)
+            message: "Update catalog via app", token: token, knownSHA: knownSHA)
         items = Self.sortedItems(merged)
         errorMessage = ""
-        // 推完顺手清 CDN 缓存，用户端马上能看到新目录（失败不影响主流程）。
-        await purgeCDNCache(paths: [Self.catalogPath])
+        // 清 CDN 缓存改后台悄悄清，不等它：推表成功就立刻放开按钮，
+        // 缓存清不清只影响别人晚几秒看到新目录，不影响这次操作。
+        Task { await purgeCDNCache(paths: [Self.catalogPath]) }
     }
 
     /// 推前合并：以本地 newItems 为准（用户这次的操作），再把仓库里有、
     /// 本地这次没有、且本地原来也没有的条目（别人同时加的）补进来，插到置顶后面。
     /// 本地原来有、这次没了的，是用户刚删的，不补回来。
     /// 拉不到最新表就直接用本地的，不挡推送。
-    private func mergedCatalog(_ newItems: [CatalogItem], token: String) async -> [CatalogItem] {
-        guard let serverItems = try? await githubCatalogItems(token: token) else { return newItems }
+    /// 顺带把拉表时拿到的版本标识（sha）一起带回来，推表时直接用，省一次单独查询。
+    private func mergedCatalog(_ newItems: [CatalogItem], token: String) async -> ([CatalogItem], String?) {
+        guard let (serverItems, sha) = try? await githubCatalogItems(token: token) else { return (newItems, nil) }
         let baseIDs = Set(items.map { $0.id })
         let newIDs = Set(newItems.map { $0.id })
         let extras = serverItems.filter { !newIDs.contains($0.id) && !baseIDs.contains($0.id) }
-        guard !extras.isEmpty else { return newItems }
+        guard !extras.isEmpty else { return (newItems, sha) }
         var merged = newItems
         let insertAt = merged.firstIndex(where: { !$0.pinned }) ?? merged.endIndex
         merged.insert(contentsOf: extras, at: insertAt)
-        return merged
+        return (merged, sha)
     }
 
     /// 从 GitHub 接口拉当前目录表（带钥匙走 API 不走 CDN，拿到的就是最新版）。
     /// 404 当空表，不算错；其他错直接抛，让调用方决定。
-    private func githubCatalogItems(token: String) async throws -> [CatalogItem] {
+    /// 顺带返回文件的版本标识（sha），推表时直接用，省一次单独查询。
+    private func githubCatalogItems(token: String) async throws -> ([CatalogItem], String?) {
         var request = URLRequest(url: githubContentsURL(path: Self.catalogPath))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if status == 404 { return [] }
+        if status == 404 { return ([], nil) }
         guard status == 200 else { throw PushError.http(status) }
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let b64 = dict["content"] as? String,
               let raw = Data(base64Encoded: b64.replacingOccurrences(of: "\n", with: "")),
               let doc = try? JSONDecoder().decode(CatalogDocument.self, from: raw)
         else { throw PushError.http(status) }
-        return doc.items
+        return (doc.items, dict["sha"] as? String)
     }
 
     /// 上传一个壁纸文件到仓库 wallpapers/ 目录（已有同名就覆盖，重试不报错）。
@@ -320,8 +323,8 @@ final class CatalogStore: ObservableObject {
         try await githubPut(
             path: "\(Self.wallpapersDir)/\(name)", contentBase64: data.base64EncodedString(),
             message: "Upload \(name) via app", token: token, progress: progress)
-        // 清掉该文件的 CDN 缓存（目录本身的缓存由随后的 pushCatalog 统一清）。
-        await purgeCDNCache(paths: ["\(Self.wallpapersDir)/\(name)"])
+        // 清掉该文件的 CDN 缓存（目录本身的缓存由随后的 pushCatalog 统一清），后台悄悄清，不等它。
+        Task { await purgeCDNCache(paths: ["\(Self.wallpapersDir)/\(name)"]) }
     }
 
     /// 让 CDN 缓存失效（best effort）：逐条请求 purge 接口，失败静默忽略，
@@ -360,13 +363,20 @@ final class CatalogStore: ObservableObject {
 
     /// 写（新建或覆盖）仓库里某个文件：内容先转 base64；已有文件要带上它的 sha 才能覆盖。
     /// 连续操作（删除/置顶连着点）时接口偶尔报 409 版本冲突，自动等一拍重取再推，最多重试两次。
+    /// knownSHA：调用方拉表时顺带拿到的版本标识，第一次直接用，省一次单独查询；重试时重新拉最新的。
     private func githubPut(path: String, contentBase64: String, message: String, token: String,
-                           progress: ((Double) -> Void)? = nil) async throws {
+                           progress: ((Double) -> Void)? = nil, knownSHA: String? = nil) async throws {
         let baseBody: [String: Any] = ["message": message, "content": contentBase64]
         var lastStatus = 0
         for attempt in 0..<3 {
             var body = baseBody
-            if let sha = try await githubSHA(path: path, token: token) {
+            let sha: String?
+            if attempt == 0, let known = knownSHA {
+                sha = known
+            } else {
+                sha = try await githubSHA(path: path, token: token)
+            }
+            if let sha {
                 body["sha"] = sha
             }
             let bodyData = try JSONSerialization.data(withJSONObject: body)
