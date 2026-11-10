@@ -94,4 +94,79 @@ public enum DepthPackageBuilder {
 
         return try zip.rebuild(entries: entries)
     }
+
+    /// 给已解包的描述符目录补深景结构（V1.13，无配对装包路用）。
+    /// 1. Floating .ca 目录加 Clownfish_ 前缀（有 Floating 层才改），同步 Wallpaper.plist；
+    /// 2. versions/1/ 补 renderingConfiguration.plist（总是写，已存在则覆盖）——
+    ///    系统渲染壁纸前要读这份配置，缺了就是黑卡片。Vellum 装包时同样补：
+    ///    静态包没有浮动层也照补 282B 声明，所以配置永远写。
+    /// 调用时机：装包路的改 id/改名都做完之后（保证清单值和目录名一致）。
+    public static func applyingDepthConfiguration(toDescriptorDir dir: URL,
+                                                  log: (String) -> Void) {
+        let fm = FileManager.default
+        let versionsDir = dir.appendingPathComponent("versions/1")
+        let contentsDir = versionsDir.appendingPathComponent("contents")
+        guard fm.fileExists(atPath: contentsDir.path) else {
+            log("深景补齐：找不到 contents 目录，跳过。")
+            return
+        }
+        // 找第一个 .wallpaper 目录里的 Wallpaper.plist（跟 zip 版一致只处理一个）。
+        let wallDirNames = (try? fm.contentsOfDirectory(atPath: contentsDir.path))?
+            .filter { $0.hasSuffix(".wallpaper") } ?? []
+        if let wallName = wallDirNames.first {
+            let wallpaperDir = contentsDir.appendingPathComponent(wallName)
+            let plistURL = wallpaperDir.appendingPathComponent("Wallpaper.plist")
+            guard var plist = try? PosterBoardPlist.load(contentsOf: plistURL),
+                  var assets = plist["assets"] as? [String: Any],
+                  var lockAndHome = assets["lockAndHome"] as? [String: Any],
+                  var def = lockAndHome["default"] as? [String: Any] else {
+                log("深景补齐：清单结构读不出，跳过浮动层改名（配置照补）。")
+                writeRenderingConfig(versionsDir: versionsDir, log: log)
+                return
+            }
+            if let floatingFile = def["floatingAnimationFileNameKey"] as? String,
+               !floatingFile.isEmpty, !floatingFile.hasPrefix("Clownfish_") {
+                let oldDir = wallpaperDir.appendingPathComponent(floatingFile)
+                let newFile = "Clownfish_" + floatingFile
+                let newDir = wallpaperDir.appendingPathComponent(newFile)
+                var renamed = false
+                if fm.fileExists(atPath: oldDir.path) {
+                    do {
+                        try fm.moveItem(at: oldDir, to: newDir)
+                        renamed = true
+                    } catch {
+                        log("深景补齐：浮动层改名没成（\(error.localizedDescription)），继续补配置。")
+                    }
+                }
+                if renamed {
+                    def["floatingAnimationFileNameKey"] = newFile
+                    lockAndHome["default"] = def
+                    assets["lockAndHome"] = lockAndHome
+                    plist["assets"] = assets
+                    if let data = try? PropertyListSerialization.data(
+                        fromPropertyList: plist, format: .xml, options: 0) {
+                        try? data.write(to: plistURL)
+                    }
+                    log("深景补齐：浮动层加了 Clownfish_ 前缀。")
+                }
+            }
+        }
+        writeRenderingConfig(versionsDir: versionsDir, log: log)
+    }
+
+    /// 渲染配置写盘：已存在则覆盖，保证字节一致。
+    private static func writeRenderingConfig(versionsDir: URL, log: (String) -> Void) {
+        guard let templateData = Data(base64Encoded: renderingConfigurationBase64) else {
+            log("深景补齐：内置模板坏了，跳过。把这条发我。")
+            return
+        }
+        let renderingURL = versionsDir
+            .appendingPathComponent("com.apple.posterkit.provider.instance.renderingConfiguration.plist")
+        do {
+            try templateData.write(to: renderingURL)
+            log("深景补齐：渲染配置已补上。")
+        } catch {
+            log("深景补齐：渲染配置写盘没成（\(error.localizedDescription)）。")
+        }
+    }
 }

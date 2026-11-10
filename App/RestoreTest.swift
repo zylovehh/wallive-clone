@@ -1060,6 +1060,13 @@ enum RestoreTest {
         // 这事，无配对路之前漏了）。只改顶层的话，系统拿旧 id 找改名后的
         // 文件，找不着，图库卡片就一直转圈（V1.10 真机黑块卡加载）。
         syncDescriptorInnerIdentifier(in: copyDir, id: numericId)
+        // V1.13：补渲染配置（深景总开关）。系统渲染壁纸前要读这份配置，缺了
+        // 就是黑卡片——Vellum 装包时同样补（静态包也照补），朋友包原样走我们
+        // 这条路仍黑，拆人家程序发现它装包时补配置 + 浮动层加 Clownfish_ 前缀。
+        // 有浮动层才改前缀；调用放在改 id/改名之后，保证清单值和目录名一致。
+        DepthPackageBuilder.applyingDepthConfiguration(
+            toDescriptorDir: copyDir,
+            log: { InstallLog.shared.append("vellum: \($0)") })
         // V1.11：建议元数据里嵌着旧 id（"<旧id>.DYNAMIC"），朋友的可用包
         // 没这个文件照样能用，直接删掉，省得图库按旧 id 找条目。
         try? fm.removeItem(at: copyDir.appendingPathComponent(
@@ -2235,6 +2242,7 @@ enum RestoreTest {
                 var changed = false
                 for key in ["backgroundAnimationFileName",
                             "foregroundAnimationFileName",
+                            "floatingAnimationFileNameKey",
                             "wallpaperRepresentingFileName"] {
                     if let value = plist[key] as? String {
                         let fixed = fix(value)
