@@ -147,13 +147,40 @@ struct DepthView: View {
     private func build() async {
         guard let data = state.packageData else { return }
         do {
-            let out = try DepthPackageBuilder.addingDepthConfiguration(to: data, zip: ZipFoundationAdapter())
+            // V8 起当前包存的是加密版（WALLIVE1）；这页之前直接拿加密数据
+            // 当 zip 拆，必炸——界面上那句英文报错就是从这来的。先解密。
+            let plain: Data
+            if Wallive1Crypto.isWallive1(data) {
+                plain = try Wallive1Crypto.decrypt(data)
+            } else {
+                plain = data
+            }
+            let out = try DepthPackageBuilder.addingDepthConfiguration(to: plain, zip: ZipFoundationAdapter())
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("wallive-depth.tendies")
             try out.write(to: url)
             depthData = out
             depthInfo = try TendiesPackage.inspect(out, zip: ZipFoundationAdapter())
             shareURL = url
             message = ""
+        } catch is Wallive1Crypto.Error {
+            // 解密失败（badMagic 不会到这——前面判过魔数）：包损坏或被改过。
+            message = "生成失败：这个包解不开了，重新导入一次原包再试。"
+        } catch let error as DepthPackageBuilder.Error {
+            switch error {
+            case .missingWallpaperPlist:
+                message = "生成失败：包里找不到壁纸清单，结构不对。"
+            case .missingFloatingFile:
+                message = "生成失败：包里读不到漂浮层文件名，做不了深景。"
+            case .badTemplate:
+                message = "生成失败：内置模板坏了，把这条发我，我来修。"
+            }
+        } catch let error as ZipFoundationAdapter.AdapterError {
+            switch error {
+            case .notAnArchive:
+                message = "生成失败：这个包不是标准压缩包，解不开，重新导入一次试试。"
+            case .entryNotFound(let path):
+                message = "生成失败：包里缺文件（\(path)），换个包试试。"
+            }
         } catch {
             message = "生成失败：\(error.localizedDescription)"
         }

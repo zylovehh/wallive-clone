@@ -1048,6 +1048,10 @@ enum RestoreTest {
             throw StepError(step: "写描述符", detail: "描述符目录拷副本失败：\(error.localizedDescription)")
         }
         defer { try? fm.removeItem(at: copyDir) }
+        // V1.12：userInfo 必须在 versions/1/contents 根层（系统标准位置，
+        // 朋友可用包和参照树都是；一部分 -static 包塞在壁纸目录里，系统
+        // 可能因此认不出描述符）。挪正；原包压根没有就照朋友的包补一份。
+        relocateUserInfoToContentsRoot(in: copyDir)
         rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
         // V1.9：文件名前缀也整体换成新 id（人家同款，id 和文件名一致）。
         renameDescriptorContentsToMatch(in: copyDir, newId: numericId)
@@ -2244,6 +2248,56 @@ enum RestoreTest {
                 }
             }
         }
+    }
+
+    /// 把 userInfo 挪到 versions/1/contents 根层（V1.12）。系统标准位置是
+    /// contents 根层（朋友可用包、Vellum 参照树都在根层）；一部分 -static 包
+    /// 把它塞在壁纸目录里，系统可能因此认不出描述符。塞错位置的挪到根层；
+    /// 哪儿都没有就照朋友的包补一份（posterEnvironmentOverrides 空 JSON、
+    /// 壁纸目录名；代表编号随后由 rewriteDescriptorIdentity 补齐）。
+    /// 只在无配对路调用；配对路不碰。
+    private static func relocateUserInfoToContentsRoot(in folderURL: URL) {
+        let fm = FileManager.default
+        let infoName = "com.apple.posterkit.provider.contents.userInfo"
+        guard let paths = try? fm.subpathsOfDirectory(atPath: folderURL.path) else { return }
+        guard let contentsSub = paths.first(where: {
+            $0 == "versions/1/contents" || $0.hasSuffix("/versions/1/contents")
+        }) else { return }
+        let contentsDir = folderURL.appendingPathComponent(contentsSub)
+        let rootInfo = contentsDir.appendingPathComponent(infoName)
+        guard !fm.fileExists(atPath: rootInfo.path) else { return } // 已在根层，正好。
+        // 塞在壁纸目录里的同名的文件：挪到根层（防重名先删）。
+        if let misplaced = paths.first(where: { $0.hasSuffix("/" + infoName) }) {
+            try? fm.removeItem(atPath: rootInfo.path)
+            try? fm.moveItem(at: folderURL.appendingPathComponent(misplaced),
+                             to: rootInfo)
+            InstallLog.shared.append("vellum: userInfo 原本塞在壁纸目录里，已挪到 contents 根层。")
+            return
+        }
+        // 哪儿都没有：照朋友的可用包补一份。代表文件名取壁纸目录名
+        // （旧 id 前缀随后由 renameDescriptorContentsToMatch 一起换）。
+        let wallpaperDirName = paths
+            .compactMap { sub -> String? in
+                guard sub.hasPrefix(contentsSub + "/") else { return nil }
+                let relative = sub.dropFirst(contentsSub.count + 1)
+                guard !relative.isEmpty else { return nil }
+                let first = relative.split(separator: "/").first.map(String.init) ?? ""
+                return first.hasSuffix(".wallpaper") ? first : nil
+            }
+            .first
+        var info: [String: Any] = [
+            "posterEnvironmentOverrides": Data(base64Encoded: "e30=") ?? Data()
+        ]
+        if let wallpaperDirName {
+            info["wallpaperRepresentingFileName"] = wallpaperDirName
+        }
+        guard let data = try? PropertyListSerialization.data(
+            fromPropertyList: info, format: .xml, options: 0) else {
+            InstallLog.shared.append("vellum: userInfo 补写失败，继续装（多数不碍事）。")
+            return
+        }
+        try? data.write(to: rootInfo)
+        InstallLog.shared.append("vellum: userInfo 原包没有，已照朋友包补一份到 contents 根层。")
     }
 
     /// 把 Wallpaper.plist 内层的 assets.lockAndHome.default.identifier 也换成
