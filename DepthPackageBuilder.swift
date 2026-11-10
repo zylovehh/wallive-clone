@@ -113,6 +113,9 @@ public enum DepthPackageBuilder {
         // 找第一个 .wallpaper 目录里的 Wallpaper.plist（跟 zip 版一致只处理一个）。
         let wallDirNames = (try? fm.contentsOfDirectory(atPath: contentsDir.path))?
             .filter { $0.hasSuffix(".wallpaper") } ?? []
+        if wallDirNames.isEmpty {
+            log("深景补齐：contents 里没有 .wallpaper 目录，跳过浮动层改名（配置照补）。")
+        }
         if let wallName = wallDirNames.first {
             let wallpaperDir = contentsDir.appendingPathComponent(wallName)
             let plistURL = wallpaperDir.appendingPathComponent("Wallpaper.plist")
@@ -137,6 +140,8 @@ public enum DepthPackageBuilder {
                     } catch {
                         log("深景补齐：浮动层改名没成（\(error.localizedDescription)），继续补配置。")
                     }
+                } else {
+                    log("深景补齐：清单指的浮动层「\(floatingFile)」目录不在包里，跳过改名（配置照补）。")
                 }
                 if renamed {
                     def["floatingAnimationFileNameKey"] = newFile
@@ -148,6 +153,15 @@ public enum DepthPackageBuilder {
                         try? data.write(to: plistURL)
                     }
                     log("深景补齐：浮动层加了 Clownfish_ 前缀。")
+                }
+            } else {
+                let current = def["floatingAnimationFileNameKey"] as? String
+                if current == nil {
+                    log("深景补齐：清单里没有浮动层键（双层包），跳过改名（配置照补）。")
+                } else if current!.isEmpty {
+                    log("深景补齐：清单浮动层键是空的，跳过改名（配置照补）。")
+                } else {
+                    log("深景补齐：浮动层已带 Clownfish_ 前缀，跳过改名（配置照补）。")
                 }
             }
         }

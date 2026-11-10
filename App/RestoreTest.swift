@@ -2241,6 +2241,12 @@ enum RestoreTest {
             InstallLog.shared.append("FILE:改名：\(name) → \(newName)")
         }
         // 2 + 3. 两个 plist 里的文件名引用跟着换前缀。
+        // V1.15 修复（V1.9 起的真凶）：原实现在清单最外层找这几个键，但
+        // Wallpaper.plist 里 backgroundAnimationFileName / foregroundAnimationFileName /
+        // floatingAnimationFileNameKey 都藏在 assets.lockAndHome.default 下面——
+        // 顶层找不到，一个值都没改过，装出去清单指着旧前缀的文件，提供方
+        // 找不着层，图库卡片就是黑的；浮动层改名也因此悄悄跳过（清单里的
+        // 旧名字在目录里已不存在）。
         let fix: (String) -> String = { value in
             guard let dotRange = value.range(of: "^\\d+\\.", options: .regularExpression) else { return value }
             return "\(newId)." + value[dotRange.upperBound...]
@@ -2250,21 +2256,37 @@ enum RestoreTest {
                 let name = url.lastPathComponent
                 guard name == "Wallpaper.plist"
                         || name == "com.apple.posterkit.provider.contents.userInfo" else { continue }
-                guard var plist = try? PosterBoardPlist.load(contentsOf: url) else { continue }
-                var changed = false
-                for key in ["backgroundAnimationFileName",
-                            "foregroundAnimationFileName",
-                            "floatingAnimationFileNameKey",
-                            "wallpaperRepresentingFileName"] {
-                    if let value = plist[key] as? String {
-                        let fixed = fix(value)
-                        if fixed != value { plist[key] = fixed; changed = true }
-                    }
+                guard var plist = try? PosterBoardPlist.load(contentsOf: url) else {
+                    InstallLog.shared.append("FILE:清单读不出，没改前缀：\(url.lastPathComponent)")
+                    continue
                 }
-                guard changed else { continue }
+                var changedCount = 0
+                func fixDeep(_ value: Any) -> Any {
+                    if let s = value as? String {
+                        let fixed = fix(s)
+                        if fixed != s { changedCount += 1 }
+                        return fixed
+                    }
+                    if let d = value as? [String: Any] {
+                        var out = d
+                        for (k, v) in d { out[k] = fixDeep(v) }
+                        return out
+                    }
+                    if let a = value as? [Any] {
+                        return a.map { fixDeep($0) }
+                    }
+                    return value
+                }
+                guard let fixedPlist = fixDeep(plist) as? [String: Any] else { continue }
+                plist = fixedPlist
+                guard changedCount > 0 else { continue }
                 if let data = try? PropertyListSerialization.data(
                     fromPropertyList: plist, format: .xml, options: 0) {
                     try? data.write(to: url)
+                    InstallLog.shared.append(
+                        "vellum: \(name) 里改了 \(changedCount) 处文件名前缀（→\(newId)）。")
+                } else {
+                    InstallLog.shared.append("FILE:清单写回没成：\(name)")
                 }
             }
         }
