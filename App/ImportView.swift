@@ -574,14 +574,15 @@ private struct ImportDetailView: View {
                 // 登记这两项没有，核对看日志框。成功只写四个字，载荷数、行数、
                 // 描述符这些长日志留在日志框里，不显示在结果区。
                 installResult = "安装成功"
-                // 刷新没确认就补一次只重启桌面。Vellum 没配对时用的也是这招
-                //（原话："没有配对文件，跳过隧道重启（只用系统自带的重启桌面
-                // 方式）"），桌面没动静就退回重启手机。网页 20 秒自动撤
-                //（见 DesktopRestart.trigger），不会一直在后台压内存。
+                // V1.5：27.0 真机两次验证，没配对时补网页重启桌面会把锁屏图库
+                // 卡死（长按只飞时钟、图库不弹）。所以没配对不再自动刷，
+                // 直接让用户重启手机——重启是全新读取，表和文件都写好了，
+                // 新旧壁纸和"添加"那步应该都正常。配对路刷新没确认才补网页法。
                 if !(report.refresh?.confirmed ?? false) {
-                    DesktopRestart.trigger()
-                    if !state.hasPairingFile {
-                        installResult = "安装成功：正在用网页方式重启桌面（约几秒）。桌面没动静的话，重启一次手机再看。"
+                    if state.hasPairingFile {
+                        DesktopRestart.trigger()
+                    } else {
+                        installResult = "安装成功：文件、表都写好了。重启手机，然后锁屏长按进图库查看（新旧壁纸都应该在）。"
                     }
                 }
             } else if report.mode == .test {
