@@ -263,10 +263,15 @@ final class AppState: ObservableObject {
                 onProgress: onProgress)
             let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
                 + "Extensions/\(outcome.extensionID)/configurations"
+            // 没配对走的是 Vellum 同款路：没写 configurations，报告里不凑那行。
+            let noPairing = !hasPairingFile
+            let injectResults = noPairing
+                ? outcome.injectResults
+                : [InjectResult(targetParentDir: configurationsDir, ok: true, error: nil)]
+                    + outcome.injectResults
             let report = InstallReport(
                 descriptorUUID: outcome.descriptorUUID,
-                injectResults: [InjectResult(targetParentDir: configurationsDir,
-                                             ok: true, error: nil)] + outcome.injectResults,
+                injectResults: injectResults,
                 preferencesWritten: outcome.preferencesWritten,
                 verifyResults: [],
                 registration: nil,
@@ -274,10 +279,15 @@ final class AppState: ObservableObject {
                 //（含没配对）就由界面补一次本地网页法只重启桌面。
                 refresh: RefreshResult(confirmed: outcome.refreshConfirmed),
                 mode: .backup,
-                backupSummary: "备份还原已完成（\(outcome.payloadCount) 个载荷，"
-                    + "商店：\(outcome.storeSummary)）。" + (outcome.needsReboot
-                        ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
-                        : "PosterBoard 已刷新，去锁屏图库查看，出现后再点设为墙纸组合。"))
+                backupSummary: noPairing
+                    ? "壁纸已写好（人家同款，只写描述符目录，表和偏好没碰）。"
+                        + (outcome.needsReboot
+                            ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
+                            : "去锁屏图库查看，出现后再点设为墙纸组合。")
+                    : "备份还原已完成（\(outcome.payloadCount) 个载荷，"
+                        + "商店：\(outcome.storeSummary)）。" + (outcome.needsReboot
+                            ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
+                            : "PosterBoard 已刷新，去锁屏图库查看，出现后再点设为墙纸组合。"))
             installHistory.append(report.descriptorUUID)
             installReports.append(report)
             return report

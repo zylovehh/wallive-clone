@@ -581,7 +581,8 @@ private struct ImportDetailView: View {
                     if state.hasPairingFile {
                         installResult = "安装成功：配对刷新没确认。重启手机，然后锁屏长按进图库查看。"
                     } else {
-                        installResult = "安装成功：文件、表都写好了。重启手机，然后锁屏长按进图库查看（新旧壁纸都应该在）。"
+                        // 没配对（V1.9 起 Vellum 同款）：只写了描述符目录，表和偏好没碰。
+                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。重启手机，然后锁屏长按进图库查看。"
                     }
                 }
             } else if report.mode == .test {

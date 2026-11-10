@@ -129,7 +129,7 @@ enum WorseQueryEscape {
             guard probeOK else {
                 wq_release(handle)
                 log(requireWrite
-                    ? "扩展拿到了，但目标还是写不进，探测失败，扩展已还回去。本次安装终止。"
+                    ? "扩展拿到了，但目标还是写不进，探测失败，扩展已还回去。"
                     : "扩展拿到了，但目标读不了，探测失败，扩展已还回去。")
                 return (nil, "沙箱扩展已获取，但目标仍不可写（probe 失败）", flagDesc.isEmpty ? nil : flagDesc)
             }
@@ -154,7 +154,7 @@ enum WorseQueryEscape {
         case 13: tried = "class 7 三组 + class 13 免组兜底路都"
         default: tried = "class 7 三组 flags 都"
         }
-        log("逃逸没成（\(reason)，\(tried)试过，最后一组：class \(lastClass) 第 \(lastIndex + 1) 组）。27.2 不再回落老通道，本次安装终止。")
+        log("逃逸没成（\(reason)，\(tried)试过，最后一组：class \(lastClass) 第 \(lastIndex + 1) 组）。")
         return (nil, reason, "最后失败：class \(lastClass) 第 \(lastIndex + 1) 组 flags，\(tried)均试过")
     }
 

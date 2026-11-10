@@ -1049,6 +1049,8 @@ enum RestoreTest {
         }
         defer { try? fm.removeItem(at: copyDir) }
         rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
+        // V1.9：文件名前缀也整体换成新 id（人家同款，id 和文件名一致）。
+        renameDescriptorContentsToMatch(in: copyDir, newId: numericId)
 
         // 3. 只写一个目录：主扩展 descriptors/<新UUID>。同名旧目录先删再写，
         //    防止上次装剩的半新半旧混在一起。
@@ -2179,6 +2181,59 @@ enum RestoreTest {
         let sidecar = folderURL.appendingPathComponent(sidecarName)
         if !fm.fileExists(atPath: sidecar.path) {
             try? String(identifier).data(using: .utf8)?.write(to: sidecar)
+        }
+    }
+
+    /// 把描述符里所有带旧 id 前缀的名字整体换成新 id（Vellum 同款：装出来的
+    /// 描述符里，id 和文件名从头到尾一致）。V1.8 只改三个身份字段、文件名
+    /// 留着旧 id，系统重扫时对不上号、图库不认——这是重启后不出现的最大
+    /// 嫌疑（人家参照树和朋友的可用包里，id 和文件名前缀都是同一个数）。
+    /// 改三处：
+    /// 1. 目录/文件名开头 `<旧id>.` → `<新id>.`（contents 壁纸目录、.ca 图层目录）；
+    /// 2. Wallpaper.plist 的 backgroundAnimationFileName / foregroundAnimationFileName；
+    /// 3. userInfo 的 wallpaperRepresentingFileName。
+    /// （id 本身由 rewriteDescriptorIdentity 改好，这里不碰。）
+    private static func renameDescriptorContentsToMatch(in folderURL: URL, newId: Int) {
+        let fm = FileManager.default
+        // 1. 名字带旧 id 前缀的目录/文件：从深到浅换前缀（先深后浅，防止
+        //    先改父目录让后面收集的路径失效）。
+        var entries: [URL] = []
+        if let enumerator = fm.enumerator(at: folderURL, includingPropertiesForKeys: nil) {
+            while let url = enumerator.nextObject() as? URL { entries.append(url) }
+        }
+        for url in entries.sorted(by: { $0.path.count > $1.path.count }) {
+            let name = url.lastPathComponent
+            guard let dotRange = name.range(of: "^\\d+\\.", options: .regularExpression) else { continue }
+            let newName = "\(newId)." + name[dotRange.upperBound...]
+            let newURL = url.deletingLastPathComponent().appendingPathComponent(newName)
+            try? fm.moveItem(at: url, to: newURL)
+        }
+        // 2 + 3. 两个 plist 里的文件名引用跟着换前缀。
+        let fix: (String) -> String = { value in
+            guard let dotRange = value.range(of: "^\\d+\\.", options: .regularExpression) else { return value }
+            return "\(newId)." + value[dotRange.upperBound...]
+        }
+        if let enumerator = fm.enumerator(at: folderURL, includingPropertiesForKeys: nil) {
+            while let url = enumerator.nextObject() as? URL {
+                let name = url.lastPathComponent
+                guard name == "Wallpaper.plist"
+                        || name == "com.apple.posterkit.provider.contents.userInfo" else { continue }
+                guard var plist = try? PosterBoardPlist.load(contentsOf: url) else { continue }
+                var changed = false
+                for key in ["backgroundAnimationFileName",
+                            "foregroundAnimationFileName",
+                            "wallpaperRepresentingFileName"] {
+                    if let value = plist[key] as? String {
+                        let fixed = fix(value)
+                        if fixed != value { plist[key] = fixed; changed = true }
+                    }
+                }
+                guard changed else { continue }
+                if let data = try? PropertyListSerialization.data(
+                    fromPropertyList: plist, format: .xml, options: 0) {
+                    try? data.write(to: url)
+                }
+            }
         }
     }
 
