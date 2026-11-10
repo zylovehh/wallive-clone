@@ -1051,6 +1051,15 @@ enum RestoreTest {
         rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
         // V1.9：文件名前缀也整体换成新 id（人家同款，id 和文件名一致）。
         renameDescriptorContentsToMatch(in: copyDir, newId: numericId)
+        // V1.11：内层 assets.lockAndHome.default.identifier 也得跟着换——
+        // 提供方按内层 id 找 .ca 动画文件（编包器那路有 alignedForFamily 干
+        // 这事，无配对路之前漏了）。只改顶层的话，系统拿旧 id 找改名后的
+        // 文件，找不着，图库卡片就一直转圈（V1.10 真机黑块卡加载）。
+        syncDescriptorInnerIdentifier(in: copyDir, id: numericId)
+        // V1.11：建议元数据里嵌着旧 id（"<旧id>.DYNAMIC"），朋友的可用包
+        // 没这个文件照样能用，直接删掉，省得图库按旧 id 找条目。
+        try? fm.removeItem(at: copyDir.appendingPathComponent(
+            "com.apple.posterkit.provider.identifierURL.suggestionMetadata.plist"))
 
         // 3. 只写一个目录：主扩展 descriptors/<新UUID>。同名旧目录先删再写，
         //    防止上次装剩的半新半旧混在一起。
@@ -2233,6 +2242,32 @@ enum RestoreTest {
                     fromPropertyList: plist, format: .xml, options: 0) {
                     try? data.write(to: url)
                 }
+            }
+        }
+    }
+
+    /// 把 Wallpaper.plist 内层的 assets.lockAndHome.default.identifier 也换成
+    /// 新 id（V1.11）。提供方按这个内层 id 找 .ca 动画文件（编包器那路的
+    /// alignedForFamily 注释原话），只改顶层的话内外对不上，图库卡片渲染
+    /// 不出来、一直转圈。朋友的可用包里外是同一个数，系统参照树也一样。
+    /// 只在无配对路调用；配对路由编包器 alignedForFamily 对齐，不在这改。
+    private static func syncDescriptorInnerIdentifier(in folderURL: URL, id: Int) {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: folderURL,
+                                             includingPropertiesForKeys: [.isRegularFileKey],
+                                             options: [.skipsHiddenFiles]) else { return }
+        for case let fileURL as URL in enumerator where fileURL.lastPathComponent == "Wallpaper.plist" {
+            guard var plist = try? PosterBoardPlist.load(contentsOf: fileURL),
+                  var assets = plist["assets"] as? [String: Any],
+                  var lockAndHome = assets["lockAndHome"] as? [String: Any],
+                  var def = lockAndHome["default"] as? [String: Any] else { continue }
+            def["identifier"] = id
+            lockAndHome["default"] = def
+            assets["lockAndHome"] = lockAndHome
+            plist["assets"] = assets
+            if let data = try? PropertyListSerialization.data(
+                fromPropertyList: plist, format: .xml, options: 0) {
+                try? data.write(to: fileURL)
             }
         }
     }
