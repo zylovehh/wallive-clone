@@ -248,7 +248,7 @@ final class CatalogStore: ObservableObject {
                 switch code {
                 case 401: hint = "钥匙失效了，去管理员页重新保存一把"
                 case 403: hint = "这把钥匙没有写权限，检查授权范围"
-                case 409, 422: hint = "仓库刚有新改动没同步上，稍等几秒再操作一次"
+                case 409, 422: hint = "仓库刚变了，再点一次就行"
                 case 404: hint = "仓库里没找到要写的文件"
                 default: hint = "网络或服务暂时不给力"
                 }
@@ -258,8 +258,11 @@ final class CatalogStore: ObservableObject {
     }
 
     /// 把一整份目录表推到仓库（改置顶、增删都走这里），成功后刷新本机目录顺序。
+    /// 推之前先拉仓库最新表合并一次：别人同时加的条目不丢，自己删的条目不回来；
+    /// 这样仓库刚变了也不会报 409，基本一次就推上去，不用等几秒再点一次。
     func pushCatalog(_ newItems: [CatalogItem], token: String) async throws {
-        let dicts: [[String: Any]] = newItems.map { item in
+        let merged = await mergedCatalog(newItems, token: token)
+        let dicts: [[String: Any]] = merged.map { item in
             ["id": item.id, "title": item.title, "tags": item.tags,
              "thumbnail": item.thumbnailURL, "preview": item.previewURL,
              "package": item.packageURL, "pinned": item.pinned, "downloads": item.downloads]
@@ -269,10 +272,45 @@ final class CatalogStore: ObservableObject {
         try await githubPut(
             path: Self.catalogPath, contentBase64: data.base64EncodedString(),
             message: "Update catalog via app", token: token)
-        items = Self.sortedItems(newItems)
+        items = Self.sortedItems(merged)
         errorMessage = ""
         // 推完顺手清 CDN 缓存，用户端马上能看到新目录（失败不影响主流程）。
         await purgeCDNCache(paths: [Self.catalogPath])
+    }
+
+    /// 推前合并：以本地 newItems 为准（用户这次的操作），再把仓库里有、
+    /// 本地这次没有、且本地原来也没有的条目（别人同时加的）补进来，插到置顶后面。
+    /// 本地原来有、这次没了的，是用户刚删的，不补回来。
+    /// 拉不到最新表就直接用本地的，不挡推送。
+    private func mergedCatalog(_ newItems: [CatalogItem], token: String) async -> [CatalogItem] {
+        guard let serverItems = try? await githubCatalogItems(token: token) else { return newItems }
+        let baseIDs = Set(items.map { $0.id })
+        let newIDs = Set(newItems.map { $0.id })
+        let extras = serverItems.filter { !newIDs.contains($0.id) && !baseIDs.contains($0.id) }
+        guard !extras.isEmpty else { return newItems }
+        var merged = newItems
+        let insertAt = merged.firstIndex(where: { !$0.pinned }) ?? merged.endIndex
+        merged.insert(contentsOf: extras, at: insertAt)
+        return merged
+    }
+
+    /// 从 GitHub 接口拉当前目录表（带钥匙走 API 不走 CDN，拿到的就是最新版）。
+    /// 404 当空表，不算错；其他错直接抛，让调用方决定。
+    private func githubCatalogItems(token: String) async throws -> [CatalogItem] {
+        var request = URLRequest(url: githubContentsURL(path: Self.catalogPath))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 404 { return [] }
+        guard status == 200 else { throw PushError.http(status) }
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let b64 = dict["content"] as? String,
+              let raw = Data(base64Encoded: b64.replacingOccurrences(of: "\n", with: "")),
+              let doc = try? JSONDecoder().decode(CatalogDocument.self, from: raw)
+        else { throw PushError.http(status) }
+        return doc.items
     }
 
     /// 上传一个壁纸文件到仓库 wallpapers/ 目录（已有同名就覆盖，重试不报错）。
