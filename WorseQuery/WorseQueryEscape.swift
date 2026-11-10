@@ -69,7 +69,8 @@ enum WorseQueryEscape {
                   ?? String(data: data, encoding: .isoLatin1) else { return [] }
         var groups: [String] = []
         for m in matches(of: "group\\.[A-Za-z0-9._\\-]+", in: text) {
-            let name = String(text[m.range])
+            guard let r = Range(m.range, in: text) else { continue }
+            let name = String(text[r])
             guard !groups.contains(name),
                   !name.contains(".apple."),
                   !name.hasPrefix("group.com.apple") else { continue }
