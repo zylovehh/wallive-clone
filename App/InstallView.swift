@@ -95,9 +95,8 @@ struct InstallView: View {
             if state.hasPairingFile {
                 result = "安装完成，描述符 UUID：\(uuid)。配对刷新跑完去锁屏看；没确认就重启手机再看。"
             } else {
-                // 没配对（V1.10 起）：跟人家一样装完刷新桌面，不再让重启手机。
-                result = "安装完成，描述符 UUID：\(uuid)。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
-                DesktopRestart.trigger()
+                // 没配对（V1.10 起）：不自动刷新（用户要求防卡屏），提示去详情页点按钮。
+                result = "安装完成，描述符 UUID：\(uuid)。想刷新桌面（跟人家一样），去详情页点「刷新桌面」；不点屏幕啥事没有。"
             }
         } else if state.statusMessage.isEmpty {
             result = "安装未完成：先去“导入”选包；失败原因看提示或安装日志。"

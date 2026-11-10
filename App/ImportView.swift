@@ -604,9 +604,8 @@ private struct ImportDetailView: View {
                         installResult = "安装成功：配对刷新没确认。重启手机，然后锁屏长按进图库查看。"
                     } else {
                         // 没配对（V1.10 起 Vellum 同款）：只写了描述符目录，表和偏好
-                        // 没碰；装完跟人家一样刷新桌面，不再让重启手机。
-                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库看。"
-                        DesktopRestart.trigger()
+                        // 没碰。不自动刷新（用户要求防卡屏）：想刷自己点下面的按钮。
+                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。想跟人家一样刷新桌面，点下面的「刷新桌面」；不点屏幕啥事没有。"
                     }
                 }
             } else if report.mode == .test {
