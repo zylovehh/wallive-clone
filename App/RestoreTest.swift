@@ -1040,6 +1040,7 @@ enum RestoreTest {
             throw StepError(step: "解包", detail: "包里找不到描述符目录：descriptors/\(descriptorUUID)")
         }
         let numericId = Int.random(in: 9_999...99_999)
+        InstallLog.shared.append("vellum: 新编号 \(numericId)（装包时包里所有编号统一换成它）。")
         let copyDir = fm.temporaryDirectory
             .appendingPathComponent("wallive-clone-vellum-desc-\(UUID().uuidString)")
         do {
@@ -2180,9 +2181,18 @@ enum RestoreTest {
         while let fileURL = enumerator.nextObject() as? URL {
             let fileName = fileURL.lastPathComponent
             if fileName == sidecarName {
-                if let content = try? String(contentsOf: fileURL, encoding: .utf8),
-                   Int(content.trimmingCharacters(in: .whitespacesAndNewlines)) != nil {
-                    try? String(identifier).data(using: .utf8)?.write(to: fileURL)
+                // V1.14：不再挑"原值是数字才改"。朋友的可用包这份文件是数字
+                // 3141，跟清单、文件名前缀同一个数；我们的流程把其余全部换成
+                // 新数字 id，这份要是不改（原值是打包器新造的 UUID 就转不成
+                // 数字，被挑判断挡下），装出去里外两个编号，系统对不上号，
+                // 图库卡片就是黑的。一律写成新数字 id，配对路调用点同样要数字。
+                let oldContent = (try? String(contentsOf: fileURL, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                try? String(identifier).data(using: .utf8)?.write(to: fileURL)
+                if oldContent != String(identifier) {
+                    InstallLog.shared.append(
+                        "vellum: 身份文件原值「\(oldContent)」→ 改成「\(identifier)」"
+                        + "（清单、文件名前缀都用这个数）。")
                 }
             } else if fileName == "com.apple.posterkit.provider.contents.userInfo" {
                 if let updated = try? PosterBoardPlist.set(
@@ -2227,6 +2237,8 @@ enum RestoreTest {
             let newName = "\(newId)." + name[dotRange.upperBound...]
             let newURL = url.deletingLastPathComponent().appendingPathComponent(newName)
             try? fm.moveItem(at: url, to: newURL)
+            // V1.14：逐处改动记进日志（FILE: 行只进文件、不占屏幕）。
+            InstallLog.shared.append("FILE:改名：\(name) → \(newName)")
         }
         // 2 + 3. 两个 plist 里的文件名引用跟着换前缀。
         let fix: (String) -> String = { value in

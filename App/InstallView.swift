@@ -66,8 +66,8 @@ struct InstallView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-                // 成功不铺日志：只在失败时显示完整日志。
-                if !installLog.isEmpty && !result.hasPrefix("安装完成") {
+                // V1.14：成功也铺完整日志（用户要求日志记详细些，方便对着看）。
+                if !installLog.isEmpty {
                     Text("安装日志（可长按复制）").font(.headline)
                     ScrollView {
                         Text(installLog)
@@ -102,7 +102,7 @@ struct InstallView: View {
         } else if state.statusMessage.isEmpty {
             result = "安装未完成：先去“导入”选包；失败原因看提示或安装日志。"
         }
-        installLog = InstallLog.shared.tail(60)
+        installLog = InstallLog.shared.tail(200)
     }
 }
 // 只重启桌面，不重启手机。
