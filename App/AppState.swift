@@ -126,8 +126,9 @@ final class AppState: ObservableObject {
     }
 
     /// 安装当前包：本地暂存 → 经配对隧道写盘。返回实际装上的描述符 UUID。
-    /// 没配对也能装：没有配对记录时改走备份还原那条路（直读取表 + 逃逸
-    /// 直写，全程不碰配对隧道）；直写这条路没有配对走不了，不在这硬试。
+    /// 没配对也能装：没有配对记录时改走 Vellum 同款那条路（直读找库 +
+    /// 逃逸直写，只写一个描述符目录，不碰表和偏好，全程不碰配对隧道）；
+    /// 直写这条路没有配对走不了，不在这硬试。
     func install(host: String, forceRefresh: Bool = true) async -> String? {
         guard let data = packageData else { return nil }
         if !hasPairingFile {
@@ -173,10 +174,11 @@ final class AppState: ObservableObject {
         let version = deviceInfo?.productVersion ?? ""
         let build = deviceInfo?.buildVersion ?? ""
         let mode = applyChoice.resolvedMode(deviceVersion: version, buildVersion: build)
-        // 没配对也能装：直写和测试版两条路都要配对隧道，只有备份还原
-        //（直读取表 + 逃逸直写）不碰配对。没配对时固定走备份还原。
+        // 没配对也能装：直写和测试版两条路都要配对隧道，只有 Vellum 同款
+        // 那条（直读找库 + 逃逸直写，只写描述符目录）不碰配对。没配对时
+        // 固定走这条。
         if !hasPairingFile && mode != .backup {
-            InstallLog.shared.append("install: 没配对记录，这次固定走备份还原路（不用配对）。")
+            InstallLog.shared.append("install: 没配对记录，这次固定走 Vellum 同款路（不用配对）。")
             return try await installWithReportBackup(data: data, onProgress: onProgress)
         }
         if mode == .test {

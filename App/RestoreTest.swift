@@ -479,6 +479,15 @@ enum RestoreTest {
         // 有没有配对记录：pairingPath 为空 = 没配对。没配对时只走不碰
         // 配对隧道的路（直读、逃逸直写、本地已存表），FFI 那些路跳过。
         let hasPairing = !pairingPath.isEmpty
+
+        // 无配对（V1.8 起，Vellum 同款）：只写一个描述符目录，其他一概不碰。
+        // Vellum 诊断日志（apply 全程数据库只读不写）+ 朋友的可用包实物
+        //（整包没有偏好/configurations/db，只有 descriptors/<UUID>/ +
+        // versions/1，装好重启也不丢）双重印证。配对路一字不动。
+        if pairingPath.isEmpty {
+            return try restoreNoPairing(packageData: packageData, report: &report,
+                                        onProgress: onProgress, isCancelled: isCancelled)
+        }
         let workDir = fm.temporaryDirectory.appendingPathComponent("wallive-clone-restore-\(stamp)")
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
@@ -944,6 +953,144 @@ enum RestoreTest {
                               storeSummary: report["store_after"] as? String,
                               preferencesWritten: true, refreshConfirmed: refreshConfirmed, rebootNeeded: rebootNeeded,
                               injectResults: descriptorInjects,
+                              json: jsonString(report))
+    }
+
+    // MARK: - 无配对安装（Vellum 同款，只写描述符目录）
+
+    /// 无配对安装（V1.8 起，Vellum 同款）：
+    /// 1. 逃逸进应用数据总目录，翻出壁纸库，读一次表确认是系统正在读的那份库；
+    /// 2. 包里的描述符目录（descriptors/<UUID>/，跟 Vellum 装好的实物同款形状：
+    ///    侧标文件 + providerInfo.plist + versions/1）拷副本，三个身份字段
+    ///    （描述符 sidecar、userInfo、Wallpaper.plist）对齐同一个新数字 id；
+    /// 3. 只写一个目录：Extensions/com.apple.WallpaperKit.CollectionsPoster/
+    ///    descriptors/<新UUID>；
+    /// 4. 完事提示重启手机。不写偏好、不写 configurations、不插行、不写回表、
+    ///    不清 wal/shm——Vellum 日志里数据库只读不写，行是系统重扫时自己补的。
+    /// 旧路（configurations + 插表行 + 写回表）在 27.0 上重启后壁纸消失
+    ///（表行还在、图库没有），就是多了那几步：系统重启按描述符重建库，
+    /// 只认描述符长出来的形状。这条新路整个照 Vellum 抄。
+    private static func restoreNoPairing(packageData: Data, report: inout [String: Any],
+                                         onProgress: ((String, Double) -> Void)?,
+                                         isCancelled: @escaping () -> Bool) throws -> RestoreOutcome {
+        try checkCancelled(isCancelled)
+        let fm = FileManager.default
+        let stamp = timeStamp()
+        let restoreStart = Date()
+        let elapsed: () -> String = { String(format: "%.1fs", Date().timeIntervalSince(restoreStart)) }
+        let workDir = fm.temporaryDirectory.appendingPathComponent("wallive-clone-vellum-\(stamp)")
+        try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: workDir) }
+
+        // 1. 逃逸 + 找壁纸库：总目录直翻（头一回也直读），翻到的容器读一次表
+        //    验过才算系统在读的那份；翻不到再试上次记下的路径。
+        onProgress?("正在找壁纸库…", 0.05)
+        var escapeHandle: Int64? = nil
+        defer { WorseQueryEscape.release(escapeHandle) }
+        var container: String? = nil
+        if let found = discoverAndReadDirect(workDir: workDir) {
+            escapeHandle = found.handle
+            container = found.container
+            report["escape"] = ["ok": true, "detail": "总目录直翻"]
+            InstallLog.shared.append("vellum: 壁纸库找到了（\(elapsed())）：\(found.container)。")
+        }
+        if container == nil, let cached = cachedContainerPath() {
+            let esc = WorseQueryEscape.consume(target: cached, log: {
+                InstallLog.shared.append("vellum: \($0)")
+            })
+            if let h = esc.handle {
+                if readStoreDirect(container: cached, workDir: workDir) != nil {
+                    escapeHandle = h
+                    container = cached
+                    report["escape"] = ["ok": true, "detail": esc.detail ?? ""]
+                    InstallLog.shared.append("vellum: 上次记下的路径能用（\(elapsed())）：\(cached)。")
+                } else {
+                    WorseQueryEscape.release(h)
+                    InstallLog.shared.append("vellum: 上次记下的路径读不到表（可能路径变了）。")
+                }
+            }
+        }
+        guard let container else {
+            throw StepError(step: "找壁纸库",
+                            detail: "直读没找到壁纸库。确认回环 VPN 连着、App 的 App Group 签名没被改掉（应为 \(WorseQueryEscape.appGroup)），再试一次。")
+        }
+        report["container"] = container
+
+        // 2. 暂存包、拷描述符副本、对齐三个身份字段（和配对路同一个改法）。
+        try checkCancelled(isCancelled)
+        onProgress?("正在准备壁纸…", 0.25)
+        let installer = DescriptorInstaller(zip: ZipFoundationAdapter())
+        let stage: URL
+        let descriptorUUID: String
+        do {
+            (stage, descriptorUUID) = try installer.stage(packageData)
+        } catch let error as TendiesPackage.Error {
+            switch error {
+            case .notATendiesPackage:
+                throw StepError(step: "解包", detail: "这不是一个 .tendies / .wallive 包。")
+            case .missingWallpaperDirectory:
+                throw StepError(step: "解包", detail: "包里找不到壁纸目录，结构不对。")
+            case .missingWallpaperPlist:
+                throw StepError(step: "解包", detail: "包里找不到 Wallpaper.plist，结构不对。")
+            }
+        }
+        let source = stage.appendingPathComponent("descriptors").appendingPathComponent(descriptorUUID)
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue else {
+            throw StepError(step: "解包", detail: "包里找不到描述符目录：descriptors/\(descriptorUUID)")
+        }
+        let numericId = Int.random(in: 9_999...99_999)
+        let copyDir = fm.temporaryDirectory
+            .appendingPathComponent("wallive-clone-vellum-desc-\(UUID().uuidString)")
+        do {
+            try fm.copyItem(at: source, to: copyDir)
+        } catch {
+            throw StepError(step: "写描述符", detail: "描述符目录拷副本失败：\(error.localizedDescription)")
+        }
+        defer { try? fm.removeItem(at: copyDir) }
+        rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
+
+        // 3. 只写一个目录：主扩展 descriptors/<新UUID>。同名旧目录先删再写，
+        //    防止上次装剩的半新半旧混在一起。
+        try checkCancelled(isCancelled)
+        onProgress?("正在写描述符…", 0.60)
+        guard let escapeHandle else {
+            throw StepError(step: "写描述符",
+                            detail: "沙箱逃逸没成，描述符写不进。重试一次；还不行就先恢复配对记录再装。")
+        }
+        let storeBase = container + PosterBoard.storePath(storeVersion)
+        let targetDir = storeBase
+            + "/Extensions/\(PosterBoard.collectionsExtension)/descriptors/\(descriptorUUID)"
+        try? fm.removeItem(atPath: targetDir)
+        do {
+            try directWriteDir(sourceDir: copyDir.path, targetDir: targetDir,
+                               log: { InstallLog.shared.append("vellum: \($0)") })
+        } catch {
+            throw StepError(step: "写描述符", detail: "描述符直写没成：\(error.localizedDescription)")
+        }
+        report["descriptors"] = [["target": targetDir, "ok": true]]
+        let fileCount = (try? fm.subpathsOfDirectory(atPath: copyDir.path).count) ?? 0
+        InstallLog.shared.append(
+            "vellum: 描述符写完（\(elapsed())）：\(targetDir)，\(fileCount) 个文件。"
+            + "不写表、不写 configurations、不写偏好——人家同款，行是系统重扫时自己补的。")
+
+        // 4. 完事：没有配对记录，隧道重启做不了（Vellum 同样跳过），直接报
+        //    重启手机。描述符已落盘，重启后系统重扫自己补行。
+        onProgress?("写完了", 1.0)
+        report["mode"] = "backup"
+        report["method"] = "vellum-descriptor-only"
+        report["elapsed_seconds"] = Date().timeIntervalSince(restoreStart)
+        let summary = "壁纸已写好（人家同款，只写描述符目录）：\(fileCount) 个文件进了图库目录，"
+            + "表和偏好一个字没碰。重启手机后去 设置 › 墙纸 › 添加新壁纸 › 合集 长按看。完整结果见下面日志框."
+        return RestoreOutcome(success: true, summary: summary,
+                              descriptorUUID: descriptorUUID, posterId: nil,
+                              extensionID: PosterBoard.collectionsExtension,
+                              payloadCount: fileCount,
+                              storeSummary: nil,
+                              preferencesWritten: false,
+                              refreshConfirmed: false, rebootNeeded: true,
+                              injectResults: [InjectResult(targetParentDir: targetDir,
+                                                           ok: true, error: nil)],
                               json: jsonString(report))
     }
 

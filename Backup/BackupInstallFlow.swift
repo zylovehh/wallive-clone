@@ -37,7 +37,11 @@ enum BackupInstallFlow {
                         log: @escaping BackupLog = { _ in },
                         onProgress: ((String, Double) -> Void)? = nil) async throws -> Outcome {
         onProgress?("正在取表…", 0.05)
-        log("备份还原：走改表还原（拿表 → 插行 → 写文件 → 写回表 → 写偏好 → 刷新），不用整机备份。")
+        // 没配对：RestoreTest.restore 一进来就分岔到 Vellum 同款路
+        //（只写一个描述符目录），下面这句日志跟着说人话。
+        log(pairingPath.isEmpty
+            ? "没配对：走 Vellum 同款路（只写一个描述符目录，不碰表和偏好）。"
+            : "备份还原：走改表还原（拿表 → 插行 → 写文件 → 写回表 → 写偏好 → 刷新），不用整机备份。")
         // RestoreTest.runRestore 是同步阻塞的（FFI + SQLite），放后台线程跑。
         // 停止按钮取消的是上层 Task，后台那路看不到取消标记，所以用取消盒
         // 中转：上层取消时这里的轮询立刻抛取消、关弹窗，不等后台回来；
