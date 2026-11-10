@@ -125,85 +125,35 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 安装当前包：本地暂存 → 经配对隧道写盘。返回实际装上的描述符 UUID。
-    /// 没配对也能装：没有配对记录时改走 Vellum 同款那条路（直读找库 +
-    /// 逃逸直写，只写一个描述符目录，不碰表和偏好，全程不碰配对隧道）；
-    /// 直写这条路没有配对走不了，不在这硬试。
+    /// 安装当前包：统一走 Vellum 同款那条路（直读找库 + 逃逸直写，
+    /// 只写一个描述符目录，不碰表和偏好，全程不碰配对隧道）。
+    /// V1.19：不分系统版本、不看配对记录，一律这条路；直写隧道那条
+    /// 停用，host / forceRefresh 留着签名兼容，不再使用。
     func install(host: String, forceRefresh: Bool = true) async -> String? {
         guard let data = packageData else { return nil }
-        if !hasPairingFile {
-            do {
-                InstallLog.shared.append("install: 没配对记录，改走备份还原路（不用配对）。")
-                let outcome = try await BackupInstallFlow.install(
-                    packageData: data, pairingPath: "",
-                    log: { InstallLog.shared.append($0) })
-                return outcome.descriptorUUID
-            } catch {
-                statusMessage = "安装失败：\(error.localizedDescription)"
-                return nil
-            }
-        }
         do {
-            let uuid = try await InstallFlow.install(
-                packageData: data, zip: zip,
-                pairingPath: pairingFileURL.path, targetHost: host, forceRefresh: forceRefresh)
-            installHistory.append(uuid)
-            return uuid
+            let outcome = try await BackupInstallFlow.install(
+                packageData: data,
+                pairingPath: "",
+                log: { InstallLog.shared.append($0) })
+            installHistory.append(outcome.descriptorUUID)
+            return outcome.descriptorUUID
         } catch {
             statusMessage = "安装失败：\(error.localizedDescription)"
             return nil
         }
     }
 
-    /// 诊断版安装：本地暂存 → 经配对隧道写盘，返回完整报告。
+    /// 诊断版安装：统一走 Vellum 同款那条路（只写描述符、不碰表和偏好、
+    /// 全程不碰配对隧道），返回完整报告。
     /// 与旧 install() 的区别：逐目录结果记进 installReports，诊断页可显示；
     /// 暂存步骤与旧入口相同（DescriptorInstaller.stage），不改写盘逻辑、
     /// 配对、偏好键与路径、结构版本映射、标识策略。
-    /// 先读设备身份、按四态选择定模式：直写走下面原有流程一字不动；
-    /// 备份走 `BackupInstallFlow`（改表还原：拿表 → 插行 → 写文件 → 写回表
-    /// → 写偏好 → 刷新），不用整机备份；刷新确认了不用重启手机。
-    /// 测试版走 `BackupInstallFlow.installTest`（只写描述符、不写表），
-    /// 装完要重启手机（报告里 `mode` 是 `.test`）。
+    /// V1.19：不再读设备身份、不再按四态选择分路——直写隧道和备份改表
+    /// 两条路都停用，host / forceRefresh 留着签名兼容，不再使用。
     func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
         guard let data = packageData else { return nil }
-        // 安装开始先读一次设备身份（只读不写）。读不到就用缓存的，
-        // 连缓存都没有就按空版本算——`resolved()` 会 fail closed 走备份路，
-        // 不猜版本走直写。测试版不看设备版本，点了就是测试版。
-        onProgress?("正在读设备版本…", 0.02)
-        await refreshDeviceInfo()
-        let version = deviceInfo?.productVersion ?? ""
-        let build = deviceInfo?.buildVersion ?? ""
-        let mode = applyChoice.resolvedMode(deviceVersion: version, buildVersion: build)
-        // 没配对也能装：直写和测试版两条路都要配对隧道，只有 Vellum 同款
-        // 那条（直读找库 + 逃逸直写，只写描述符目录）不碰配对。没配对时
-        // 固定走这条。
-        if !hasPairingFile && mode != .backup {
-            InstallLog.shared.append("install: 没配对记录，这次固定走 Vellum 同款路（不用配对）。")
-            return try await installWithReportBackup(data: data, onProgress: onProgress)
-        }
-        if mode == .test {
-            return try await installWithReportTest(data: data, onProgress: onProgress)
-        }
-        if mode == .backup {
-            return try await installWithReportBackup(data: data, onProgress: onProgress)
-        }
-        do {
-            onProgress?("正在准备安装包…", 0.05)
-            let installer = DescriptorInstaller(zip: zip)
-            let (stage, descriptorUUID) = try installer.stage(data)
-            let report = try await AirliftInstaller.installWithReport(
-                stagedDirectory: stage, descriptorUUID: descriptorUUID,
-                pairingPath: pairingFileURL.path, targetHost: host, forceRefresh: forceRefresh,
-                onProgress: onProgress)
-            installHistory.append(report.descriptorUUID)
-            installReports.append(report)
-            return report
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            statusMessage = "安装失败：\(error.localizedDescription)"
-            return nil
-        }
+        return try await installWithReportBackup(data: data, onProgress: onProgress)
     }
 
     /// 测试版安装：走只写描述符（不读表、不插行、不写回），写完偏好等
@@ -244,28 +194,31 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 备份路安装：走改表还原（拿表 → 插行 → 写文件 → 写回表 → 写偏好 → 刷新），
-    /// 不用整机备份。结果同样记进 installReports，报告里 `mode` 是 `.backup`。
-    /// 刷新确认了不用重启手机，没确认才要重启（看 `backupSummary`）。
-    /// 不再要设备身份：新流程不用 UDID 和版本号（容器走配对找，门控在
-    /// installWithReport 那步按设备版本解析时已经做过了）；配对记录
-    /// 和包还是要的，没有就直接返回。
+    /// 备份路安装（V1.19 起是唯一安装路）：走 Vellum 同款那条（直读找库 +
+    /// 逃逸直写，只写描述符目录）。结果记进 installReports，报告里
+    /// `mode` 是 `.backup`。装完界面补本地桌面刷新，重启手机只作后备按钮。
+    /// V1.19：配对路径恒传空串——这条路全程不碰配对隧道，绝不拿着配对
+    /// 文件路径去碰隧道（27.2 上隧道必须回环 VPN）。走没走成 Vellum 同款
+    /// 用结果的 `preferencesWritten` 判断：这条路从不写偏好，为 false；
+    /// 老的改表路才为 true。
     private func installWithReportBackup(data: Data,
                                          onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
         do {
             InstallLog.shared.clear()
             let outcome = try await BackupInstallFlow.install(
                 packageData: data,
-                // 没配对时传空串：让还原流程明确知道没配对，走直写，
-                // 绝不拿着一个不存在的配对文件路径去碰配对隧道。
-                pairingPath: hasPairingFile ? pairingFileURL.path : "",
+                // 恒传空串：这条路全程不碰配对隧道，绝不拿着配对文件路径
+                // 去碰配对隧道（27.2 上隧道必须回环 VPN）。
+                pairingPath: "",
                 log: { InstallLog.shared.append($0) },
                 onProgress: onProgress)
             let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
                 + "Extensions/\(outcome.extensionID)/configurations"
-            // 没配对走的是 Vellum 同款路：没写 configurations，报告里不凑那行。
-            let noPairing = !hasPairingFile
-            let injectResults = noPairing
+            // 走没走成 Vellum 同款看结果：这条路从不写偏好，preferencesWritten
+            // 一定是 false；老的改表路才写偏好（true）。没写偏好的报告里
+            // 不凑 configurations 那行。
+            let isVellumPath = !outcome.preferencesWritten
+            let injectResults = isVellumPath
                 ? outcome.injectResults
                 : [InjectResult(targetParentDir: configurationsDir, ok: true, error: nil)]
                     + outcome.injectResults
@@ -276,10 +229,10 @@ final class AppState: ObservableObject {
                 verifyResults: [],
                 registration: nil,
                 // 刷新结论原样带给界面：确认了就不补桌面刷新，没确认
-                //（含没配对）就由界面补一次本地网页法只重启桌面。
+                // 就由界面补一次本地网页法只重启桌面。
                 refresh: RefreshResult(confirmed: outcome.refreshConfirmed),
                 mode: .backup,
-                backupSummary: noPairing
+                backupSummary: isVellumPath
                     ? "壁纸已写好（人家同款，只写描述符目录，表和偏好没碰）。"
                         + "正在刷新桌面（跟人家一样），回来后去锁屏图库查看，出现后再点设为墙纸组合。"
                     : "备份还原已完成（\(outcome.payloadCount) 个载荷，"
