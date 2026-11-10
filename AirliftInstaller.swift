@@ -255,8 +255,7 @@ public struct InstallReport {
     public let verifyResults: [VerifyResult]
     public let registration: RegistrationResult?
     public let refresh: RefreshResult?
-    /// 这次安装实际走的路。直写路默认 `.airlift`（老构造不用改）；
-    /// 备份路由 `AppState.installWithReportBackup` 填 `.backup`。
+    /// 这次安装实际走的路。V1.20 起只有一条路，报告固定 `.backup`。
     public let mode: PosterBoardApplyMode
     /// 备份路才有：一句话结果（载荷数、商店摘要、"要重启手机"）。
     /// 直写路是 nil，界面不显示这行。
@@ -268,7 +267,7 @@ public struct InstallReport {
                 verifyResults: [VerifyResult],
                 registration: RegistrationResult?,
                 refresh: RefreshResult?,
-                mode: PosterBoardApplyMode = .airlift,
+                mode: PosterBoardApplyMode = .backup,
                 backupSummary: String? = nil) {
         self.descriptorUUID = descriptorUUID
         self.injectResults = injectResults

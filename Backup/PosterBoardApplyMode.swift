@@ -7,4 +7,6 @@ import Foundation
 /// 字段还在用它，别的路都删了。
 public enum PosterBoardApplyMode: String, CaseIterable, Identifiable, Hashable {
     case backup
+
+    public var id: String { rawValue }
 }
