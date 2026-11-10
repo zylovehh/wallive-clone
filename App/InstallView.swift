@@ -90,11 +90,10 @@ struct InstallView: View {
         installLog = ""
         defer { installing = false }
         if let uuid = await state.install(host: host, forceRefresh: forceRefresh) {
-            // V1.5：27.0 真机验证，没配对时网页重启桌面会卡死锁屏图库，
-            // 改成提示重启手机（表和文件已写好，重启是全新读取）。
+            // V1.6：备用刷新（网页重启桌面）整个去掉，跟 Vellum 对齐——
+            // 配对路只认配对刷新；没配对不刷，提示重启手机。
             if state.hasPairingFile {
-                result = "安装完成，描述符 UUID：\(uuid)。正在只重启桌面（不重启手机），稍后去锁屏查看。"
-                DesktopRestart.trigger()
+                result = "安装完成，描述符 UUID：\(uuid)。配对刷新跑完去锁屏看；没确认就重启手机再看。"
             } else {
                 result = "安装完成，描述符 UUID：\(uuid)。重启手机，然后锁屏长按进图库查看（新旧壁纸都应该在）。"
             }
