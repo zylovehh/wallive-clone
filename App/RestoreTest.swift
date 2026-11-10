@@ -1017,7 +1017,7 @@ enum RestoreTest {
         }
         guard let container else {
             throw StepError(step: "找壁纸库",
-                            detail: "直读没找到壁纸库。这条路不用 VPN：看上面「共享抽屉体检」——说容器不存在就是签名没配 App Group（应为 \(WorseQueryEscape.appGroup)，对照 Vellum 签名用的组名），配好重签再试；容器正常还报错就先重启手机再装一次。")
+                            detail: "直读没找到壁纸库。这条路不用 VPN：看上面「共享抽屉体检」——报了候选组名但都说拿不到容器，就是签名没把这些组配进去，重新签名/换描述文件再试；说没挖到组名，就是描述文件里压根没带应用组；容器正常还报错就先重启手机再装一次。")
         }
         report["container"] = container
 

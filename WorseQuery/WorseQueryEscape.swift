@@ -37,20 +37,78 @@ private func wq_release(_ handle: Int64)
 
 enum WorseQueryEscape {
 
-    /// 逃逸用的 App Group：改成 Vellum 在同一台手机上实测可用的组
-    /// （2026-11-10 用户贴出的 Vellum 日志：group.com.tgqq.1767742703，
-    /// 容器 /private/var/mobile/Containers/Shared/AppGroup/35E720DF-…/ 真实存在）。
-    /// 旧的 group.com.usc.1787713824 在这台 27.2 手机上 containerURL 拿不到。
-    static let appGroup = "group.com.tgqq.1767742703"
+    /// 写死兜底组：2026-11-10 用户手机（27.0.1）实测可用的组。
+    /// V1.17 起不再依赖它——签名工具/描述文件发什么组，App 就用什么组
+    /// （组名带时间戳，换描述文件可能就变），只在描述文件里挖不到时兜底。
+    static let fallbackAppGroup = "group.com.tgqq.1767742703"
+
+    /// 逃逸用的 App Group：描述文件里挖到的第一个组，挖不到退回写死组。
+    static var appGroup: String {
+        candidateGroups.first ?? fallbackAppGroup
+    }
+
+    /// 从包里的描述文件（embedded.mobileprovision 等）挖应用组名。
+    /// 签名工具签包时会把描述文件和它声明的组一起打进去；组名是纯文本，
+    /// 按 "group.xxx" 字样提取，排除系统自带组。返回去重后的候选，按出现顺序。
+    static func discoveredGroups() -> [String] {
+        let bundle = Bundle.main
+        var urls: [URL] = []
+        if let u = bundle.url(forResource: "embedded", withExtension: "mobileprovision") {
+            urls.append(u)
+        }
+        if let all = bundle.urls(forResourcesWithExtension: "mobileprovision", subdirectory: nil) {
+            urls.append(contentsOf: all)
+        }
+        var seen = Set<URL>()
+        var data = Data()
+        for u in urls where seen.insert(u).inserted {
+            if let d = try? Data(contentsOf: u) { data.append(d) }
+        }
+        guard data.count > 0,
+              let text = String(data: data, encoding: .utf8)
+                  ?? String(data: data, encoding: .isoLatin1) else { return [] }
+        var groups: [String] = []
+        for m in matches(of: "group\\.[A-Za-z0-9._\\-]+", in: text) {
+            let name = String(text[m.range])
+            guard !groups.contains(name),
+                  !name.contains(".apple."),
+                  !name.hasPrefix("group.com.apple") else { continue }
+            groups.append(name)
+        }
+        return groups
+    }
+
+    /// 全部候选组：描述文件里挖到的 + 写死兜底，去重。
+    static var candidateGroups: [String] {
+        var groups = discoveredGroups()
+        if !groups.contains(fallbackAppGroup) { groups.append(fallbackAppGroup) }
+        return groups
+    }
 
     /// 共享抽屉体检：27.2 逃逸的先决条件是 App Group 容器真实存在。
-    /// 返回容器路径（nil = 签名没把它配好）和一句给人看的结论。
+    /// V1.17 起逐个候选组试，返回第一个能用的容器路径（nil = 都不行）
+    /// 和一句把候选组名、成败都写清楚的人话结论。
     static func groupHealth() -> (containerPath: String?, note: String) {
         let fm = FileManager.default
-        if let root = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup) {
-            return (root.path, "共享抽屉正常，逃逸有门可走。路径：\(root.path)")
+        var lines: [String] = []
+        if discoveredGroups().isEmpty {
+            lines.append("包里的描述文件没挖到组名")
         }
-        return (nil, "共享抽屉没开：签名时没把这个组配好。去全能签核对 App Group 设置（应为 \(appGroup)，可对照 Vellum 签名时用的组名）。")
+        for g in candidateGroups {
+            if let root = fm.containerURL(forSecurityApplicationGroupIdentifier: g) {
+                lines.append("组 \(g) 能用，容器在 \(root.path)")
+                return (root.path, lines.joined(separator: "；"))
+            }
+            lines.append("组 \(g) 拿不到容器")
+        }
+        lines.append("去全能签核对应用组设置，或重新签名安装")
+        return (nil, lines.joined(separator: "；"))
+    }
+
+    /// 正则小助手（iOS 16 起系统有 Regex，这里自己写一遍兼容老系统）。
+    private static func matches(of pattern: String, in text: String) -> [NSTextCheckingResult] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return Array(regex.matches(in: text, range: NSRange(text.startIndex..., in: text)))
     }
 
     // ---- class 2 备用招的开关与熔断（存 UserDefaults）----
