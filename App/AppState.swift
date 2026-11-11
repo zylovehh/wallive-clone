@@ -21,6 +21,8 @@ struct ImportedPackage: Identifiable, Codable, Equatable {
 @MainActor
 final class AppState: ObservableObject {
     @Published var selectedTab = 0
+    /// 深景页“设为当前包并去安装”用：置 true 后导入页自动打开详情页（跳安装），导入页消费后自己置回 false。
+    @Published var showImportDetail = false
     @Published var packageData: Data?
     @Published var packageInfo: TendiesPackageInfo?
     @Published var packageImportedAt: Date?

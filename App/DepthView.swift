@@ -67,6 +67,8 @@ struct DepthView: View {
                                     // 深景包沿用原包名，不然名称行会被清空回技术名。
                                     state.setPackage(data, displayName: state.packageDisplayName)
                                     state.selectedTab = 1
+                                    // 直接跳到壁纸详情页（安装页），不是只跳到导入库列表。
+                                    state.showImportDetail = true
                                 }
                             }
                         }.buttonStyle(GlassButtonStyle())

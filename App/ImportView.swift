@@ -172,6 +172,13 @@ struct ImportView: View {
             .navigationDestination(isPresented: $showDetail) {
                 ImportDetailView()
             }
+            .onChange(of: state.showImportDetail) { _, newValue in
+                // 深景页“设为当前包并去安装”置的旗：跳到壁纸详情页（安装页）去装，消费后清旗，免得回来看又跳一次。
+                if newValue {
+                    showDetail = true
+                    state.showImportDetail = false
+                }
+            }
             .alert("删除这张导入的壁纸包？", isPresented: Binding(
                 get: { pkgToDelete != nil },
                 set: { if !$0 { pkgToDelete = nil } }
