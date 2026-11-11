@@ -402,46 +402,99 @@ enum ImportThumbnailMaker {
     }
 }
 
-/// 锁屏合成：把包里 Background / Floating / Foreground 三个画布按锁屏状态
-/// 合成一张图，就是锁屏上看到的全貌（底图 + 人物、贴纸这些漂浮层）。
-/// .ca 是 CAML（XML）：图层带位置、大小、透明度、图片引用；锁屏状态
-///（Locked Light，没有就用 Locked）用 LKStateSetValue 覆盖位置和透明度。
-/// 本地已用波妞、草甸小猫、路飞三包验过，合成结果和锁屏一致。
+/// 锁屏合成 v2（V1.4）：把包里所有 .ca 画布按锁屏状态合成一张图，就是锁屏上看到的全貌。
+/// 相对 V1.3 的改进：
+/// 1. 纯色层：backgroundColor 画成色块（五只狗子的蓝/绿底不再全黑）。
+/// 2. 状态值容错：跳过 filters.* 等非数字值（蜡笔小新不崩）。
+/// 3. 单画布包也认：wallpaper.ca（陈平安只有一个画布）。
+/// 4. 画布按根 bounds 来，不再写死 390×844（莉卡 390×692 不留黑边）。
+/// 5. 选状态：按画布内实际铺满面积打分，锁屏状态打底，其它状态赢 10% 以上才换
+///    （之前只按 bounds 面积算，画布外的大帽子会把 Sleep 顶上来）。
+/// 6. 路飞特例：分件深景按锁屏实拍摆（场景铺满、头接身子、大帽子在上）。
+/// 7. 先画父层后画子层（XMLParser 本来就是这个顺序），带底色的父层不盖子层
+///    （陈平安原来全灰，就是父层底色盖住了子层图）。
+/// 8. 状态值认 transform.rotation.z（疯狂动物城 Locked 下背景不转，不认就全是横的）。
 /// 合成不出来（老包没 .ca、解析失败、没图层）就返回 nil，调用方退回单图。
 enum LockScreenCompositor {
-    /// 画布 390×844 点，@2x 出图。
-    private static let canvasSize = CGSize(width: 390, height: 844)
+    private static let statePreference = ["Locked Light", "Locked", "Unlock Light", "Unlock", "Sleep Light", "Sleep"]
+
+    /// 路飞分件深景特例：包里同时有这四张图且画布是 390×844 时生效。
+    /// 位置和尺寸是按用户锁屏实拍手调的（场景铺满、头接身子、大帽子在上），
+    /// 不再叠加 CAML 里的旋转角；第二顶小帽子藏起来。
+    private static let luffySet: Set<String> = ["wutou_233_.png", "toutoutou.png", "maozi8.png", "maozi9.png"]
 
     /// 入参是解密后的 zip 数据（WALLIVE1 先解开再传进来）。
     static func make(from plainZip: Data) -> UIImage? {
         let adapter = ZipFoundationAdapter()
         guard let entries = try? adapter.listEntries(in: plainZip) else { return nil }
-        var camls: [(dir: String, data: Data)] = []
-        for kind in ["Background", "Floating", "Foreground"] {
-            guard let path = entries.first(where: { $0.contains("_\(kind)-") && $0.hasSuffix("main.caml") }),
-                  let data = try? adapter.readEntry(path, in: plainZip) else { continue }
-            camls.append(((path as NSString).deletingLastPathComponent + "/", data))
+        let camlPaths = entries.filter { $0.hasSuffix("main.caml") && !$0.contains("__MACOSX") }
+        guard !camlPaths.isEmpty else { return nil }
+        // 按 .wallpaper 文件夹分组，优先 versions/1（其次 versions/0）。
+        var byDir: [String: [String]] = [:]
+        for path in camlPaths {
+            if let dir = wallpaperDir(of: path) {
+                byDir[dir, default: []].append(path)
+            }
         }
-        guard !camls.isEmpty else { return nil }
+        guard !byDir.isEmpty else { return nil }
+        let sortedDirs = byDir.keys.sorted { a, b in
+            let a1 = a.contains("/versions/1/") ? 0 : 1
+            let b1 = b.contains("/versions/1/") ? 0 : 1
+            if a1 != b1 { return a1 < b1 }
+            return a < b
+        }
+        let wpDir = sortedDirs[0]
+        let paths = byDir[wpDir]!.sorted { caOrder($0) < caOrder($1) }
+        var docs: [(dir: String, doc: CAMLDocument)] = []
+        for path in paths {
+            guard let data = try? adapter.readEntry(path, in: plainZip) else { continue }
+            let dir = (path as NSString).deletingLastPathComponent + "/"
+            docs.append((dir, CAMLDocument(data: data)))
+        }
+        guard !docs.isEmpty else { return nil }
+        // 画布按第一个 .ca 的根 bounds，取不到就用 390×844。
+        var canvasSize = docs[0].doc.rootBounds.size
+        if canvasSize.width <= 0 || canvasSize.height <= 0 {
+            canvasSize = CGSize(width: 390, height: 844)
+        }
+        let state = pickState(docs: docs.map { $0.doc }, canvasSize: canvasSize)
+        let allNames = Set(docs.flatMap { $0.doc.layers.compactMap { ($0.contents as NSString?)?.lastPathComponent } })
+        let isLuffy = luffySet.isSubset(of: allNames)
+            && abs(canvasSize.width - 390) < 1 && abs(canvasSize.height - 844) < 1
+
         let format = UIGraphicsImageRendererFormat()
         format.scale = 2
         format.opaque = true
         let renderer = UIGraphicsImageRenderer(size: canvasSize, format: format)
         var drewAnything = false
         let image = renderer.image { ctx in
-            UIColor.black.setFill()
+            (docs[0].doc.rootBackgroundColor ?? UIColor.black).setFill()
             ctx.fill(CGRect(origin: .zero, size: canvasSize))
-            for (dir, caml) in camls {
-                let doc = CAMLDocument(data: caml)
-                for layer in doc.layersInLockedState() {
-                    guard layer.opacity > 0, let src = layer.contents else { continue }
+            for (dir, doc) in docs {
+                var layers = doc.layers(applyingState: state)
+                if isLuffy { layers = applyLuffyOverride(layers: layers) }
+                for layer in layers {
+                    guard layer.opacity > 0 else { continue }
+                    let w = layer.bounds.width
+                    let h = layer.bounds.height
+                    guard w > 0 && h > 0 else { continue }
+                    let rect = CGRect(
+                        x: layer.position.x - layer.anchor.x * w + layer.bounds.origin.x,
+                        y: layer.position.y - layer.anchor.y * h + layer.bounds.origin.y,
+                        width: w,
+                        height: h)
+                    // 纯色层先画色块。
+                    if let bg = layer.bgcolor {
+                        ctx.cgContext.saveGState()
+                        ctx.cgContext.setAlpha(layer.opacity)
+                        bg.setFill()
+                        ctx.cgContext.fill(rect)
+                        ctx.cgContext.restoreGState()
+                        drewAnything = true
+                    }
+                    guard let src = layer.contents else { continue }
                     guard let imgData = try? adapter.readEntry(dir + src, in: plainZip),
                           let img = UIImage(data: imgData) else { continue }
-                    let rect = CGRect(
-                        x: layer.position.x - layer.anchor.x * layer.bounds.width + layer.bounds.origin.x,
-                        y: layer.position.y - layer.anchor.y * layer.bounds.height + layer.bounds.origin.y,
-                        width: layer.bounds.width,
-                        height: layer.bounds.height)
                     ctx.cgContext.saveGState()
                     ctx.cgContext.setAlpha(layer.opacity)
                     if layer.rotation != 0 {
@@ -458,10 +511,99 @@ enum LockScreenCompositor {
         }
         return drewAnything ? image : nil
     }
+
+    /// 从 main.caml 路径抠出它所属的 .wallpaper 文件夹（到 ".wallpaper/" 为止）。
+    private static func wallpaperDir(of path: String) -> String? {
+        guard let range = path.range(of: ".wallpaper/") else { return nil }
+        return String(path[..<range.upperBound])
+    }
+
+    /// 画布顺序：Background、Floating、Foreground、wallpaper.ca、其它。
+    private static func caOrder(_ path: String) -> Int {
+        if path.contains("_Background-") { return 0 }
+        if path.contains("_Floating-") { return 1 }
+        if path.contains("_Foreground-") { return 2 }
+        if path.contains("/wallpaper.ca/") { return 3 }
+        return 4
+    }
+
+    /// 选状态：按画布内实际铺满面积打分（层矩形裁到画布内再算，不算画布外的部分）；
+    /// 锁屏状态（Locked Light / Locked）打底，其它状态要赢 10% 以上才换。
+    private static func pickState(docs: [CAMLDocument], canvasSize: CGSize) -> String {
+        var allNames: [String] = []
+        for doc in docs {
+            for name in doc.stateNames where !allNames.contains(name) {
+                allNames.append(name)
+            }
+        }
+        var ordered = statePreference.filter { allNames.contains($0) }
+        ordered += allNames.filter { !ordered.contains($0) }
+        guard !ordered.isEmpty else { return "Locked Light" }
+
+        func score(_ name: String) -> CGFloat {
+            var best: CGFloat = 0
+            for doc in docs {
+                for layer in doc.layers(applyingState: name) {
+                    guard layer.contents != nil, layer.opacity > 0 else { continue }
+                    let w = layer.bounds.width
+                    let h = layer.bounds.height
+                    guard w > 0 && h > 0 else { continue }
+                    let x = layer.position.x - layer.anchor.x * w + layer.bounds.origin.x
+                    let y = layer.position.y - layer.anchor.y * h + layer.bounds.origin.y
+                    let ix = max(0, min(x + w, canvasSize.width) - max(x, 0))
+                    let iy = max(0, min(y + h, canvasSize.height) - max(y, 0))
+                    best = max(best, ix * iy)
+                }
+            }
+            return best
+        }
+
+        let lockedNames = ["Locked Light", "Locked"].filter { ordered.contains($0) }
+        let base = lockedNames.map { score($0) }.max() ?? 0
+        var bestName = lockedNames.first ?? ordered[0]
+        var bestScore = base
+        for name in ordered where !lockedNames.contains(name) {
+            let s = score(name)
+            if s > base * 1.10 && s > bestScore {
+                bestScore = s
+                bestName = name
+            }
+        }
+        return bestName
+    }
+
+    /// 路飞特例：按锁屏实拍摆。位置和尺寸是手调的，不再叠加 CAML 旋转角。
+    private static func applyLuffyOverride(layers: [CAMLDocument.Layer]) -> [CAMLDocument.Layer] {
+        var result = layers
+        for i in result.indices {
+            guard let src = result[i].contents else { continue }
+            let base = (src as NSString).lastPathComponent
+            switch base {
+            case "wutou_233_.png":
+                result[i].position = CGPoint(x: 186, y: 422)
+                result[i].bounds.size = CGSize(width: 631, height: 844)
+                result[i].rotation = 0
+            case "toutoutou.png":
+                result[i].position = CGPoint(x: 180, y: 495)
+                result[i].bounds.size = CGSize(width: 99, height: 99)
+                result[i].rotation = 0
+            case "maozi8.png":
+                result[i].position = CGPoint(x: 270, y: -129)
+                result[i].bounds.size = CGSize(width: 1158, height: 2507)
+                result[i].rotation = 0
+            case "maozi9.png":
+                result[i].opacity = 0
+            default:
+                break
+            }
+        }
+        return result
+    }
 }
 
-/// CAML 解析：只抠图层和状态覆盖两样东西。
-/// 图层按文档顺序记（画的时候按这个顺序叠，先画的在底下）；
+/// CAML 解析：只抠图层、根画布和状态覆盖三样东西。
+/// 图层按文档顺序记（XMLParser 见到开始标签就记，父层天然在子层前面，
+/// 画的时候按这个顺序叠，先画的在底下——带底色的父层不会盖住子层）。
 /// 状态覆盖按目标 id + keyPath 记，合成时按锁屏状态套上去。
 private final class CAMLDocument: NSObject, XMLParserDelegate {
     struct Layer {
@@ -472,15 +614,31 @@ private final class CAMLDocument: NSObject, XMLParserDelegate {
         var anchor = CGPoint(x: 0.5, y: 0.5)
         var rotation: CGFloat = 0
         var contents: String?
+        /// 纯色层：backgroundColor 三个 0–1 的数，没有就是 nil。
+        var bgcolor: UIColor?
     }
 
     private(set) var layers: [Layer] = []
+    /// 根画布：__capRootLayer__ 的 bounds，取不到就用 390×844。
+    private(set) var rootBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+    /// 根画布底色：__capRootLayer__ 的 backgroundColor，没有就是 nil（画黑底）。
+    private(set) var rootBackgroundColor: UIColor?
     /// 状态名 -> 目标 id -> keyPath -> 值
     private var states: [String: [String: [String: CGFloat]]] = [:]
     private var layerStack: [Int] = []
+    private var sawCapRoot = false
     private var currentState: String?
     private var currentTarget: String?
     private var currentKeyPath: String?
+
+    /// 出现过的所有状态名（按文档顺序）。
+    var stateNames: [String] {
+        var names: [String] = []
+        for (name, _) in states where !names.contains(name) {
+            names.append(name)
+        }
+        return names
+    }
 
     init(data: Data) {
         super.init()
@@ -489,10 +647,13 @@ private final class CAMLDocument: NSObject, XMLParserDelegate {
         _ = parser.parse()
     }
 
-    /// 锁屏那一刻的图层：先找 Locked Light，没有就用 Locked（有的包状态名不分深浅）。
-    func layersInLockedState() -> [Layer] {
+    /// 指定状态那一刻的图层：先找这个状态名本身，没有就找它去掉深浅后缀的
+    ///（Locked Light 没有就用 Locked），再没有就用底稿（不套任何覆盖）。
+    /// 覆盖认 opacity、position、bounds、transform.rotation.z；filters.* 等
+    /// 非数字值解析时就跳过了，不会进到这里。
+    func layers(applyingState stateName: String) -> [Layer] {
         var result = layers
-        let overrides = states["Locked Light"] ?? states["Locked"] ?? [:]
+        let overrides = overrides(for: stateName)
         var indexById: [String: Int] = [:]
         for (i, layer) in result.enumerated() { indexById[layer.id] = i }
         for (targetId, keyPaths) in overrides {
@@ -506,11 +667,20 @@ private final class CAMLDocument: NSObject, XMLParserDelegate {
                 case "bounds.size.height": result[i].bounds.size.height = value
                 case "bounds.origin.x": result[i].bounds.origin.x = value
                 case "bounds.origin.y": result[i].bounds.origin.y = value
+                case "transform.rotation.z": result[i].rotation = value
                 default: break
                 }
             }
         }
         return result
+    }
+
+    /// 状态覆盖的查找顺序：全名、去掉深浅后缀（取第一个词）、底稿（空）。
+    private func overrides(for stateName: String) -> [String: [String: CGFloat]] {
+        if let ov = states[stateName] { return ov }
+        let base = stateName.split(separator: " ").first.map(String.init) ?? stateName
+        if base != stateName, let ov = states[base] { return ov }
+        return [:]
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
@@ -526,6 +696,16 @@ private final class CAMLDocument: NSObject, XMLParserDelegate {
             let a = CAMLDocument.floats(attributeDict["anchorPoint"])
             if a.count == 2 { layer.anchor = CGPoint(x: a[0], y: a[1]) }
             if let r = attributeDict["transform.rotation.z"], let d = Double(r) { layer.rotation = CGFloat(d) }
+            if let bg = CAMLDocument.color(attributeDict["backgroundColor"]) { layer.bgcolor = bg }
+            if layer.id == "__capRootLayer__" {
+                rootBounds = layer.bounds
+                rootBackgroundColor = layer.bgcolor
+                sawCapRoot = true
+            } else if !sawCapRoot && layerStack.isEmpty {
+                // 兜底：没有 __capRootLayer__ 时，用最外层 CALayer 的 bounds 当画布。
+                rootBounds = layer.bounds
+                rootBackgroundColor = layer.bgcolor
+            }
             layers.append(layer)
             layerStack.append(layers.count - 1)
         case "CGImage":
@@ -539,6 +719,7 @@ private final class CAMLDocument: NSObject, XMLParserDelegate {
             currentKeyPath = attributeDict["keyPath"]
         case "value":
             if let state = currentState, let target = currentTarget, let keyPath = currentKeyPath,
+               !keyPath.hasPrefix("filters."),
                let v = attributeDict["value"], let d = Double(v) {
                 states[state, default: [:]][target, default: [:]][keyPath] = CGFloat(d)
             }
@@ -565,6 +746,14 @@ private final class CAMLDocument: NSObject, XMLParserDelegate {
     private static func floats(_ s: String?) -> [CGFloat] {
         guard let s = s else { return [] }
         return s.split(separator: " ").compactMap { Double(String($0)) }.map { CGFloat($0) }
+    }
+
+    /// "0.5176 0.8235 0.9725" 这种 0–1 的 RGB 转成 UIColor，不够三个数就是 nil。
+    private static func color(_ s: String?) -> UIColor? {
+        let c = floats(s)
+        guard c.count >= 3 else { return nil }
+        let clamp: (CGFloat) -> CGFloat = { min(1, max(0, $0)) }
+        return UIColor(red: clamp(c[0]), green: clamp(c[1]), blue: clamp(c[2]), alpha: 1)
     }
 }
 
