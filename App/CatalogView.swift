@@ -1,5 +1,5 @@
 // CatalogView.swift
-// 目录页：仿原版发现页，卡片列表 + 搜索 + 分类 + 下载，另有“我的”页。
+// 目录页：iPhone 页（目录）+ iPad 页（已下载），卡片列表 + 搜索 + 分类 + 下载。
 // 卡片左上角播放键点一下播预览视频（AVKit 系统播放器），平时只显示静态缩略图。
 // 下载完直接把包交给安装页（AppState.setPackage + 切到“安装”页），不另起安装逻辑。
 // 红心收藏的排前面（只影响本机显示，目录表不动）。
@@ -24,7 +24,7 @@ struct CatalogView: View {
     @EnvironmentObject private var accountStore: AccountStore
     @StateObject private var store = CatalogStore()
     @StateObject private var favorites = FavoritesStore()
-    @State private var segment = 0 // 0 发现，1 我的
+    @State private var segment = 0 // 0 iPhone，1 iPad
     @Namespace private var segmentNS
     @State private var query = ""
     @State private var selectedCategory = "全部"
@@ -78,11 +78,11 @@ struct CatalogView: View {
 
     var body: some View {
         NavigationStack {
-            // iPad 上间距收紧一点，发现页上边空隙小一点；iPhone 不动。
+            // iPad 上间距收紧一点，iPhone 页上边空隙小一点；iPhone 不动。
             VStack(spacing: UIDevice.current.userInterfaceIdiom == .pad ? 4 : 8) {
-                // 发现 / 我的：高透液态玻璃分段条，选中的那段稍亮一点。
+                // iPhone / iPad：高透液态玻璃分段条，选中的那段稍亮一点。
                 HStack(spacing: 4) {
-                    ForEach([(0, "发现"), (1, "我的")], id: \.0) { value, label in
+                    ForEach([(0, "iPhone"), (1, "iPad")], id: \.0) { value, label in
                         Button(label) { segment = value }
                             .font(.subheadline.weight(segment == value ? .semibold : .regular))
                             .foregroundStyle(segment == value ? .white : .white.opacity(0.7))
@@ -192,7 +192,7 @@ struct CatalogView: View {
         }
     }
 
-    // MARK: - 发现页
+    // MARK: - iPhone 页
 
     private var discoverView: some View {
         VStack(spacing: 8) {
@@ -363,12 +363,12 @@ struct CatalogView: View {
         }
     }
 
-    // MARK: - 我的页
+    // MARK: - iPad 页
 
     private var myView: some View {
         VStack(alignment: .leading, spacing: 12) {
             if store.downloaded.isEmpty {
-                Text("还没下载过壁纸，去发现页下载一张吧。")
+                Text("还没下载过壁纸，去 iPhone 页下载一张吧。")
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
@@ -400,7 +400,7 @@ struct CatalogView: View {
             }
         }
         .padding(.horizontal)
-        // iPad 上“我的”页满宽显示，不再缩在中间窄窄一条；iPhone 不动。
+        // iPad 上 iPad 页满宽显示，不再缩在中间窄窄一条；iPhone 不动。
         .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? .infinity : nil, alignment: .leading)
         .overlay(alignment: .bottom) {
             Text("构建 \(AppBuild.tag)")
@@ -647,7 +647,7 @@ private struct LiquidGlassCircle: ViewModifier {
     }
 }
 
-/// 液态透明分段条外框：发现 / 我的共用。
+/// 液态透明分段条外框：iPhone / iPad 共用。
 private struct LiquidGlassSegmented: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
@@ -699,7 +699,7 @@ private struct RoundGlassButtonStyle: ButtonStyle {
 // MARK: - 增加壁纸（管理员）
 
 /// 增加壁纸表单：标题、标签、选 .tendies 文件、选缩略图，按顺序传包、传图、追加条目并推表。
-/// 只有登入的管理员能打开（入口在发现页管理员行）；推表靠本机钥匙串里的 GitHub 钥匙。
+/// 只有登入的管理员能打开（入口在 iPhone 页管理员行）；推表靠本机钥匙串里的 GitHub 钥匙。
 private struct AddWallpaperView: View {
     @ObservedObject var store: CatalogStore
     @EnvironmentObject private var accountStore: AccountStore
