@@ -247,7 +247,10 @@ private struct ImportedPackageCard: View {
                         placeholder
                     }
                 }
-                .aspectRatio(9 / 11, contentMode: .fit)
+                // .fill 不是 .fit：.fit 在滚动列表里按封面原图比例走，图有横有竖、
+                // 卡片就高矮不一排不齐；.fill 强制 9:11 框，图超出的部分裁掉。
+                .frame(maxWidth: .infinity)
+                .aspectRatio(9 / 11, contentMode: .fill)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             }
             .buttonStyle(.plain)
@@ -299,10 +302,15 @@ private struct ImportedPackageCard: View {
     }
 }
 
-/// 从壁纸包里抠一张封面图（给导入库的卡片用）：跟目录“增加壁纸”那套找图逻辑一样，
-/// 包是 WALLIVE1 加密包先解密再翻；背景层优先，其次 assets 下第一张，
-/// 都没有就挑像素最大的那张；最长边压到 720。
-private enum ImportThumbnailMaker {
+/// 从壁纸包里抠一张封面图（给导入库的卡片用）：封面尽量是锁屏上看到的那张底图。
+/// 包是 WALLIVE1 加密包先解密再翻；最长边压到 720。
+/// 目录下载也用它从包里抠封面（不另外走网络），所以不加 private。
+enum ImportThumbnailMaker {
+    /// 封面尽量是锁屏底图：1. 背景画布（Background.ca）里的图就是锁屏底图，
+    /// 挑其中最大的；2. 没有背景画布（整包都在 Floating 里）就挑 assets 里
+    /// 像素最大的——整幅场景图几乎总是最大的，人物抠图、装饰小图都比它小
+    ///（波妞就是这种情况：之前按顺序拿了第一张人物抠图，白底两小孩）；
+    /// 3. 连 assets 都没有，翻全包挑最大的。
     static func make(from packageData: Data) -> Data? {
         let zip = ZipFoundationAdapter()
         let plain: Data
@@ -318,15 +326,24 @@ private enum ImportThumbnailMaker {
             imageExts.contains((path as NSString).pathExtension.lowercased())
         }
         let assetImages = entries.filter { isImageEntry($0) && $0.lowercased().contains("assets") }
-        if let picked = assetImages.first(where: { $0.lowercased().contains("background") })
-            ?? assetImages.first,
-            let data = try? zip.readEntry(picked, in: plain),
-            let image = UIImage(data: data) {
+        if let image = largestImage(in: assetImages.filter { $0.lowercased().contains("background") }, zip: zip, plain: plain) {
             return compress(image)
         }
+        if let image = largestImage(in: assetImages, zip: zip, plain: plain) {
+            return compress(image)
+        }
+        if let image = largestImage(in: entries.filter(isImageEntry), zip: zip, plain: plain) {
+            return compress(image)
+        }
+        return nil
+    }
+
+    /// 在一串图片里挑像素最大的那张；一找到超过 200 万像素的就停，
+    /// 不用把包里所有图都解一遍。
+    private static func largestImage(in paths: [String], zip: ZipFoundationAdapter, plain: Data) -> UIImage? {
         var bestImage: UIImage?
         var bestPixels: CGFloat = 0
-        for path in entries.filter(isImageEntry) {
+        for path in paths {
             guard let data = try? zip.readEntry(path, in: plain),
                   let image = UIImage(data: data) else { continue }
             let pixels = image.size.width * image.size.height * image.scale
@@ -336,8 +353,7 @@ private enum ImportThumbnailMaker {
             }
             if bestPixels > 2_000_000 { break }
         }
-        guard let image = bestImage else { return nil }
-        return compress(image)
+        return bestImage
     }
 
     /// 最长边压到 720，控制封面图体积。
