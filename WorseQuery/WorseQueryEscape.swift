@@ -170,15 +170,28 @@ enum WorseQueryEscape {
         var lastCode: Int64 = 0
         var lastClass: Int32 = 0
         var lastIndex: Int32 = -1
-        let handle = target.withCString { t in
-            appGroup.withCString { g in
-                wq_escape2(t, g, false, class2Allowed, &lastCode, &lastClass, &lastIndex)
+        // V1.21：签名里挖到的组挨个都试，谁行用谁——只认第一个的话，
+        // 第一个组不灵就整个装不了（2026-11-11 真机：体检说组能用、
+        // 容器也在，逃逸查询仍被拒，因为第一个组不是上回能用的那个）。
+        var handle: Int64 = 0
+        var usedGroup: String? = nil
+        for candidate in candidateGroups {
+            let h = target.withCString { t in
+                candidate.withCString { g in
+                    wq_escape2(t, g, false, class2Allowed, &lastCode, &lastClass, &lastIndex)
+                }
             }
+            if h > 0 {
+                handle = h
+                usedGroup = candidate
+                break
+            }
+            log("组 \(candidate) 逃逸没成（\(describe(lastCode))），换下一个候选组接着试。")
         }
 
         if handle > 0 {
             let flagDesc = lastClass > 0 ? "\(lastClass == 7 ? "class 7" : "class 2 备用招") 第 \(lastIndex + 1) 组 flags" : ""
-            log("逃逸成功：沙箱扩展句柄 \(handle)" + (flagDesc.isEmpty ? "" : "（\(flagDesc)）") + "。")
+            log("逃逸成功：沙箱扩展句柄 \(handle)" + (usedGroup.map { "（组 \($0)）" } ?? "") + (flagDesc.isEmpty ? "" : "（\(flagDesc)）") + "。")
 
             // 写前探测：拿到扩展不等于真能写，先试一下，不行就把扩展还回去。
             // 只读模式（requireWrite=false）探可读就行——扩展是为了翻找，不是为了写。
