@@ -84,7 +84,8 @@ public enum TendiesPackage {
     ///      （括号深度扫描找配对闭合标签）；
     ///   2. 每层重写独立 main.caml：根层改名 _BACKGROUND 等，图片引用从
     ///      <contents><CGImage src=…/></contents> 简写成 <contents type="CGImage" src=…/>，
-    ///      并把该层引用的 assets 挪进自己的目录，带上原 index.xml / assetManifest.caml；
+    ///      并把该层引用的 assets 挪进自己的目录，带上 index.xml（按 Drift 模板重新生成）
+    ///      与原 assetManifest.caml；
     ///   3. 重写现代 Wallpaper.plist（LayeredAnimation，二进制）与 contents 层 userInfo；
     ///   4. descriptor.identifier 写编号，其余条目原样保留（旧壁纸目录、旧 userInfo 除外）。
     /// 描述符 UUID 与编号保持原样；装包链路（rewriteDescriptorIdentity / renameDescriptorContentsToMatch
@@ -125,7 +126,13 @@ public enum TendiesPackage {
               entries.contains(caOld + "/assetManifest.caml") else {
             throw Error.notATendiesPackage
         }
-        let indexXml = try zip.readEntry(caOld + "/index.xml", in: plaintext)
+        // 文档尺寸取旧目录名的分辨率（Drift 同款：390w-844h…），解析不到兜底 390×844。
+        func docDim(_ unit: String) -> Int? {
+            guard let m = firstRegexMatch("(\\d+)\(unit)", in: res) else { return nil }
+            return substring(res, m.range(at: 1)).flatMap(Int.init)
+        }
+        let docWidth = docDim("w") ?? 390
+        let docHeight = docDim("h") ?? 844
         let manifest = try zip.readEntry(caOld + "/assetManifest.caml", in: plaintext)
         let mainCamlData = try zip.readEntry(caOld + "/main.caml", in: plaintext)
         guard let mainCaml = String(data: mainCamlData, encoding: .utf8) else {
@@ -179,7 +186,9 @@ public enum TendiesPackage {
                 + inner + "\n"
                 + "  </CALayer>\n</caml>\n"
             add(dir + "/main.caml", Data(main.utf8))
-            add(dir + "/index.xml", indexXml)
+            add(dir + "/index.xml",
+                Data(modernIndexXML(docWidth: docWidth, docHeight: docHeight,
+                                    published: "_" + slice.plane).utf8))
             add(dir + "/assetManifest.caml", manifest)
             for a in assetPaths(in: inner) {
                 add(dir + "/" + a, try zip.readEntry(caOld + "/" + a, in: plaintext))
@@ -240,6 +249,78 @@ public enum TendiesPackage {
     }
 
     // MARK: - 旧格式转换的正则与 XML 小工具
+
+    /// Drift 同款 index.xml 模板（modernIndexXML）：键名按字母序、值逐项照抄二进制里还原的模板。
+    /// 文档尺寸取旧目录名分辨率（旧文件里是 2412×5244，跟层坐标 390×844 对不上，所以不再复制旧 index.xml）；
+    /// publishedObjectNames 填该层改名后的根层名（_BACKGROUND / _FLOATING / _FOREGROUND）。
+    private static func modernIndexXML(docWidth: Int, docHeight: Int, published: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+        \t<key>assetManifest</key>
+        \t<string>assetManifest.caml</string>
+        \t<key>documentHeight</key>
+        \t<real>\(docHeight)</real>
+        \t<key>documentResizesToView</key>
+        \t<false/>
+        \t<key>documentWidth</key>
+        \t<real>\(docWidth)</real>
+        \t<key>dynamicGuidesEnabled</key>
+        \t<true/>
+        \t<key>geometryFlipped</key>
+        \t<false/>
+        \t<key>guidesEnabled</key>
+        \t<true/>
+        \t<key>interactiveMouseEventsEnabled</key>
+        \t<true/>
+        \t<key>interactiveShowsCursor</key>
+        \t<true/>
+        \t<key>interactiveTouchEventsEnabled</key>
+        \t<false/>
+        \t<key>loopEnd</key>
+        \t<real>+infinity</real>
+        \t<key>loopStart</key>
+        \t<real>0.0</real>
+        \t<key>loopingEnabled</key>
+        \t<true/>
+        \t<key>multitouchDisablesMouse</key>
+        \t<false/>
+        \t<key>multitouchEnabled</key>
+        \t<false/>
+        \t<key>plugins</key>
+        \t<array/>
+        \t<key>presentationMouseEventsEnabled</key>
+        \t<true/>
+        \t<key>presentationShowsCursor</key>
+        \t<true/>
+        \t<key>presentationTouchEventsEnabled</key>
+        \t<false/>
+        \t<key>publishedObjectNames</key>
+        \t<array>
+        \t\t<string>\(published)</string>
+        \t</array>
+        \t<key>rootDocument</key>
+        \t<string>main.caml</string>
+        \t<key>savesWindowFrame</key>
+        \t<false/>
+        \t<key>scalesToFitInPlayer</key>
+        \t<true/>
+        \t<key>showsTouches</key>
+        \t<true/>
+        \t<key>snappingEnabled</key>
+        \t<true/>
+        \t<key>timelineMarkers</key>
+        \t<string>[(null)]</string>
+        \t<key>touchesColor</key>
+        \t<string>1 1 0 0.8</string>
+        \t<key>unitsInPixelsInPlayer</key>
+        \t<false/>
+        </dict>
+        </plist>
+        """
+    }
 
     private static func firstRegexMatch(_ pattern: String, in text: String) -> NSTextCheckingResult? {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
