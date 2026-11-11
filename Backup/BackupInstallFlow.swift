@@ -28,6 +28,8 @@ enum BackupInstallFlow {
         let refreshConfirmed: Bool
         /// 描述符注入逐目标结果（主扩展 + 现代扩展）。
         let injectResults: [InjectResult]
+        /// V1.36（Drift 同款）：写后核验结果，原样从 RestoreOutcome 带给界面。
+        let verified: Bool?
         /// 刷新没确认才要重启手机。
         var needsReboot: Bool { !refreshConfirmed }
     }
@@ -86,7 +88,8 @@ enum BackupInstallFlow {
                        storeSummary: outcome.storeSummary ?? "",
                        preferencesWritten: outcome.preferencesWritten,
                        refreshConfirmed: outcome.refreshConfirmed,
-                       injectResults: outcome.injectResults)
+                       injectResults: outcome.injectResults,
+                       verified: outcome.verified)
     }
 
     /// 等后台 runRestore 写结果盒：先看盒里有没有（活刚好干完按成功算），
