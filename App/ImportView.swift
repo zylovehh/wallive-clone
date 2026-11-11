@@ -47,11 +47,17 @@ struct ImportView: View {
     @State private var showDetail = false
     @State private var pkgToDelete: ImportedPackage?
 
-    /// 两列卡片每张的宽：屏幕宽 − 左右各 16 边距 − 中间 16 间距，再平分。
+    /// iPad 上列数：iPad 屏宽大，两列卡片会撑得满屏都是（实测 1366 宽横屏每张 659pt）。
+    /// iPad 用 4 列，卡片回到手机上差不多的大小，一屏能看多张。
+    private var columnCount: Int {
+        UIDevice.current.userInterfaceIdiom == .pad ? 4 : 2
+    }
+
+    /// 卡片每张的宽：屏幕宽 − 左右各 16 边距 − 列间 16 间距，再按列数平分。
     /// 直接算死宽度，不靠 flexible 分（实测 flexible 在这页会分出宽窄不一的两列，
-    /// 左边贴边、右边出边）。两列 196 + 16 + 196 正好等于内容宽。
+    /// 左边贴边、右边出边）。iPhone 两列 196 + 16 + 196 正好等于内容宽。
     private var importCardWidth: CGFloat {
-        (UIScreen.main.bounds.width - 32 - 16) / 2
+        (UIScreen.main.bounds.width - 32 - CGFloat(columnCount - 1) * 16) / CGFloat(columnCount)
     }
 
     var body: some View {
@@ -67,7 +73,7 @@ struct ImportView: View {
                             Text("还没导入包。点下面“导入壁纸”选本地 .tendies / .wallive，没加密的包导入时会自动转成 WALLIVE1 加密版（只有本 App 能装），加密包会自动解密后再检查。导过的包都存在这一页，随时能看、随时能装。")
                                 .foregroundStyle(.secondary).font(.caption)
                         } else {
-                            LazyVGrid(columns: [GridItem(.fixed(importCardWidth), spacing: 16), GridItem(.fixed(importCardWidth))], spacing: 16) {
+                            LazyVGrid(columns: Array(repeating: GridItem(.fixed(importCardWidth), spacing: 16), count: columnCount), spacing: 16) {
                                 ForEach(state.importedPackages) { pkg in
                                     ImportedPackageCard(
                                         pkg: pkg,

@@ -5,5 +5,5 @@ import Foundation
 /// "Stamp build number into version tag"），tag 变成“V数字 正式版”（#53→V1，之后自动加）。
 /// GitHub Actions 编包不盖戳，直接用这里的 tag，所以这里须与当前版本一致。
 enum BuildInfo {
-    static let tag = "V1.24"
+    static let tag = "V1.25"
 }
