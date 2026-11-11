@@ -247,10 +247,13 @@ private struct ImportedPackageCard: View {
                         placeholder
                     }
                 }
+                // 卡片就是锁屏本身的比例 9:19.5，.fill 硬撑满这个框：
+                // 锁屏上看到什么样，卡片里就是什么样，整张底图都看得到，
+                // 不再只裁中间一段（9:11 裁掉山坡和人）。
                 // .fill 不是 .fit：.fit 在滚动列表里按封面原图比例走，图有横有竖、
-                // 卡片就高矮不一排不齐；.fill 强制 9:11 框，图超出的部分裁掉。
+                // 卡片就高矮不一排不齐。
                 .frame(maxWidth: .infinity)
-                .aspectRatio(9 / 11, contentMode: .fill)
+                .aspectRatio(9 / 19.5, contentMode: .fill)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             }
             .buttonStyle(.plain)
