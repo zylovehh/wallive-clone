@@ -1,0 +1,56 @@
+# 壁纸匣（WalliveClone）未签名 IPA：Azure DevOps 免费管线。
+# 与 codemagic.yaml 同步骤：解 rust-core 包 → 装 Rust → 编 AirliftFFI →
+# 解包依赖 → 写版本号 → xcodebuild 归档（不签名）→ 打未签名 IPA。
+# 触发方式：手动跑（trigger: none），不随推送自动编，省免费分钟。
+# 免费额度：私有项目每月 1800 分钟 macOS，单次最长 60 分钟，咱们一次约 5 分钟。
+trigger: none
+
+pool:
+  vmImage: 'macOS-latest'
+
+steps:
+  - script: xcodebuild -version
+    displayName: 'Show Xcode version'
+
+  - script: unzip -o rust-core.zip && ls rust-core
+    displayName: 'Unpack rust-core'
+
+  - script: |
+      if ! command -v cargo >/dev/null 2>&1; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      fi
+      source "$HOME/.cargo/env" || true
+      rustup target add aarch64-apple-ios
+    displayName: 'Install Rust toolchain'
+
+  - script: bash build-airlift.sh
+    displayName: 'Build AirliftFFI (device only)'
+
+  - script: xcodebuild -resolvePackageDependencies -project WalliveClone.xcodeproj -scheme WalliveClone
+    displayName: 'Resolve package dependencies'
+
+  - script: |
+      # 版本号手动定：发新版前把 TAG 里的号改一下（V1.0、V1.1……）。
+      # 原来的 V = BUILD_NUMBER - 52 自动加一已废弃（2026-11-10 用户定的）。
+      TAG="V1.6"
+      printf 'import Foundation\n\nenum BuildInfo {\n    static let tag = "%s"\n}\n' "$TAG" > App/BuildInfo.swift
+      cat App/BuildInfo.swift
+    displayName: 'Stamp build number into version tag'
+
+  - script: xcodebuild archive -project WalliveClone.xcodeproj -scheme WalliveClone -configuration Release -destination "generic/platform=iOS" -archivePath build/WalliveClone.xcarchive CODE_SIGNING_ALLOWED=NO
+    displayName: 'Archive (unsigned)'
+
+  - script: |
+      APP_PATH="build/WalliveClone.xcarchive/Products/Applications/WalliveClone.app"
+      rm -rf Payload
+      mkdir Payload
+      cp -R "$APP_PATH" Payload/
+      ditto -c -k --sequesterRsrc --keepParent Payload WalliveClone-unsigned.ipa
+      ls -l WalliveClone-unsigned.ipa
+    displayName: 'Package unsigned IPA'
+
+  - task: PublishPipelineArtifact@1
+    inputs:
+      targetPath: 'WalliveClone-unsigned.ipa'
+      artifact: 'WalliveClone-unsigned'
+    displayName: 'Publish unsigned IPA'
