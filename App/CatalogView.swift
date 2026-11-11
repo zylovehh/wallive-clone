@@ -73,6 +73,8 @@ struct CatalogView: View {
     private var filteredItems: [CatalogItem] {
         let _ = favorites.version // 订阅收藏变化：点红心就重排，不用切页才生效。
         let filtered = store.items.filter { item in
+            // iPhone 页只显示 iPhone 壁纸（没 device 字段的老条目默认就是 iPhone）。
+            guard item.device == "iphone" else { return false }
             let categoryOK = selectedCategory == "全部"
                 || item.tags.contains(selectedCategory)
             let queryOK = query.isEmpty
@@ -81,6 +83,26 @@ struct CatalogView: View {
             return categoryOK && queryOK
         }
         // 收藏的在前，其余保持目录原顺序（enumerated 保证排序稳定）。
+        return filtered.enumerated().sorted { a, b in
+            let aFav = favorites.isFavorite(a.element.id)
+            let bFav = favorites.isFavorite(b.element.id)
+            if aFav != bFav { return aFav }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// iPad 页的壁纸：目录里 device 是 ipad 的条目，同样按分类/搜索过滤、收藏排前面。
+    private var ipadItems: [CatalogItem] {
+        let _ = favorites.version
+        let filtered = store.items.filter { item in
+            guard item.device == "ipad" else { return false }
+            let categoryOK = selectedCategory == "全部"
+                || item.tags.contains(selectedCategory)
+            let queryOK = query.isEmpty
+                || item.title.localizedCaseInsensitiveContains(query)
+                || item.tags.contains { $0.localizedCaseInsensitiveContains(query) }
+            return categoryOK && queryOK
+        }
         return filtered.enumerated().sorted { a, b in
             let aFav = favorites.isFavorite(a.element.id)
             let bFav = favorites.isFavorite(b.element.id)
@@ -342,7 +364,7 @@ struct CatalogView: View {
         let toggled = CatalogItem(
             id: live.id, title: live.title, tags: live.tags,
             thumbnailURL: live.thumbnailURL, previewURL: live.previewURL,
-            packageURL: live.packageURL, pinned: !live.pinned, downloads: live.downloads)
+            packageURL: live.packageURL, pinned: !live.pinned, downloads: live.downloads, device: live.device)
         let newItems = store.items.map { $0.id == item.id ? toggled : $0 }
         do {
             try await store.pushCatalog(newItems, token: token)
@@ -378,38 +400,39 @@ struct CatalogView: View {
 
     // MARK: - iPad 页
 
+    /// iPad 页：目录里 device 是 ipad 的壁纸，用跟 iPhone 页一样的卡片网格显示；
+    /// 管理员在“增加壁纸”里选 iPad 传上来的就出现在这里。
     private var myView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if store.downloaded.isEmpty {
-                Text("还没下载过壁纸，去 iPhone 页下载一张吧。")
+            if store.loading && store.items.isEmpty {
+                ProgressView("正在拉目录…")
+                Spacer()
+            } else if ipadItems.isEmpty {
+                Text("这里还没有 iPad 壁纸，去“增加壁纸”里选 iPad 传一张吧。")
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                List {
-                    ForEach(store.downloaded) { record in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(record.title).font(.subheadline)
-                            Text(record.tags.map { "#\($0)" }.joined(separator: " "))
-                                .font(.caption).foregroundStyle(.secondary)
-                            Text("下载于 \(record.downloadedAt.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption).foregroundStyle(.secondary)
-                            HStack {
-                                Button("安装") {
-                                    if let data = try? Data(contentsOf: store.localURL(for: record)) {
-                                        state.setPackage(data, displayName: record.title)
-                                        addToLibrary(displayName: record.title)
-                                        state.selectedTab = 1
-                                    }
-                                }
-                                Button("删除", role: .destructive) {
-                                    store.delete(record)
-                                }
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(ipadItems) { item in
+                            NavigationLink(value: item.id) {
+                                CatalogCard(
+                                    item: item,
+                                    downloaded: store.isDownloaded(item),
+                                    downloading: store.downloadingIDs.contains(item.id),
+                                    favorites: favorites,
+                                    isAdmin: accountStore.currentUser != nil,
+                                    adminBusy: adminBusy,
+                                    onPreview: { previewItem = item },
+                                    onDownload: { await downloadAndInstall(item) },
+                                    onTogglePin: { Task { await adminTogglePin(item) } }
+                                )
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.plain)
                         }
                     }
+                    .padding(.horizontal)
                 }
-                .listStyle(.plain)
             }
         }
         .padding(.horizontal)
@@ -721,6 +744,8 @@ private struct AddWallpaperView: View {
 
     @State private var title = ""
     @State private var tags = "动漫"
+    /// 壁纸给哪个设备：iphone 或 ipad，选 ipad 的传上去就进 iPad 页。
+    @State private var device = "iphone"
     @State private var tendiesName = ""
     @State private var tendiesData: Data?
     @State private var thumbItem: PhotosPickerItem?
@@ -748,6 +773,12 @@ private struct AddWallpaperView: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("标签（逗号或顿号分隔）", text: $tags)
                     .textFieldStyle(.roundedBorder)
+                Picker("给哪个设备", selection: $device) {
+                    Text("iPhone").tag("iphone")
+                    Text("iPad").tag("ipad")
+                }
+                .pickerStyle(.segmented)
+                .disabled(busy)
                 Button(tendiesName.isEmpty ? "选 .tendies 文件" : "已选：\(tendiesName).tendies") {
                     showingTendiesPicker = true
                 }
@@ -1026,7 +1057,7 @@ private struct AddWallpaperView: View {
                 thumbnailURL: thumbnailURL,
                 previewURL: previewURL,
                 packageURL: CatalogStore.wallpapersRawBase + "\(id).tendies",
-                pinned: false, downloads: 0)
+                pinned: false, downloads: 0, device: device)
             // 新传的放第一个非置顶位置（置顶后面、其他旧条目前面），不再追加到最后。
             var updatedItems = store.items
             let insertAt = updatedItems.firstIndex(where: { !$0.pinned }) ?? updatedItems.endIndex
@@ -1262,7 +1293,7 @@ private struct ReplaceVideoView: View {
             let updated = CatalogItem(
                 id: live.id, title: live.title, tags: live.tags,
                 thumbnailURL: videoURL, previewURL: videoURL,
-                packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads)
+                packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads, device: live.device)
             let newItems = store.items.map { $0.id == item.id ? updated : $0 }
             try await store.pushCatalog(newItems, token: token)
             onDone()
@@ -1763,7 +1794,7 @@ private struct RenameView: View {
         let updated = CatalogItem(
             id: live.id, title: newTitle, tags: live.tags,
             thumbnailURL: live.thumbnailURL, previewURL: live.previewURL,
-            packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads)
+            packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads, device: live.device)
         let newItems = store.items.map { $0.id == item.id ? updated : $0 }
         do {
             try await store.pushCatalog(newItems, token: token)
@@ -1867,7 +1898,7 @@ private struct RetagView: View {
         let updated = CatalogItem(
             id: live.id, title: live.title, tags: parsedTags,
             thumbnailURL: live.thumbnailURL, previewURL: live.previewURL,
-            packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads)
+            packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads, device: live.device)
         let newItems = store.items.map { $0.id == item.id ? updated : $0 }
         do {
             try await store.pushCatalog(newItems, token: token)

@@ -22,9 +22,11 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
     let packageURL: String
     let pinned: Bool
     let downloads: Int
+    /// 壁纸给哪个设备：iphone 或 ipad，老目录表没有这字段时默认 iphone。
+    let device: String
 
     enum CodingKeys: String, CodingKey {
-        case id, title, tags, pinned, downloads
+        case id, title, tags, pinned, downloads, device
         case thumbnailURL = "thumbnail"
         case previewURL = "preview"
         case packageURL = "package"
@@ -41,10 +43,11 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
         // 老目录表没有这两个字段时默认不置顶、下载数 0，不让旧表解码失败。
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         downloads = try c.decodeIfPresent(Int.self, forKey: .downloads) ?? 0
+        device = try c.decodeIfPresent(String.self, forKey: .device) ?? "iphone"
     }
 
     /// 管理员改目录时直接拼一张新卡（改置顶、增加都用这个，不走解码）。
-    init(id: String, title: String, tags: [String], thumbnailURL: String, previewURL: String, packageURL: String, pinned: Bool, downloads: Int) {
+    init(id: String, title: String, tags: [String], thumbnailURL: String, previewURL: String, packageURL: String, pinned: Bool, downloads: Int, device: String = "iphone") {
         self.id = id
         self.title = title
         self.tags = tags
@@ -53,6 +56,7 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
         self.packageURL = packageURL
         self.pinned = pinned
         self.downloads = downloads
+        self.device = device
     }
 }
 
@@ -265,7 +269,8 @@ final class CatalogStore: ObservableObject {
         let dicts: [[String: Any]] = merged.map { item in
             ["id": item.id, "title": item.title, "tags": item.tags,
              "thumbnail": item.thumbnailURL, "preview": item.previewURL,
-             "package": item.packageURL, "pinned": item.pinned, "downloads": item.downloads]
+             "package": item.packageURL, "pinned": item.pinned, "downloads": item.downloads,
+             "device": item.device]
         }
         let data = try JSONSerialization.data(
             withJSONObject: ["items": dicts], options: [.withoutEscapingSlashes])
