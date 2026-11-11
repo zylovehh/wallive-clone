@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>壁纸安装器</string>
+	<string>壁纸匣</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -86,7 +86,7 @@
 		<string>_aircardprobe._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>壁纸安装器会在本机发布配对服务，让这台 iPhone 与自己配对，并通过本地通道安装壁纸。</string>
+	<string>壁纸匣会在本机发布配对服务，让这台 iPhone 与自己配对，并通过本地通道安装壁纸。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
