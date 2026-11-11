@@ -52,10 +52,111 @@ public enum TendiesPackage {
         return try inspectPlaintextZip(plaintext, zip: zip)
     }
 
+    /// 旧格式判断：包是不是 WWDC22 时代的布局（描述符 7400 / 文件名含 WWDC_2022 / 共用描述符 09E9B685-…）。
+    /// iOS 27 读不了这种布局：不转换直接装，不报错但永远不显示。iOS 26 能直接读，不用转。
+    public static func isOldFormat(_ data: Data, zip: ZipEditing) -> Bool {
+        let plaintext: Data
+        if Wallive1Crypto.isWallive1(data) {
+            guard let d = try? Wallive1Crypto.decrypt(data) else { return false }
+            plaintext = d
+        } else {
+            plaintext = data
+        }
+        guard let entries = try? zip.listEntries(in: plaintext) else { return false }
+        // 任一 WWDC22 痕迹都算旧格式。
+        for e in entries {
+            if e.contains("WWDC_2022") || e.contains("WWDC22") { return true }
+            if e.contains("09E9B685-7456-4856-9C10-47DF26B76C33") { return true }
+        }
+        // Wallpaper.plist 里的 identifier 是 7400 也算旧格式。
+        if let info = try? inspectPlaintextZip(plaintext, zip: zip) {
+            // 描述符 UUID 是共用的 WWDC22 那一个，或壁纸目录名以 7400. 开头。
+            if info.descriptorUUID == "09E9B685-7456-4856-9C10-47DF26B76C33" { return true }
+            if info.wallpaperDirectory.hasPrefix("7400.") { return true }
+        }
+        return false
+    }
+
+    /// 把旧格式（WWDC22 布局）包改写成 iOS 27 能读的新布局：换一个全新唯一描述符 UUID
+    /// 和一个 1000–9999 的随机编号（排除 7400），改掉四处身份（Wallpaper.plist identifier、
+    /// userInfo wallpaperRepresentingIdentifier、描述符 sidecar、suggestionMetadata），
+    /// 并把文件名里的 WWDC_2022 / 7400 前缀也换掉。返回新包数据（明文 zip；调用方再按需加密）。
+    public static func convertingOldFormatToNew(_ data: Data, zip: ZipEditing) throws -> Data {
+        let plaintext: Data
+        if Wallive1Crypto.isWallive1(data) {
+            plaintext = try Wallive1Crypto.decrypt(data)
+        } else {
+            plaintext = data
+        }
+        let entries = try zip.listEntries(in: plaintext)
+        guard let plistPath = entries.first(where: { $0.hasSuffix(".wallpaper/Wallpaper.plist") }) else {
+            throw Error.missingWallpaperPlist
+        }
+        let parts = plistPath.split(separator: "/")
+        guard parts.count >= 6, parts[0] == "descriptors" else {
+            throw Error.missingWallpaperDirectory
+        }
+        let oldUUID = String(parts[1])
+        let newUUID = UUID().uuidString
+        var newNumber = Int.random(in: 1000...9999)
+        while newNumber == 7400 { newNumber = Int.random(in: 1000...9999) }
+        let newNumberStr = String(newNumber)
+
+        var out: [(path: String, data: Data)] = []
+        for path in entries {
+            var newPath = path
+            // 文件夹 UUID 换掉。
+            if newPath.contains(oldUUID) {
+                newPath = newPath.replacingOccurrences(of: oldUUID, with: newUUID)
+            }
+            // 文件名里的 WWDC_2022 / 7400 前缀换成新编号。
+            newPath = newPath.replacingOccurrences(of: "WWDC_2022", with: "WALLPAPER")
+            if let range = newPath.range(of: "7400\\.", options: .regularExpression) {
+                newPath.replaceSubrange(range, with: "\(newNumberStr).")
+            }
+            // 目录名里的 7400. 也换掉。
+            newPath = newPath.replacingOccurrences(of: "/7400.", with: "/\(newNumberStr).")
+            let entryData = try zip.readEntry(path, in: plaintext)
+            var finalData = entryData
+            // Wallpaper.plist：identifier 改新编号。
+            if path.hasSuffix(".wallpaper/Wallpaper.plist") {
+                if var plist = try? PropertyListSerialization.propertyList(from: entryData, format: nil) as? [String: Any] {
+                    plist["identifier"] = newNumberStr
+                    if var userInfo = plist["userInfo"] as? [String: Any] {
+                        userInfo["wallpaperRepresentingIdentifier"] = newNumberStr
+                        plist["userInfo"] = userInfo
+                    }
+                    if let newPlist = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+                        finalData = newPlist
+                    }
+                }
+            }
+            // suggestionMetadata：descriptorIdentifier 换新 UUID，7400.DYNAMIC 换新编号。
+            if path.hasSuffix("suggestionMetadata.plist") {
+                if var plist = try? PropertyListSerialization.propertyList(from: entryData, format: nil) as? [String: Any] {
+                    plist["descriptorIdentifier"] = newUUID
+                    if let s = plist["suggestionMetadata"] as? String, s.contains("7400.DYNAMIC") {
+                        plist["suggestionMetadata"] = s.replacingOccurrences(of: "7400.DYNAMIC", with: "\(newNumberStr).DYNAMIC")
+                    }
+                    if let newPlist = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+                        finalData = newPlist
+                    }
+                }
+            }
+            // 描述符 sidecar：内容是 UUID 就换新 UUID。
+            if path.hasSuffix("com.apple.posterkit.provider.descriptor.identifier") {
+                if let s = String(data: entryData, encoding: .utf8), s.contains(oldUUID) {
+                    finalData = s.replacingOccurrences(of: oldUUID, with: newUUID).data(using: .utf8) ?? entryData
+                }
+            }
+            out.append((path: newPath, data: finalData))
+        }
+        return try zip.rebuild(entries: out)
+    }
+
     /// 检查已解密的标准 zip 包。
     public static func inspectPlaintextZip(_ zipData: Data, zip: ZipEditing) throws -> TendiesPackageInfo {
         let entries = try zip.listEntries(in: zipData)
-        // 找 contents/<名>.wallpaper/Wallpaper.plist，借此定位描述符 UUID 与壁纸目录。
         guard let plistPath = entries.first(where: { $0.hasSuffix(".wallpaper/Wallpaper.plist") }) else {
             throw Error.missingWallpaperPlist
         }

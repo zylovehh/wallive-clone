@@ -223,6 +223,18 @@ private struct StatusVPNPage: View {
                 .padding()
                 .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                // 卡片：旧格式壁纸包自动转换
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("旧格式壁纸包自动转换").font(.headline)
+                    Toggle("旧格式壁纸包自动转换", isOn: $state.autoConvertOldFormat)
+                        .font(.subheadline)
+                    Text("打开时，旧格式（WWDC22 布局）包在 iOS 27 上装之前会转成新格式；每个包第一次装时会问你转还是按原样，答案会记住。关掉后，一律按原样装、不转换。iOS 26 能直接读旧包，不用转、也不会弹询问。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding()
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                 // 卡片 2：回环 VPN 连通
                 VStack(alignment: .leading, spacing: 12) {
                     Text("回环 VPN 连通").font(.headline)

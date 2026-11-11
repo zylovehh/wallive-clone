@@ -38,6 +38,14 @@ final class AppState: ObservableObject {
     @Published var installHistory: [String] = []
     @Published var installReports: [InstallReport] = []
     @Published var statusMessage = ""
+    /// 旧格式壁纸包自动转换：打开时，旧格式（WWDC22 布局）包在 iOS 27 上装之前会转成新格式；
+    /// 每个包第一次装时会问转还是按原样，答案会记住。关掉后一律按原样装、不转换。
+    /// iOS 26 能直接读旧包，不用转、也不会弹询问；iOS 27 起全系列都需要转。
+    @Published var autoConvertOldFormat = true {
+        didSet { UserDefaults.standard.set(autoConvertOldFormat, forKey: "wallive-clone-auto-convert-old-format") }
+    }
+    /// 每个包记住的转换选择：描述符 UUID → true 转、false 按原样。记在 UserDefaults。
+    private let convertChoiceKey = "wallive-clone-convert-choices"
     /// 这台设备的身份（UDID、iOS 版本、build）。读不到时为 nil，
     /// 界面显示"设备版本读不到"，安装按 fail closed 走备份路。
     @Published var deviceInfo: BackupFFI.DeviceInfo?
@@ -46,7 +54,28 @@ final class AppState: ObservableObject {
         // 启动自愈：上次逃逸中途崩溃会把 App Group 的 Library/Caches 留成
         // 指向壁纸库的软链，不收拾会污染其他走 App Group 的读写。
         WorseQueryEscape.recoverStaleSymlink()
+        autoConvertOldFormat = UserDefaults.standard.object(forKey: "wallive-clone-auto-convert-old-format") as? Bool ?? true
         loadImportedPackages()
+    }
+
+    /// 记住某个包的转换选择：true 转、false 按原样。
+    func rememberConvertChoice(descriptorUUID: String, convert: Bool) {
+        var choices = UserDefaults.standard.dictionary(forKey: convertChoiceKey) as? [String: Bool] ?? [:]
+        choices[descriptorUUID] = convert
+        UserDefaults.standard.set(choices, forKey: convertChoiceKey)
+    }
+
+    /// 取某个包记住的转换选择：nil 表示还没问过。
+    func rememberedConvertChoice(descriptorUUID: String) -> Bool? {
+        let choices = UserDefaults.standard.dictionary(forKey: convertChoiceKey) as? [String: Bool] ?? [:]
+        return choices[descriptorUUID]
+    }
+
+    /// 这台设备是不是 iOS 27 起（需要转换旧格式）：只看大版本，与小版本和 build 号无关。
+    var needsOldFormatConversion: Bool {
+        guard let version = deviceInfo?.systemVersion else { return true }
+        let major = Int(version.split(separator: ".").first ?? "0") ?? 0
+        return major >= 27
     }
 
     /// 读一次设备身份（只读不写）。隧道/配对不通就置空，不抛错——

@@ -804,6 +804,9 @@ private struct ImportDetailView: View {
     /// 开启深景的结果提示（成功/失败都显示在本页，不跳深景页）。
     @State private var depthMessage = ""
     @State private var depthBusy = false
+    /// 旧格式转换询问：第一次装旧格式包时弹，问转还是按原样；答案记住后不再问。
+    @State private var showConvertPrompt = false
+    @State private var convertPromptDescriptor = ""
 
     // 详情页两个按钮同宽。
     private let buttonWidth: CGFloat = 220
@@ -1055,6 +1058,12 @@ private struct ImportDetailView: View {
                 }
             }
         }
+        .alert("这个包是旧格式", isPresented: $showConvertPrompt) {
+            Button("转成新格式") { Task { await proceedInstallAfterConvertChoice(convert: true) } }
+            Button("按原样安装", role: .cancel) { Task { await proceedInstallAfterConvertChoice(convert: false) } }
+        } message: {
+            Text("老包用的是 WWDC22 时代的布局，iOS 27 读不了：不转直接装，不会报错，但永远不显示。转成新格式再装就能显示。以后这个包都按这次的选择来。")
+        }
     }
 
     private func row(_ key: String, _ value: String) -> some View {
@@ -1141,6 +1150,24 @@ private struct ImportDetailView: View {
     }
 
     private func runInstall() async {
+        // 旧格式转换：iOS 27 起、开关开着、包是旧格式（WWDC22 布局）时，先看记没记住选择；
+        // 没记住就弹询问，等用户选了再继续；记住转的就先转成新格式再装。
+        if state.autoConvertOldFormat, state.needsOldFormatConversion,
+           let data = state.packageData,
+           let info = state.packageInfo,
+           TendiesPackage.isOldFormat(data, zip: ZipFoundationAdapter()) {
+            if let remembered = state.rememberedConvertChoice(descriptorUUID: info.descriptorUUID) {
+                if remembered {
+                    if let converted = try? TendiesPackage.convertingOldFormatToNew(data, zip: ZipFoundationAdapter()) {
+                        state.setPackage(converted, displayName: state.packageDisplayName)
+                    }
+                }
+            } else {
+                convertPromptDescriptor = info.descriptorUUID
+                showConvertPrompt = true
+                return
+            }
+        }
         installing = true
         installStep = "正在准备安装包…"
         installProgress = 0
@@ -1181,6 +1208,16 @@ private struct ImportDetailView: View {
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：再试一次；还不行就看提示和下面日志框里的原因。"
         }
+    }
+
+    /// 旧格式询问后继续安装：记住选择；选转就先转成新格式再装，选原样就直接装。
+    private func proceedInstallAfterConvertChoice(convert: Bool) async {
+        state.rememberConvertChoice(descriptorUUID: convertPromptDescriptor, convert: convert)
+        if convert, let data = state.packageData,
+           let converted = try? TendiesPackage.convertingOldFormatToNew(data, zip: ZipFoundationAdapter()) {
+            state.setPackage(converted, displayName: state.packageDisplayName)
+        }
+        await runInstall()
     }
 
     /// 一键重启手机：备份路装完必须重启一次壁纸才会进图库（27.2 上
