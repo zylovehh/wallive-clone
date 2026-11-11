@@ -19,6 +19,14 @@ struct ImportedPackage: Identifiable, Codable, Equatable {
     let importedAt: Date
 }
 
+/// 安装方式（安装页分段控件用）：
+/// 直刷 = 逃逸直写（Vellum 同款，全程不碰配对隧道，也不需要 VPN）；
+/// 隧道 = 配对隧道写盘（AirliftInstaller，27.2 上必须先开好回环 VPN）。
+enum InstallChannel {
+    case direct
+    case tunnel
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var selectedTab = 0
@@ -267,9 +275,48 @@ final class AppState: ObservableObject {
     /// 配对、偏好键与路径、结构版本映射、标识策略。
     /// V1.19：不再读设备身份、不再按四态选择分路——直写隧道和备份改表
     /// 两条路都停用，host / forceRefresh 留着签名兼容，不再使用。
-    func installWithReport(host: String, forceRefresh: Bool = true, onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
+    /// V1.41：加 channel 参数（安装页分段控件用）：直刷=逃逸直写（原唯一路，
+    /// 全程不碰配对）；隧道=配对隧道写盘（AirliftInstaller）。默认直刷，
+    /// 导入页等老调用点行为不变。
+    func installWithReport(host: String, forceRefresh: Bool = true, channel: InstallChannel = .direct, onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
         guard let data = packageData else { return nil }
+        if channel == .tunnel {
+            guard hasPairingFile else {
+                statusMessage = "隧道装不了：没读到配对文件。先去状态页导入配对文件，或改走直刷。"
+                return nil
+            }
+            return try await installWithReportTunnel(
+                data: data, host: host, forceRefresh: forceRefresh, onProgress: onProgress)
+        }
         return try await installWithReportBackup(data: data, onProgress: onProgress)
+    }
+
+    /// 隧道路安装（配对路）：本地暂存 → AirliftInstaller 经配对隧道写盘
+    /// （配对检查 → 找容器 → 注入描述符 → 写偏好 → 读回核对 → 登记 →
+    /// 刷 PosterBoard 进程）。27.2 上隧道必须回环 VPN：先开好 VPN 再点安装，
+    /// 配对不通会直接报错不写盘。结果原样进 installReports，报告里带
+    /// 读回核对（阶段 A）与刷新结论（阶段 D）。
+    private func installWithReportTunnel(data: Data,
+                                         host: String,
+                                         forceRefresh: Bool,
+                                         onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
+        do {
+            onProgress?("正在准备安装包…", 0.05)
+            let installer = DescriptorInstaller(zip: zip)
+            let (stage, descriptorUUID) = try installer.stage(data)
+            let report = try await AirliftInstaller.installWithReport(
+                stagedDirectory: stage, descriptorUUID: descriptorUUID,
+                pairingPath: pairingFileURL.path, targetHost: host,
+                forceRefresh: forceRefresh, onProgress: onProgress)
+            installHistory.append(report.descriptorUUID)
+            installReports.append(report)
+            return report
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            statusMessage = "隧道安装失败：\(error.localizedDescription)"
+            return nil
+        }
     }
 
     /// 备份路安装（V1.19 起是唯一安装路）：走 Vellum 同款那条（直读找库 +
