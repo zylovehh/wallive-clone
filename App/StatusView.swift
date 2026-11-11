@@ -280,7 +280,7 @@ private struct StatusVPNPage: View {
                             .font(.title2.bold())
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
-                        Text("去“设置 › 隐私与安全 › 开发者模式 › 与壁纸安装器配对”输入上面这串数字。")
+                        Text("去“设置 › 隐私与安全 › 开发者模式 › 与壁纸匣配对”输入上面这串数字。")
                             .font(.caption)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
@@ -320,7 +320,7 @@ private struct StatusVPNPage: View {
 
     /// 生成配对文件：先复用检查按钮的 VPN 连通逻辑，没连 VPN 就不配对；
     /// 连通才启动本机配对主机（后台等握手），同时自动跳到
-    /// “设置 › 隐私与安全 › 开发者模式”，用户点“与壁纸安装器配对”，
+    /// “设置 › 隐私与安全 › 开发者模式”，用户点“与壁纸匣配对”，
     /// PIN 出现后回本 App 看一眼，再去设置里输 PIN。成功刷新状态，失败报真实原因。
     private func generate() async {
         guard !generating else { return }
@@ -395,12 +395,12 @@ private struct StatusVPNPage: View {
                 UIApplication.shared.open(fallback, options: [:]) { ok in
                     Task { @MainActor in
                         self.generateResult = ok
-                            ? "已打开设置：去隐私与安全，滑到最底点开发者模式，再点与壁纸安装器配对输 PIN。停在哪一页都没关系，从设置主页找隐私与安全就行。"
-                            : "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸安装器配对”输 PIN。"
+                            ? "已打开设置：去隐私与安全，滑到最底点开发者模式，再点与壁纸匣配对输 PIN。停在哪一页都没关系，从设置主页找隐私与安全就行。"
+                            : "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸匣配对”输 PIN。"
                     }
                 }
             } else {
-                generateResult = "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸安装器配对”输 PIN。"
+                generateResult = "没跳过去：请手动去“设置 → 隐私与安全 → 开发者模式”，点“与壁纸匣配对”输 PIN。"
             }
             return
         }
@@ -409,7 +409,7 @@ private struct StatusVPNPage: View {
                 // 设置打开了，但系统不一定落到开发者模式那栏（27.2 上旧写法会落到 App 列表）。
                 // 留一句指引，用户按着点就不会走错。
                 Task { @MainActor in
-                    self.generateResult = "已打开设置：去隐私与安全，滑到最底点开发者模式，再点与壁纸安装器配对输 PIN。停在哪一页都没关系，从设置主页找隐私与安全就行。"
+                    self.generateResult = "已打开设置：去隐私与安全，滑到最底点开发者模式，再点与壁纸匣配对输 PIN。停在哪一页都没关系，从设置主页找隐私与安全就行。"
                 }
             } else {
                 Task { @MainActor in
