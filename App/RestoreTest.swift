@@ -497,7 +497,7 @@ enum RestoreTest {
         }
         guard let container else {
             throw StepError(step: "找壁纸库",
-                            detail: "直读没找到壁纸库。这条路不用 VPN：看上面「共享抽屉体检」——报了候选组名但都说拿不到容器，就是签名没把这些组配进去，重新签名/换描述文件再试；说没挖到组名，就是描述文件里压根没带应用组；容器正常还报错就先重启手机再装一次。")
+                            detail: "直读没找到壁纸库。这条路不用 VPN：看上面日志——有「总目录列到 N 个容器」就是列目录成了、但逐个探都没拿到通行证（系统封了这条路，换签名/换描述文件再试）；连「总目录列到」这句都没有，就是系统连列目录都不给，把这份日志发回来接着查；容器正常还报错就先重启手机再装一次。")
         }
         report["container"] = container
 
@@ -799,40 +799,87 @@ enum RestoreTest {
     /// 上次成功安装记下的 PosterBoard 容器路径。共享抽屉里存一份、
     /// 本机也存一份，读的时候共享抽屉优先（重装 App 后本机的就没了，
     /// 共享抽屉还在）。路径形状不对就当没有。
+    /// V1.22：换签名后候选组顺序会变，所以几套组都翻一遍，别只认第一个。
     private static func cachedContainerPath() -> String? {
-        let group = UserDefaults(suiteName: WorseQueryEscape.appGroup)
-        let candidates = [
-            group?.string(forKey: cachedContainerKey),
-            UserDefaults.standard.string(forKey: cachedContainerKey),
-        ]
-        for p in candidates.compactMap({ $0 }) {
+        var stored: [String] = []
+        for group in WorseQueryEscape.candidateGroups {
+            if let p = UserDefaults(suiteName: group)?.string(forKey: cachedContainerKey) {
+                stored.append(p)
+            }
+        }
+        if let p = UserDefaults.standard.string(forKey: cachedContainerKey) {
+            stored.append(p)
+        }
+        for p in stored {
             if p.contains("Containers/Data/Application/") { return p }
         }
         return nil
     }
 
-    /// 记下这次用的容器路径，下次拿表走直读。
+    /// 记下这次用的容器路径，下次拿表走直读。几套组都存一份，
+    /// 换签名后无论哪个组排第一都查得到。
     private static func saveContainerPath(_ path: String) {
-        UserDefaults(suiteName: WorseQueryEscape.appGroup)?.set(path, forKey: cachedContainerKey)
+        for group in WorseQueryEscape.candidateGroups {
+            UserDefaults(suiteName: group)?.set(path, forKey: cachedContainerKey)
+        }
         UserDefaults.standard.set(path, forKey: cachedContainerKey)
     }
 
-    /// 总目录直翻（Vellum 思路）：对“应用数据总目录”吃沙箱扩展（只读探
-    /// 测），然后翻一遍里面所有容器，找到藏着壁纸库的那一个，直接读表。
-    /// 头一回装也走直读，不依赖任何缓存。翻不到或扩展不给，返回 nil，
-    /// 调用方回落到缓存路径 / 老链。成了就把句柄一并交回，写文件/写回表
-    /// 复用同一个扩展。
+    /// 总目录直翻（V1.22 改成 Vellum 同款 inode-scan）：不再向「应用数据
+    /// 总目录」要通行证——真机实测对父级路径的查询每台手机都被拒，第一
+    /// 次装就找不到库。改为把总目录下的容器一个个列出来，逐个单独吃扩
+    /// 展、探头找 61 号店（对具体容器的查询系统放行，Vellum 诊断 400 个
+    /// 5.4s 全部拿到句柄）。头一回装也走直读，不依赖任何缓存。列出失败
+    /// 才退回旧路（总目录扩展）和缓存路径。成了把句柄一并交回，写文件/
+    /// 写回表复用同一个扩展。
     private static func discoverAndReadDirect(workDir: URL)
         -> (db: URL, wal: URL?, container: String, handle: Int64)? {
         let fm = FileManager.default
-        // /var 和 /private/var 是同一个地方两种写法，先试规范写法。
-        for root in ["/private/var/mobile/Containers/Data/Application",
-                     "/var/mobile/Containers/Data/Application"] {
-            let esc = WorseQueryEscape.consume(target: root, requireWrite: false, log: {
+        // /var 和 /private/var 是同一个地方两种写法，列到哪个用哪个。
+        let roots = ["/var/mobile/Containers/Data/Application",
+                     "/private/var/mobile/Containers/Data/Application"]
+        for root in roots {
+            // 第一步：把候选容器名列出来（只列名字，不读内容）。
+            let entries = (try? fm.contentsOfDirectory(atPath: root)) ?? []
+            guard !entries.isEmpty else { continue }
+            InstallLog.shared.append("vellum: 总目录列到 \(entries.count) 个容器，逐个探头找库。")
+            // 第二步：逐个容器单独吃扩展，探到库就读表。
+            var scanned = 0
+            var consecutiveFails = 0
+            for entry in entries {
+                let candidate = (root as NSString).appendingPathComponent(entry)
+                let esc = WorseQueryEscape.consume(target: candidate, requireWrite: false, quiet: true)
+                scanned += 1
+                guard let h = esc.handle else {
+                    // 连续 20 个容器都拿不到通行证：这条路在这台系统上八成被封了，
+                    // 别再白试几百个（每回 400 个×全组被拒要好几分钟）。
+                    consecutiveFails += 1
+                    if consecutiveFails >= 20 {
+                        InstallLog.shared.append("vellum: 连续 \(consecutiveFails) 个容器都拿不到通行证，剩下的不再试。")
+                        scanned = entries.count
+                        break
+                    }
+                    continue
+                }
+                consecutiveFails = 0
+                let dbPath = candidate + PosterBoard.storePath(storeVersion)
+                    + "/" + PosterBoard.databaseFileName
+                if fm.fileExists(atPath: dbPath),
+                   let read = readStoreDirect(container: candidate, workDir: workDir) {
+                    InstallLog.shared.append("vellum: 探了 \(scanned) 个，壁纸库在：\(candidate)。")
+                    return (db: read.db, wal: read.wal, container: candidate, handle: h)
+                }
+                // 不是这个容器（或表读不了）：把扩展还回去，看下一个。
+                WorseQueryEscape.release(h)
+            }
+            InstallLog.shared.append("vellum: 这 \(scanned) 个容器里都没翻到壁纸库。")
+        }
+        // 旧路兜底：对总目录吃扩展（多半被拒，留给系统放行的情形）。
+        for root in roots {
+            let esc = WorseQueryEscape.consume(target: root, requireWrite: false) {
                 InstallLog.shared.append("restore: \($0)")
-            })
+            }
             guard let h = esc.handle else { continue }
-            // 翻一遍：哪个容器里躺着 61 号商店的表，哪个就是壁纸库。
             let entries = (try? fm.contentsOfDirectory(atPath: root)) ?? []
             for entry in entries {
                 let candidate = (root as NSString).appendingPathComponent(entry)

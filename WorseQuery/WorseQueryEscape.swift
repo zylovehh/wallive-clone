@@ -158,8 +158,11 @@ enum WorseQueryEscape {
     ///   - requireWrite: true 时拿扩展先探测可写（写壁纸前用）；false 时只
     ///     探测可读——对总目录这类只读路径翻找用，class 2 备用招也不参与，
     ///     免得把熔断次数白烧掉。
+    ///   - quiet: true 时不写逐组失败和总结日志（逐容器扫描时一次要试
+    ///     几百个，刷屏没有意义）；成败与原因仍照常返回给调用方。
     static func consume(target: String,
                         requireWrite: Bool = true,
+                        quiet: Bool = false,
                         log: @escaping (String) -> Void = { _ in }) -> (handle: Int64?, failReason: String?, detail: String?) {
         let fm = FileManager.default
         let class2Allowed = requireWrite && class2OptIn && !class2AutoDisabled
@@ -186,12 +189,16 @@ enum WorseQueryEscape {
                 usedGroup = candidate
                 break
             }
-            log("组 \(candidate) 逃逸没成（\(describe(lastCode))），换下一个候选组接着试。")
+            if !quiet {
+                log("组 \(candidate) 逃逸没成（\(describe(lastCode))），换下一个候选组接着试。")
+            }
         }
 
         if handle > 0 {
             let flagDesc = lastClass > 0 ? "\(lastClass == 7 ? "class 7" : "class 2 备用招") 第 \(lastIndex + 1) 组 flags" : ""
-            log("逃逸成功：沙箱扩展句柄 \(handle)" + (usedGroup.map { "（组 \($0)）" } ?? "") + (flagDesc.isEmpty ? "" : "（\(flagDesc)）") + "。")
+            if !quiet {
+                log("逃逸成功：沙箱扩展句柄 \(handle)" + (usedGroup.map { "（组 \($0)）" } ?? "") + (flagDesc.isEmpty ? "" : "（\(flagDesc)）") + "。")
+            }
 
             // 写前探测：拿到扩展不等于真能写，先试一下，不行就把扩展还回去。
             // 只读模式（requireWrite=false）探可读就行——扩展是为了翻找，不是为了写。
@@ -200,12 +207,16 @@ enum WorseQueryEscape {
                 : fm.isReadableFile(atPath: target)
             guard probeOK else {
                 wq_release(handle)
-                log(requireWrite
-                    ? "扩展拿到了，但目标还是写不进，探测失败，扩展已还回去。"
-                    : "扩展拿到了，但目标读不了，探测失败，扩展已还回去。")
+                if !quiet {
+                    log(requireWrite
+                        ? "扩展拿到了，但目标还是写不进，探测失败，扩展已还回去。"
+                        : "扩展拿到了，但目标读不了，探测失败，扩展已还回去。")
+                }
                 return (nil, "沙箱扩展已获取，但目标仍不可写（probe 失败）", flagDesc.isEmpty ? nil : flagDesc)
             }
-            log("探测通过：目标现在真的可写。")
+            if !quiet {
+                log("探测通过：目标现在真的可写。")
+            }
             if class2Allowed { UserDefaults.standard.set(0, forKey: class2FailuresKey) }
             return (handle, nil, flagDesc.isEmpty ? nil : flagDesc)
         }
@@ -226,7 +237,9 @@ enum WorseQueryEscape {
         case 13: tried = "系统组 class 7 正路 + class 13 免组兜底路都"
         default: tried = "系统组 class 7 正路 + 签名组 class 7 flags 都"
         }
-        log("逃逸没成（\(reason)，\(tried)试过，最后一组：class \(lastClass) 第 \(lastIndex + 1) 组）。")
+        if !quiet {
+            log("逃逸没成（\(reason)，\(tried)试过，最后一组：class \(lastClass) 第 \(lastIndex + 1) 组）。")
+        }
         return (nil, reason, "最后失败：class \(lastClass) 第 \(lastIndex + 1) 组 flags，\(tried)均试过")
     }
 
