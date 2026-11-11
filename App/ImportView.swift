@@ -2,7 +2,7 @@
 // V6 导入安装合并页：导入库 + 详情二级页，不再单独占安装页签。
 // 导入库：导过的包都存下来排成卡片（封面、名字、大小、日期），点应用打开详情安装，
 // 点垃圾桶删掉本机存的这份；底部是导入壁纸和获取更多壁纸。
-// 详情：壁纸包信息、图层信息、深景状态、制作深景包、安装壁纸。
+// 详情：壁纸包信息、图层信息、深景状态、开启深景、安装壁纸。
 // 安装：装完不重启桌面、不闪屏、不黑屏；写盘返回成功不代表图库已列出，
 // 诊断区显示逐目录结果、读回核对（HouseArrest 通道）、登记条数与进程刷新。
 
@@ -801,8 +801,11 @@ private struct ImportDetailView: View {
     @State private var showRebootConfirm = false
     @State private var rebooting = false
     @State private var rebootResult = ""
+    /// 开启深景的结果提示（成功/失败都显示在本页，不跳深景页）。
+    @State private var depthMessage = ""
+    @State private var depthBusy = false
 
-    // 详情页两个按钮同宽：按最长的“制作深景包”定。
+    // 详情页两个按钮同宽。
     private let buttonWidth: CGFloat = 220
 
     /// 备份路装完要重启手机才进图库（装完本地刷新没成时）：显示“重启手机”按钮。
@@ -844,11 +847,17 @@ private struct ImportDetailView: View {
 
                     HStack {
                         Spacer()
-                        Button("制作深景包") { state.selectedTab = 2 }
+                        Button(depthBusy ? "正在开启…" : "开启深景") { Task { await runEnableDepth() } }
                             .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .frame(width: buttonWidth).padding(.vertical, 12).glassCapsule()
                             .buttonStyle(PressBounceButtonStyle())
+                            .disabled(state.packageData == nil || depthBusy)
                         Spacer()
+                    }
+                    if !depthMessage.isEmpty {
+                        Text(depthMessage)
+                            .font(.caption).foregroundStyle(depthMessage.hasPrefix("深景已开启") ? .green : .red)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
                     HStack {
                         Spacer()
@@ -1092,6 +1101,45 @@ private struct ImportDetailView: View {
     /// 写盘函数返回成功，不代表图库已列出。成功文案分两档：第一档是写盘结果，
     /// 第二档（目标落地已核对）只有读回核对全部通过时才出现；通道不可用或
     /// 有缺失时，第二档不出现，页面如实写通道不可用或缺失。
+    /// 本页直接开启深景：拿当前包生成深景版，设为当前包，本页深景状态就变成“已有深景开关”，
+    /// 不跳深景页；成功/失败都在本页提示一句。
+    private func runEnableDepth() async {
+        guard let data = state.packageData else { return }
+        depthBusy = true
+        defer { depthBusy = false }
+        do {
+            let plain: Data
+            if Wallive1Crypto.isWallive1(data) {
+                plain = try Wallive1Crypto.decrypt(data)
+            } else {
+                plain = data
+            }
+            let out = try DepthPackageBuilder.addingDepthConfiguration(to: plain, zip: ZipFoundationAdapter())
+            state.setPackage(out, displayName: pkg.displayName)
+            depthMessage = "深景已开启，可以直接点“安装壁纸”了。"
+        } catch is Wallive1Crypto.Error {
+            depthMessage = "开启失败：这个包解不开了，重新导入一次原包再试。"
+        } catch let error as DepthPackageBuilder.Error {
+            switch error {
+            case .missingWallpaperPlist:
+                depthMessage = "开启失败：包里找不到壁纸清单，结构不对。"
+            case .missingFloatingFile:
+                depthMessage = "开启失败：包里读不到漂浮层文件名，做不了深景。"
+            case .badTemplate:
+                depthMessage = "开启失败：内置模板坏了，把这条发我，我来修。"
+            }
+        } catch let error as ZipFoundationAdapter.AdapterError {
+            switch error {
+            case .notAnArchive:
+                depthMessage = "开启失败：这个包不是标准压缩包，解不开，重新导入一次试试。"
+            case .entryNotFound(let path):
+                depthMessage = "开启失败：包里缺文件（\(path)），换个包试试。"
+            }
+        } catch {
+            depthMessage = "开启失败：\(error.localizedDescription)"
+        }
+    }
+
     private func runInstall() async {
         installing = true
         installStep = "正在准备安装包…"
