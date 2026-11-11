@@ -28,7 +28,7 @@ workflows:
         script: |
           # 版本号手动定：发新版前把 TAG 里的号改一下（V1.0、V1.1……）。
           # 原来的 V = BUILD_NUMBER - 52 自动加一已废弃（2026-11-10 用户定的）。
-          TAG="V1.2 正式版"
+          TAG="V1.3 正式版"
           printf 'import Foundation\n\nenum BuildInfo {\n    static let tag = "%s"\n}\n' "$TAG" > App/BuildInfo.swift
           cat App/BuildInfo.swift
       - name: Archive (unsigned)
