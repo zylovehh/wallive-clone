@@ -6,6 +6,7 @@
 
 import Foundation
 import Network
+import UIKit
 
 /// 导入库里的一张包：包文件存在沙盒 Documents/imported-packages/ 里，App 重启还在；
 /// 元数据（名字、大小、时间、封面文件名）记在 UserDefaults，启动时读回来。
