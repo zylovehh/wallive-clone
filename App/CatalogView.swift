@@ -3,7 +3,7 @@
 // 卡片左上角播放键点一下播预览视频（AVKit 系统播放器），平时只显示静态缩略图。
 // 下载完直接把包交给安装页（AppState.setPackage + 切到“安装”页），不另起安装逻辑。
 // 红心收藏的排前面（只影响本机显示，目录表不动）。
-// 管理员登入后卡片上有改置顶、删除的按钮，还有增加壁纸的入口（推到公开目录仓库，靠本机钥匙串里的 GitHub 钥匙）。
+// 管理员登入后卡片上有置顶图钉；点卡片进详情页，管理区里有加视频/换视频、换壁纸、换名字、换标签、删除壁纸（推到公开目录仓库，靠本机钥匙串里的 GitHub 钥匙）。
 
 import SwiftUI
 import AVKit
@@ -136,6 +136,35 @@ struct CatalogView: View {
                 AccountView(store: accountStore)
             }
             .task { await store.fetch() }
+            .navigationDestination(for: String.self) { id in
+                if let item = store.items.first(where: { $0.id == id }) {
+                    CatalogDetailView(
+                        item: item,
+                        store: store,
+                        favorites: favorites,
+                        isAdmin: accountStore.currentUser != nil,
+                        adminBusy: adminBusy,
+                        onPreview: {
+                            if let live = store.items.first(where: { $0.id == id }) { previewItem = live }
+                        },
+                        onDownload: {
+                            if let live = store.items.first(where: { $0.id == id }) {
+                                await downloadAndInstall(live)
+                            }
+                        },
+                        onTogglePin: { Task { await adminTogglePin(item) } },
+                        onDelete: {
+                            itemToDelete = store.items.first(where: { $0.id == id }) ?? item
+                        },
+                        onReplaceVideo: {
+                            videoReplaceItem = store.items.first(where: { $0.id == id }) ?? item
+                        }
+                    )
+                } else {
+                    Text("这张壁纸已经不在目录里了。")
+                        .foregroundStyle(.secondary)
+                }
+            }
             .sheet(item: $previewItem) { item in
                 PreviewPlayerView(item: item)
             }
@@ -226,19 +255,20 @@ struct CatalogView: View {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(filteredItems) { item in
-                            CatalogCard(
-                                item: item,
-                                downloaded: store.isDownloaded(item),
-                                downloading: store.downloadingIDs.contains(item.id),
-                                favorites: favorites,
-                                isAdmin: accountStore.currentUser != nil,
-                                adminBusy: adminBusy,
-                                onPreview: { previewItem = item },
-                                onDownload: { await downloadAndInstall(item) },
-                                onTogglePin: { Task { await adminTogglePin(item) } },
-                                onDelete: { itemToDelete = item },
-                                onReplaceVideo: { videoReplaceItem = item }
-                            )
+                            NavigationLink(value: item.id) {
+                                CatalogCard(
+                                    item: item,
+                                    downloaded: store.isDownloaded(item),
+                                    downloading: store.downloadingIDs.contains(item.id),
+                                    favorites: favorites,
+                                    isAdmin: accountStore.currentUser != nil,
+                                    adminBusy: adminBusy,
+                                    onPreview: { previewItem = item },
+                                    onDownload: { await downloadAndInstall(item) },
+                                    onTogglePin: { Task { await adminTogglePin(item) } }
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal)
@@ -282,10 +312,12 @@ struct CatalogView: View {
         }
         adminBusy = true
         defer { adminBusy = false }
+        // 先查最新那条：详情页改名后，旧 item 里的标题还是改之前的，照旧推会把新名字盖回去。
+        let live = store.items.first { $0.id == item.id } ?? item
         let toggled = CatalogItem(
-            id: item.id, title: item.title, tags: item.tags,
-            thumbnailURL: item.thumbnailURL, previewURL: item.previewURL,
-            packageURL: item.packageURL, pinned: !item.pinned, downloads: item.downloads)
+            id: live.id, title: live.title, tags: live.tags,
+            thumbnailURL: live.thumbnailURL, previewURL: live.previewURL,
+            packageURL: live.packageURL, pinned: !live.pinned, downloads: live.downloads)
         let newItems = store.items.map { $0.id == item.id ? toggled : $0 }
         do {
             try await store.pushCatalog(newItems, token: token)
@@ -398,8 +430,6 @@ private struct CatalogCard: View {
     let onPreview: () -> Void
     let onDownload: () async -> Void
     let onTogglePin: () -> Void
-    let onDelete: () -> Void
-    let onReplaceVideo: () -> Void
 
     /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封��播。
     private var coverVideoURL: URL? {
@@ -516,20 +546,6 @@ private struct CatalogCard: View {
                 }
                 .buttonStyle(PressBounceButtonStyle())
                 .disabled(downloading)
-                // 管理员换视频/删壁纸：只有登入的管理员能看到。
-                // 有视频的显示“换视频”，没视频的显示“加视频”。
-                if isAdmin {
-                    HStack(spacing: 16) {
-                        Button(item.previewURL.isEmpty ? "加视频" : "换视频", action: onReplaceVideo)
-                            .font(.caption)
-                            .foregroundStyle(.blue)
-                            .disabled(adminBusy)
-                        Button("删除壁纸", action: onDelete)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .disabled(adminBusy)
-                    }
-                }
             }
             .padding(10)
             .fontDesign(.rounded)
@@ -1216,10 +1232,11 @@ private struct ReplaceVideoView: View {
             try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token,
                                                 progress: { value in Task { @MainActor in uploadProgress = value } })
             let videoURL = CatalogStore.wallpapersRawBase + videoName
+            let live = store.items.first { $0.id == item.id } ?? item
             let updated = CatalogItem(
-                id: item.id, title: item.title, tags: item.tags,
+                id: live.id, title: live.title, tags: live.tags,
                 thumbnailURL: videoURL, previewURL: videoURL,
-                packageURL: item.packageURL, pinned: item.pinned, downloads: item.downloads)
+                packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads)
             let newItems = store.items.map { $0.id == item.id ? updated : $0 }
             try await store.pushCatalog(newItems, token: token)
             onDone()
@@ -1288,6 +1305,550 @@ private struct ReplaceVideoView: View {
                     continuation.resume(throwing: URLError(.timedOut))
                 }
             }
+        }
+    }
+
+    /// 统一报错：正文说人话，附上错误代码和原始细节，方便一键复制发回给灵光。
+    private func fail(_ text: String, code: String, detail: String = "") {
+        message = text
+        errorDetail = detail.isEmpty ? code : "\(code) | \(detail)"
+        copiedError = false
+    }
+}
+
+// MARK: - 详情页（点卡片打开的二级页）
+
+/// 点卡片打开的详情页：大封面、名字、标签、下载按钮；
+/// 管理员在下面看到管理区：加视频/换视频、换壁纸、换名字、换标签、删除壁纸，
+/// 按钮都是液态玻璃胶囊（下载条同款）。
+/// 显示的名字、标签都从目录表里现查（live），详情页里改名、换标签后页面立刻跟着变；
+/// 条目被删了就自动退回目录页。
+private struct CatalogDetailView: View {
+    let item: CatalogItem
+    @ObservedObject var store: CatalogStore
+    @ObservedObject var favorites: FavoritesStore
+    @Environment(\.dismiss) private var dismiss
+    let isAdmin: Bool
+    let adminBusy: Bool
+    let onPreview: () -> Void
+    let onDownload: () async -> Void
+    let onTogglePin: () -> Void
+    let onDelete: () -> Void
+    let onReplaceVideo: () -> Void
+
+    @State private var showingReplacePackage = false
+    @State private var showingRename = false
+    @State private var showingRetag = false
+    @State private var adminMessage = ""
+    @State private var adminMessageIsError = false
+
+    /// 目录表里最新那条（改名、换标签、换视频后都从这里读，不用打开时那份旧的）。
+    private var live: CatalogItem {
+        store.items.first { $0.id == item.id } ?? item
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                coverSection
+                HStack(spacing: 6) {
+                    Text(live.title)
+                        .font(.title3).bold()
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                    if live.pinned {
+                        Text("置顶")
+                            .font(.caption2).bold()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(.red)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                Text(live.tags.map { "#\($0)" }.joined(separator: " ")
+                    + (live.downloads > 0 ? " · 下载 \(live.downloads) 次" : ""))
+                    .font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                Button {
+                    Task { await onDownload() }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if store.downloadingIDs.contains(live.id) {
+                            ProgressView().tint(.white)
+                        } else {
+                            Label(store.isDownloaded(live) ? "已下载" : "下载", systemImage: "arrow.down.circle")
+                                .foregroundStyle(.white)
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 10)
+                    .modifier(LiquidGlassBar())
+                }
+                .buttonStyle(PressBounceButtonStyle())
+                .disabled(store.downloadingIDs.contains(live.id))
+                if isAdmin {
+                    Text("管理").font(.caption).foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        adminButton(live.previewURL.isEmpty ? "加视频" : "换视频", action: onReplaceVideo)
+                        adminButton("换壁纸") { showingReplacePackage = true }
+                        adminButton("换名字") { showingRename = true }
+                        adminButton("换标签") { showingRetag = true }
+                    }
+                    Button("删除壁纸", action: onDelete)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .modifier(LiquidGlassBar())
+                        .buttonStyle(PressBounceButtonStyle())
+                        .disabled(adminBusy)
+                }
+                if !adminMessage.isEmpty {
+                    Text(adminMessage)
+                        .font(.caption)
+                        .foregroundStyle(adminMessageIsError ? .red : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+        }
+        .background(AppBackgroundView())
+        .navigationTitle(live.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingReplacePackage) {
+            ReplacePackageView(store: store, item: live, onDone: {
+                showingReplacePackage = false
+                adminMessage = "壁纸包已换好。"
+                adminMessageIsError = false
+            })
+        }
+        .sheet(isPresented: $showingRename) {
+            RenameView(store: store, item: live, onDone: {
+                showingRename = false
+                adminMessage = "名字已换好。"
+                adminMessageIsError = false
+            })
+        }
+        .sheet(isPresented: $showingRetag) {
+            RetagView(store: store, item: live, onDone: {
+                showingRetag = false
+                adminMessage = "标签已换好。"
+                adminMessageIsError = false
+            })
+        }
+        .onReceive(store.$items) { items in
+            if !items.contains(where: { $0.id == item.id }) { dismiss() }
+        }
+    }
+
+    /// 大封面：有视频播视频当封面，否则播缩略图；右上播放、收藏、图钉。
+    private var coverSection: some View {
+        ZStack(alignment: .top) {
+            Group {
+                if let url = coverVideoURL {
+                    InlineVideoCover(url: url)
+                } else if let url = URL(string: live.thumbnailURL) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        default:
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(.quaternary)
+                                .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+                        }
+                    }
+                } else {
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(.quaternary)
+                        .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+                }
+            }
+            .aspectRatio(9 / 11, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 20))
+            HStack {
+                if !live.previewURL.isEmpty, URL(string: live.previewURL) != nil {
+                    Button(action: onPreview) {
+                        Image(systemName: "play.fill")
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(RoundGlassButtonStyle())
+                }
+                Spacer()
+                Button {
+                    favorites.toggle(live.id)
+                } label: {
+                    Image(systemName: favorites.isFavorite(live.id) ? "heart.fill" : "heart")
+                        .foregroundStyle(favorites.isFavorite(live.id) ? .red : .white)
+                }
+                .buttonStyle(RoundGlassButtonStyle())
+                if isAdmin {
+                    Button(action: onTogglePin) {
+                        Image(systemName: live.pinned ? "pin.fill" : "pin")
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(RoundGlassButtonStyle())
+                    .disabled(adminBusy)
+                }
+            }
+            .padding(8)
+        }
+    }
+
+    /// 管理区按钮：液态玻璃胶囊，白字，跟下载条同款。
+    private func adminButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(label, action: action)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .modifier(LiquidGlassBar())
+            .buttonStyle(PressBounceButtonStyle())
+            .disabled(adminBusy)
+    }
+
+    /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封面播。
+    private var coverVideoURL: URL? {
+        if Self.isVideoPath(live.thumbnailURL), let url = URL(string: live.thumbnailURL) {
+            return url
+        }
+        if !live.previewURL.isEmpty, Self.isVideoPath(live.previewURL),
+           let url = URL(string: live.previewURL) {
+            return url
+        }
+        return nil
+    }
+
+    /// 封面地址指到视频文件（.mp4/.mov）时，卡片直接播视频当封面。
+    static func isVideoPath(_ path: String) -> Bool {
+        ["mp4", "mov", "m4v"].contains((path as NSString).pathExtension.lowercased())
+    }
+}
+
+// MARK: - 换壁纸（管理员）
+
+/// 给已有壁纸换壁纸包：选一个新 .tendies 包传到仓库，覆盖同名包文件；
+/// 目录里的名字、标签、预览都不变，不用推表。
+/// 只有登入的管理员能打开（入口在详情页管理区）；推表靠本机钥匙串里的 GitHub 钥匙。
+private struct ReplacePackageView: View {
+    @ObservedObject var store: CatalogStore
+    @EnvironmentObject private var accountStore: AccountStore
+    @Environment(\.dismiss) private var dismiss
+    let item: CatalogItem
+    let onDone: () -> Void
+
+    @State private var showingPicker = false
+    @State private var packageName = ""
+    @State private var packageData: Data?
+    @State private var message = ""
+    @State private var errorDetail = ""
+    @State private var copiedError = false
+    @State private var busy = false
+    @State private var uploadProgress: Double?
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("给「\(item.title)」换壁纸包")
+                    .font(.headline)
+                Text("选一个新 .tendies 包传上去，覆盖这张原来的包文件；目录里的名字、标签、预览都不变。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button(packageData == nil ? "选 .tendies 文件" : "已选：\(packageName)") {
+                    showingPicker = true
+                }
+                .buttonStyle(.bordered)
+                .disabled(busy)
+                if busy {
+                    ProgressView()
+                    if let uploadProgress {
+                        ProgressView(value: uploadProgress)
+                            .progressViewStyle(.linear)
+                        Text("正在上传 \(Int((uploadProgress * 100).rounded()))%，大文件传得慢是正常的")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !message.isEmpty {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !errorDetail.isEmpty {
+                        Text(errorDetail)
+                            .font(.caption2)
+                            .monospaced()
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(copiedError ? "已复制，去聊天里粘贴给灵光" : "复制错误代码") {
+                            UIPasteboard.general.string = errorDetail
+                            copiedError = true
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
+                }
+                Button("换壁纸包") { Task { await replace() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || packageData == nil)
+                Text("构建 \(AppBuild.tag)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("换壁纸")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            // 不用 SwiftUI fileImporter：部分系统版本上它会把自定义后缀整排置灰点不动。
+            // 改用 UIDocumentPicker（asCopy 取副本，免安全域处理），public.item 收一切文件。
+            .sheet(isPresented: $showingPicker) {
+                DocumentPicker(contentTypes: [.item]) { url in
+                    guard let data = try? Data(contentsOf: url) else {
+                        fail("没读到文件，重新选一次。", code: "E-401 换壁纸-无内容")
+                        return
+                    }
+                    // 后缀不限死：.tendies 直接收；其他后缀按内容认（WALLIVE1 魔数或标准 zip 都算）。
+                    let looksLikeZip = data.count > 4 && data[data.startIndex] == 0x50 && data[data.startIndex + 1] == 0x4B
+                    let looksLikeTendies = url.pathExtension.lowercased() == "tendies"
+                        || Wallive1Crypto.isWallive1(data)
+                        || looksLikeZip
+                    guard looksLikeTendies else {
+                        fail("这个文件认不出是壁纸包，重新选一次。", code: "E-402 换壁纸-内容不识别")
+                        return
+                    }
+                    packageName = url.deletingPathExtension().lastPathComponent
+                    packageData = data
+                    message = ""
+                    errorDetail = ""
+                }
+            }
+        }
+    }
+
+    /// 换壁纸包流程：按原来包的文件名传上去覆盖（同名覆盖不用推表）。
+    @MainActor
+    private func replace() async {
+        guard let token = accountStore.loadToken() else {
+            fail("先在管理员页保存 GitHub 钥匙。", code: "E-403 换壁纸-缺少钥匙")
+            return
+        }
+        guard let packageData else { return }
+        busy = true
+        defer { busy = false; uploadProgress = nil }
+        do {
+            let fileName = (item.packageURL as NSString).lastPathComponent
+            try await store.uploadWallpaperFile(name: fileName, data: packageData, token: token,
+                                                progress: { value in Task { @MainActor in uploadProgress = value } })
+            onDone()
+            dismiss()
+        } catch {
+            fail("没换上去，请点“复制错误代码”发给灵光。", code: "E-404 换壁纸-上传失败", detail: String(describing: error))
+        }
+    }
+
+    /// 统一报错：正文说人话，附上错误代码和原始细节，方便一键复制发回给灵光。
+    private func fail(_ text: String, code: String, detail: String = "") {
+        message = text
+        errorDetail = detail.isEmpty ? code : "\(code) | \(detail)"
+        copiedError = false
+    }
+}
+
+// MARK: - 换名字（管理员）
+
+/// 给已有壁纸换标题：改完推表，详情页上的名字立刻跟着变。
+/// 只有登入的管理员能打开（入口在详情页管理区）；推表靠本机钥匙串里的 GitHub 钥匙。
+private struct RenameView: View {
+    @ObservedObject var store: CatalogStore
+    @EnvironmentObject private var accountStore: AccountStore
+    @Environment(\.dismiss) private var dismiss
+    let item: CatalogItem
+    let onDone: () -> Void
+
+    @State private var title = ""
+    @State private var message = ""
+    @State private var errorDetail = ""
+    @State private var copiedError = false
+    @State private var busy = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("给「\(item.title)」换名字")
+                    .font(.headline)
+                TextField("新名字", text: $title)
+                    .textFieldStyle(.roundedBorder)
+                if !message.isEmpty {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !errorDetail.isEmpty {
+                        Text(errorDetail)
+                            .font(.caption2)
+                            .monospaced()
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(copiedError ? "已复制，去聊天里粘贴给灵光" : "复制错误代码") {
+                            UIPasteboard.general.string = errorDetail
+                            copiedError = true
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
+                }
+                Button("保存名字") { Task { await save() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty
+                              || title.trimmingCharacters(in: .whitespaces) == item.title)
+                Text("构建 \(AppBuild.tag)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("换名字")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .onAppear {
+                if title.isEmpty { title = item.title }
+            }
+        }
+    }
+
+    /// 换名字流程：拼一张新卡（只改标题）→ 推表。
+    @MainActor
+    private func save() async {
+        guard let token = accountStore.loadToken() else {
+            fail("先在管理员页保存 GitHub 钥匙。", code: "E-411 换名字-缺少钥匙")
+            return
+        }
+        let newTitle = title.trimmingCharacters(in: .whitespaces)
+        guard !newTitle.isEmpty else { return }
+        busy = true
+        defer { busy = false }
+        let live = store.items.first { $0.id == item.id } ?? item
+        let updated = CatalogItem(
+            id: live.id, title: newTitle, tags: live.tags,
+            thumbnailURL: live.thumbnailURL, previewURL: live.previewURL,
+            packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads)
+        let newItems = store.items.map { $0.id == item.id ? updated : $0 }
+        do {
+            try await store.pushCatalog(newItems, token: token)
+            onDone()
+            dismiss()
+        } catch {
+            fail("没推上去，请点“复制错误代码”发给灵光。", code: "E-412 换名字-推表失败", detail: String(describing: error))
+        }
+    }
+
+    /// 统一报错：正文说人话，附上错误代码和原始细节，方便一键复制发回给灵光。
+    private func fail(_ text: String, code: String, detail: String = "") {
+        message = text
+        errorDetail = detail.isEmpty ? code : "\(code) | \(detail)"
+        copiedError = false
+    }
+}
+
+// MARK: - 换标签（管理员）
+
+/// 给已有壁纸换标签：逗号或顿号隔开，改完推表。
+/// 只有登入的管理员能打开（入口在详情页管理区）；推表靠本机钥匙串里的 GitHub 钥匙。
+private struct RetagView: View {
+    @ObservedObject var store: CatalogStore
+    @EnvironmentObject private var accountStore: AccountStore
+    @Environment(\.dismiss) private var dismiss
+    let item: CatalogItem
+    let onDone: () -> Void
+
+    @State private var tagsText = ""
+    @State private var message = ""
+    @State private var errorDetail = ""
+    @State private var copiedError = false
+    @State private var busy = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("给「\(item.title)」换标签")
+                    .font(.headline)
+                TextField("标签（逗号或顿号分隔）", text: $tagsText)
+                    .textFieldStyle(.roundedBorder)
+                if !message.isEmpty {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !errorDetail.isEmpty {
+                        Text(errorDetail)
+                            .font(.caption2)
+                            .monospaced()
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(copiedError ? "已复制，去聊天里粘贴给灵光" : "复制错误代码") {
+                            UIPasteboard.general.string = errorDetail
+                            copiedError = true
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
+                }
+                Button("保存标签") { Task { await save() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || parsedTags.isEmpty)
+                Text("构建 \(AppBuild.tag)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("换标签")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .onAppear {
+                if tagsText.isEmpty { tagsText = item.tags.joined(separator: "，") }
+            }
+        }
+    }
+
+    /// 输入框里的标签：逗号/顿号隔开，去掉空格和空项；一个不剩就默认“动漫”。
+    private var parsedTags: [String] {
+        let parsed = tagsText
+            .components(separatedBy: CharacterSet(charactersIn: ",，、"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return parsed.isEmpty ? ["动漫"] : parsed
+    }
+
+    /// 换标签流程：拼一张新卡（只改标签）→ 推表。
+    @MainActor
+    private func save() async {
+        guard let token = accountStore.loadToken() else {
+            fail("先在管理员页保存 GitHub 钥匙。", code: "E-421 换标签-缺少钥匙")
+            return
+        }
+        busy = true
+        defer { busy = false }
+        let live = store.items.first { $0.id == item.id } ?? item
+        let updated = CatalogItem(
+            id: live.id, title: live.title, tags: parsedTags,
+            thumbnailURL: live.thumbnailURL, previewURL: live.previewURL,
+            packageURL: live.packageURL, pinned: live.pinned, downloads: live.downloads)
+        let newItems = store.items.map { $0.id == item.id ? updated : $0 }
+        do {
+            try await store.pushCatalog(newItems, token: token)
+            onDone()
+            dismiss()
+        } catch {
+            fail("没推上去，请点“复制错误代码”发给灵光。", code: "E-422 换标签-推表失败", detail: String(describing: error))
         }
     }
 
