@@ -291,13 +291,25 @@ struct CatalogView: View {
         if store.isDownloaded(item),
            let data = try? Data(contentsOf: store.localURL(for: item)) {
             state.setPackage(data, displayName: item.title)
+            addToLibrary(displayName: item.title)
             state.selectedTab = 1
             return
         }
         if let data = await store.download(item) {
             state.setPackage(data, displayName: item.title)
+            addToLibrary(displayName: item.title)
             state.selectedTab = 1
         }
+    }
+
+    /// 目录下载完顺手放进导入库：导入页只认库里的包，光 setPackage 不进库，
+    /// 之前从目录下的包在导入页就看不到。封面直接从包里抠，不另外走网络。
+    /// 同一个名字已经在库里就不重复加（目录里一个标题只对应一张包）。
+    private func addToLibrary(displayName: String) {
+        guard let stored = state.packageData else { return }
+        if state.importedPackages.contains(where: { $0.displayName == displayName }) { return }
+        let thumb = ImportThumbnailMaker.make(from: stored)
+        state.addImportedPackage(data: stored, displayName: displayName, thumbnail: thumb)
     }
 
     // MARK: - 管理员改目录（推到公开目录仓库）
@@ -372,6 +384,7 @@ struct CatalogView: View {
                                 Button("安装") {
                                     if let data = try? Data(contentsOf: store.localURL(for: record)) {
                                         state.setPackage(data, displayName: record.title)
+                                        addToLibrary(displayName: record.title)
                                         state.selectedTab = 1
                                     }
                                 }
