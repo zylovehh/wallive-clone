@@ -1115,7 +1115,7 @@ private struct ImportDetailView: View {
                 plain = data
             }
             let out = try DepthPackageBuilder.addingDepthConfiguration(to: plain, zip: ZipFoundationAdapter())
-            state.setPackage(out, displayName: pkg.displayName)
+            state.setPackage(out, displayName: state.packageDisplayName)
             depthMessage = "深景已开启，可以直接点“安装壁纸”了。"
         } catch is Wallive1Crypto.Error {
             depthMessage = "开启失败：这个包解不开了，重新导入一次原包再试。"
