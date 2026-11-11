@@ -305,13 +305,15 @@ private struct ImportedPackageCard: View {
     }
 }
 
-/// 从壁纸包里抠一张封面图（给导入库的卡片用）：封面尽量是锁屏上看到的那张底图。
+/// 从壁纸包里抠一张封面图（给导入库的卡片用）：封面尽量是锁屏上看到的全貌。
 /// 包是 WALLIVE1 加密包先解密再翻；最长边压到 720。
 /// 目录下载也用它从包里抠封面（不另外走网络），所以不加 private。
 enum ImportThumbnailMaker {
-    /// 封面尽量是锁屏底图：1. 背景画布（Background.ca）里的图就是锁屏底图，
-    /// 挑其中最像的；2. 没有背景画布（整包都在 Floating 里）就挑 assets 里
-    /// 最像的；3. 连 assets 都没有，翻全包挑最像的。
+    /// 封面尽量是锁屏全貌：1. 先试锁屏合成，把 Background / Floating /
+    /// Foreground 三个画布按锁屏状态合起来（底图 + 人物、贴纸这些漂浮层），
+    /// 就是锁屏上看到的样子；2. 合成不出来（老包没 .ca、解析失败）就退回
+    /// 单张锁屏底图：背景画布里的图就是锁屏底图，挑其中最像的；没有背景画布
+    ///（整包都在 Floating 里）就挑 assets 里最像的；连 assets 都没有，翻全包挑。
     /// “最像” = 像素最大那批里最亮的那张：整幅场景图几乎总是最大的，
     /// 人物抠图、装饰小图都比它小；白天那张底图又总比夜里那张亮
     ///（波妞：白天蓝天和夜里星空一样大，亮度一比就分出来了；
@@ -324,6 +326,9 @@ enum ImportThumbnailMaker {
             plain = decrypted
         } else {
             plain = packageData
+        }
+        if let composite = LockScreenCompositor.make(from: plain) {
+            return compress(composite)
         }
         guard let entries = try? zip.listEntries(in: plain) else { return nil }
         let imageExts = ["jpeg", "jpg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"]
@@ -394,6 +399,172 @@ enum ImportThumbnailMaker {
             image.draw(in: CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale))
         }
         return scaled.jpegData(compressionQuality: 0.85)
+    }
+}
+
+/// 锁屏合成：把包里 Background / Floating / Foreground 三个画布按锁屏状态
+/// 合成一张图，就是锁屏上看到的全貌（底图 + 人物、贴纸这些漂浮层）。
+/// .ca 是 CAML（XML）：图层带位置、大小、透明度、图片引用；锁屏状态
+///（Locked Light，没有就用 Locked）用 LKStateSetValue 覆盖位置和透明度。
+/// 本地已用波妞、草甸小猫、路飞三包验过，合成结果和锁屏一致。
+/// 合成不出来（老包没 .ca、解析失败、没图层）就返回 nil，调用方退回单图。
+enum LockScreenCompositor {
+    /// 画布 390×844 点，@2x 出图。
+    private static let canvasSize = CGSize(width: 390, height: 844)
+
+    /// 入参是解密后的 zip 数据（WALLIVE1 先解开再传进来）。
+    static func make(from plainZip: Data) -> UIImage? {
+        let adapter = ZipFoundationAdapter()
+        guard let entries = try? adapter.listEntries(in: plainZip) else { return nil }
+        var camls: [(dir: String, data: Data)] = []
+        for kind in ["Background", "Floating", "Foreground"] {
+            guard let path = entries.first(where: { $0.contains("_\(kind)-") && $0.hasSuffix("main.caml") }),
+                  let data = try? adapter.readEntry(path, in: plainZip) else { continue }
+            camls.append(((path as NSString).deletingLastPathComponent + "/", data))
+        }
+        guard !camls.isEmpty else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: canvasSize, format: format)
+        var drewAnything = false
+        let image = renderer.image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(origin: .zero, size: canvasSize))
+            for (dir, caml) in camls {
+                let doc = CAMLDocument(data: caml)
+                for layer in doc.layersInLockedState() {
+                    guard layer.opacity > 0, let src = layer.contents else { continue }
+                    guard let imgData = try? adapter.readEntry(dir + src, in: plainZip),
+                          let img = UIImage(data: imgData) else { continue }
+                    let rect = CGRect(
+                        x: layer.position.x - layer.anchor.x * layer.bounds.width + layer.bounds.origin.x,
+                        y: layer.position.y - layer.anchor.y * layer.bounds.height + layer.bounds.origin.y,
+                        width: layer.bounds.width,
+                        height: layer.bounds.height)
+                    ctx.cgContext.saveGState()
+                    ctx.cgContext.setAlpha(layer.opacity)
+                    if layer.rotation != 0 {
+                        let center = CGPoint(x: rect.midX, y: rect.midY)
+                        ctx.cgContext.translateBy(x: center.x, y: center.y)
+                        ctx.cgContext.rotate(by: layer.rotation)
+                        ctx.cgContext.translateBy(x: -center.x, y: -center.y)
+                    }
+                    img.draw(in: rect)
+                    ctx.cgContext.restoreGState()
+                    drewAnything = true
+                }
+            }
+        }
+        return drewAnything ? image : nil
+    }
+}
+
+/// CAML 解析：只抠图层和状态覆盖两样东西。
+/// 图层按文档顺序记（画的时候按这个顺序叠，先画的在底下）；
+/// 状态覆盖按目标 id + keyPath 记，合成时按锁屏状态套上去。
+private final class CAMLDocument: NSObject, XMLParserDelegate {
+    struct Layer {
+        var id = ""
+        var bounds = CGRect.zero
+        var position = CGPoint.zero
+        var opacity: CGFloat = 1
+        var anchor = CGPoint(x: 0.5, y: 0.5)
+        var rotation: CGFloat = 0
+        var contents: String?
+    }
+
+    private(set) var layers: [Layer] = []
+    /// 状态名 -> 目标 id -> keyPath -> 值
+    private var states: [String: [String: [String: CGFloat]]] = [:]
+    private var layerStack: [Int] = []
+    private var currentState: String?
+    private var currentTarget: String?
+    private var currentKeyPath: String?
+
+    init(data: Data) {
+        super.init()
+        let parser = XMLParser(data: data)
+        parser.delegate = self
+        _ = parser.parse()
+    }
+
+    /// 锁屏那一刻的图层：先找 Locked Light，没有就用 Locked（有的包状态名不分深浅）。
+    func layersInLockedState() -> [Layer] {
+        var result = layers
+        let overrides = states["Locked Light"] ?? states["Locked"] ?? [:]
+        var indexById: [String: Int] = [:]
+        for (i, layer) in result.enumerated() { indexById[layer.id] = i }
+        for (targetId, keyPaths) in overrides {
+            guard let i = indexById[targetId] else { continue }
+            for (keyPath, value) in keyPaths {
+                switch keyPath {
+                case "opacity": result[i].opacity = value
+                case "position.x": result[i].position.x = value
+                case "position.y": result[i].position.y = value
+                case "bounds.size.width": result[i].bounds.size.width = value
+                case "bounds.size.height": result[i].bounds.size.height = value
+                case "bounds.origin.x": result[i].bounds.origin.x = value
+                case "bounds.origin.y": result[i].bounds.origin.y = value
+                default: break
+                }
+            }
+        }
+        return result
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        switch elementName {
+        case "CALayer":
+            var layer = Layer()
+            layer.id = attributeDict["id"] ?? ""
+            let b = CAMLDocument.floats(attributeDict["bounds"])
+            if b.count == 4 { layer.bounds = CGRect(x: b[0], y: b[1], width: b[2], height: b[3]) }
+            let p = CAMLDocument.floats(attributeDict["position"])
+            if p.count == 2 { layer.position = CGPoint(x: p[0], y: p[1]) }
+            if let o = attributeDict["opacity"], let d = Double(o) { layer.opacity = CGFloat(d) }
+            let a = CAMLDocument.floats(attributeDict["anchorPoint"])
+            if a.count == 2 { layer.anchor = CGPoint(x: a[0], y: a[1]) }
+            if let r = attributeDict["transform.rotation.z"], let d = Double(r) { layer.rotation = CGFloat(d) }
+            layers.append(layer)
+            layerStack.append(layers.count - 1)
+        case "CGImage":
+            if let top = layerStack.last, let src = attributeDict["src"] {
+                layers[top].contents = src
+            }
+        case "LKState":
+            currentState = attributeDict["name"]
+        case "LKStateSetValue":
+            currentTarget = attributeDict["targetId"]
+            currentKeyPath = attributeDict["keyPath"]
+        case "value":
+            if let state = currentState, let target = currentTarget, let keyPath = currentKeyPath,
+               let v = attributeDict["value"], let d = Double(v) {
+                states[state, default: [:]][target, default: [:]][keyPath] = CGFloat(d)
+            }
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        switch elementName {
+        case "CALayer":
+            _ = layerStack.popLast()
+        case "LKState":
+            currentState = nil
+        case "LKStateSetValue":
+            currentTarget = nil
+            currentKeyPath = nil
+        default:
+            break
+        }
+    }
+
+    /// "0 0 390 847" 这种空格隔开的数字串转成一组数。
+    private static func floats(_ s: String?) -> [CGFloat] {
+        guard let s = s else { return [] }
+        return s.split(separator: " ").compactMap { Double(String($0)) }.map { CGFloat($0) }
     }
 }
 
