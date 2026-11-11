@@ -222,9 +222,9 @@ enum WorseQueryEscape {
         }
         let tried: String
         switch lastClass {
-        case 2: tried = "class 7 三组 + class 2 备用招都"
-        case 13: tried = "class 7 三组 + class 13 免组兜底路都"
-        default: tried = "class 7 三组 flags 都"
+        case 2: tried = "系统组 class 7 正路 + class 2 备用招都"
+        case 13: tried = "系统组 class 7 正路 + class 13 免组兜底路都"
+        default: tried = "系统组 class 7 正路 + 签名组 class 7 flags 都"
         }
         log("逃逸没成（\(reason)，\(tried)试过，最后一组：class \(lastClass) 第 \(lastIndex + 1) 组）。")
         return (nil, reason, "最后失败：class \(lastClass) 第 \(lastIndex + 1) 组 flags，\(tried)均试过")
