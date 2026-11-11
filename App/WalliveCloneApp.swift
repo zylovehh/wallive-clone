@@ -143,7 +143,7 @@ struct ContentView: View {
                         .tabItem { Label("导入", systemImage: "square.and.arrow.down") }
                         .tag(1)
                     DepthView()
-                        .tabItem { Label("深景", systemImage: "moon.stars") }
+                        .tabItem { Label("管理", systemImage: "moon.stars") }
                         .tag(2)
                     StatusView()
                         .tabItem { Label("状态", systemImage: "info.circle") }
@@ -161,7 +161,7 @@ struct ContentView: View {
 private struct FloatingTabPill: View {
     @EnvironmentObject private var state: AppState
 
-    private let labels = ["目录", "导入", "深景", "状态"]
+    private let labels = ["目录", "导入", "管理", "状态"]
 
     var body: some View {
         HStack(spacing: 4) {

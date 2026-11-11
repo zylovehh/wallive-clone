@@ -23,8 +23,33 @@
 //   描述符 UUID（原版字典键的取值未确认，只供本 App 自己读写）。
 // 这个账本本身不会让图库列出壁纸——它只是让 App 自己记得装过哪张，
 // 供诊断区显示条数、后续清理时比对用；必须和读回、对账、刷新一起上才完整。
+//
+// 回执（Drift 同款，V1.36 抄）：每次装机成功落一张回执，记下描述符 UUID、
+// 落地路径、文件数、字节数、商店结构版本、走哪条路、装完核没核验过。
+// 之后可以按回执把那张壁纸从商店里删掉（删除实现在 RestoreTest.deleteByReceipt，
+// 因为要用沙箱逃逸；回执只管存和查）。回执最多留 50 张，新的顶掉最旧的。
 
 import Foundation
+
+/// 一条按回执删除用的安装回执。
+/// targetPath 是这次写入的完整落地路径（…/PRBPosterExtensionDataStore/…/descriptors/<UUID>）；
+/// fileCount / totalBytes 是落盘时核验过的文件数与字节数，删除后对账用得上。
+struct InstallReceipt: Codable {
+    var descriptorUUID: String
+    var targetPath: String
+    var fileCount: Int
+    var totalBytes: Int64
+    var storeVersion: Int
+    /// "no-pairing"（本机直写）或 "pairing"（配对隧道）。
+    var method: String
+    /// 装完写后核验是否通过（只有核验在册才算 true）。
+    var verified: Bool
+    var date: Date
+    /// 装进去时那个包的显示名（管理页列表标题用）；老回执没有就空。
+    var packageName: String?
+    /// 装进去时的系统构建号（管理页显示「本机直刷 · 构建 xxx」用）。
+    var buildNumber: String?
+}
 
 /// 一条安装记录：只写已证实的两个键，不凭空加字段。
 /// paths：本次安装落地的描述符目录（两个目标目录的绝对路径）。
@@ -138,5 +163,59 @@ enum ManagedPosterBoard {
 
     private static func appendError(_ error: inout String?, _ text: String) {
         error = (error.map { $0 + "；" } ?? "") + text
+    }
+}
+
+/// 回执存取：UserDefaults 一把存，最多 50 张，新的顶掉最旧的。
+/// 存的是 App 自己的账，不碰系统文件；坏了就当没存过，不影响安装。
+enum InstallReceiptStore {
+    static let key = "wallive.install.receipts"
+    /// 最多留多少张回执。
+    static let limit = 50
+
+    static func receipts() -> [InstallReceipt] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let list = try? JSONDecoder().decode([InstallReceipt].self, from: data)
+        else { return [] }
+        return list
+    }
+
+    /// 记一张回执（追加到末尾；超限把最旧的挤掉）。返回记完后的总张数。
+    @discardableResult
+    static func record(_ receipt: InstallReceipt) -> Int {
+        var list = receipts()
+        list.append(receipt)
+        if list.count > limit {
+            list.removeFirst(list.count - limit)
+        }
+        return save(list)
+    }
+
+    /// 删掉与描述符 UUID 和落地路径都对上号的回执。返回删完后的总张数。
+    @discardableResult
+    static func remove(descriptorUUID: String, targetPath: String) -> Int {
+        var list = receipts()
+        list.removeAll { $0.descriptorUUID == descriptorUUID && $0.targetPath == targetPath }
+        return save(list)
+    }
+
+    /// 删掉这个描述符 UUID 的全部回执（删除复核通过后用）。返回删完后的总张数。
+    @discardableResult
+    static func removeAll(descriptorUUID: String) -> Int {
+        var list = receipts()
+        list.removeAll { $0.descriptorUUID == descriptorUUID }
+        return save(list)
+    }
+
+    /// 清空全部回执（只清 App 自己的账，设备上的描述符不动）。返回 0。
+    @discardableResult
+    static func clearAll() -> Int {
+        save([])
+    }
+
+    private static func save(_ list: [InstallReceipt]) -> Int {
+        guard let data = try? JSONEncoder().encode(list) else { return -1 }
+        UserDefaults.standard.set(data, forKey: key)
+        return list.count
     }
 }

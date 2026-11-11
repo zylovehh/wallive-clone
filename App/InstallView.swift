@@ -111,7 +111,7 @@ struct InstallView: View {
                         }
                     }
                 } else {
-                    result = "安装完成，描述符 UUID：\(uuid)。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
+                    result = "安装完成，描述符 UUID：\(uuid)。正在刷新桌面——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
                     DesktopRestart.trigger()
                 }
             }

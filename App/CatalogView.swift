@@ -37,12 +37,15 @@ struct CatalogView: View {
     @State private var itemToDelete: CatalogItem?
     @State private var videoReplaceItem: CatalogItem?
 
-    /// 列数：手机 2 列，iPad 横屏 6 列、竖屏 4 列，卡片不再一张占满屏。
+    /// 列数：手机 2 列；iPad 按页分：iPhone 页横屏 6 列、竖屏 4 列，
+    /// iPad 页的卡片再小一号——横屏 8 列、竖屏 6 列。
     /// 不用 adaptive（实测 adaptive 在 iPad 上会算出宽窄不一的列，卡片一大一小对不齐），
     /// 直接按屏宽算死每列宽，列列等宽。
     private var catalogColumnCount: Int {
         if UIDevice.current.userInterfaceIdiom == .pad {
-            return UIScreen.main.bounds.width > UIScreen.main.bounds.height ? 6 : 4
+            let landscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+            if segment == 1 { return landscape ? 8 : 6 }
+            return landscape ? 6 : 4
         } else {
             return 2
         }

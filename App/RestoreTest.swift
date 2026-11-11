@@ -53,6 +53,7 @@
 //   确认了不用重启，没确认再重启手机看。重启前别去图库里划来划去。
 
 import Foundation
+import Darwin
 import AirliftFFI
 import SQLite3
 
@@ -82,10 +83,48 @@ struct RestoreOutcome {
     /// 描述符注入逐目标结果（主扩展 + 现代扩展）。
     let injectResults: [InjectResult]
     let json: String
+    /// V1.36（Drift 同款）：写后核验结果。true=已核验在册；false=已写入、
+    /// 未确认显示；nil=这条没做写后核验（失败/停止的返回）。
+    let verified: Bool?
 }
 
 enum RestoreTest {
     static let storeVersion = 61
+
+    // MARK: - 构建号门槛（Drift 同款，V1.36 抄）
+
+    /// 可用范围按构建号判断，不按大版本猜：每回开装先记下这台设备的
+    /// 构建号；上次验证过的构建号和这次不一样就补一句提醒。装完写后
+    /// 核验通过才把构建号记成「验证过」。
+    private static let buildVerifiedKey = "wallive.build.verified"
+
+    /// 设备系统构建号（kern.osversion），读不到记「未知」。
+    static func systemBuildNumber() -> String {
+        var size = 0
+        sysctlbyname("kern.osversion", nil, &size, nil, 0)
+        guard size > 0 else { return "未知" }
+        var buf = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.osversion", &buf, &size, nil, 0) == 0 else { return "未知" }
+        let build = String(cString: buf)
+        return build.isEmpty ? "未知" : build
+    }
+
+    /// 开装时记一条系统构建号；没验证过或换了构建号都如实说，不把话说满。
+    static func logSystemBuild(log: (String) -> Void) {
+        let build = systemBuildNumber()
+        log("设备系统构建号：\(build)。")
+        let verified = UserDefaults.standard.string(forKey: buildVerifiedKey)
+        if verified == nil {
+            log("这个构建号还没验证过装包，装完核验通过会记下来。")
+        } else if verified != build {
+            log("上次验证过的构建号是 \(verified)，和这台（\(build)）不一样——这条路在老构建号上验证过，新构建号还没验证。")
+        }
+    }
+
+    /// 写后核验通过才调用：把当前构建号记成「验证过」。
+    static func markBuildVerified() {
+        UserDefaults.standard.set(systemBuildNumber(), forKey: buildVerifiedKey)
+    }
 
     /// 内核的「报编号换门牌」接口（sys/fsgetpath.h，26/27 没封）：
     /// 给一个盘号和一个编号，返回那个编号对应的完整路径。
@@ -237,11 +276,15 @@ enum RestoreTest {
     /// 用户点了停止就立刻停，不等整轮跑完。
     static func runRestore(packageData: Data, pairingPath: String,
                            onProgress: ((String, Double) -> Void)? = nil,
-                           isCancelled: @escaping () -> Bool = { false }) -> RestoreOutcome {
+                           isCancelled: @escaping () -> Bool = { false },
+                           displayName: String? = nil) -> RestoreOutcome {
         var report: [String: Any] = ["channel": "restore_test", "success": false]
         do {
+            // 开装先记系统构建号（Drift 的规矩：可用范围按构建号判断）。
+            logSystemBuild(log: { InstallLog.shared.append("restore: \($0)") })
             let outcome = try restore(packageData: packageData, pairingPath: pairingPath, report: &report,
-                                      onProgress: onProgress, isCancelled: isCancelled)
+                                      onProgress: onProgress, isCancelled: isCancelled,
+                                      displayName: displayName)
             report["success"] = true
             InstallLog.shared.append("restore: json=\(jsonString(report))")
             return outcome
@@ -253,7 +296,7 @@ enum RestoreTest {
                 summary: "已停止。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], json: jsonString(report))
+                injectResults: [], verified: nil, json: jsonString(report))
         } catch let e as StepError {
             report["step"] = e.step
             report["error"] = e.detail
@@ -263,7 +306,7 @@ enum RestoreTest {
                 summary: "备份还原停在\(e.step)：\(e.detail)原来的表还在 Documents/posterboard-table 里，没动。完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], json: jsonString(report))
+                injectResults: [], verified: nil, json: jsonString(report))
         } catch {
             report["error"] = error.localizedDescription
             InstallLog.shared.append("restore: FAILED \(error.localizedDescription) json=\(jsonString(report))")
@@ -272,7 +315,7 @@ enum RestoreTest {
                 summary: "备份还原失败：\(error.localizedDescription)完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], json: jsonString(report))
+                injectResults: [], verified: nil, json: jsonString(report))
         }
     }
 
@@ -479,14 +522,16 @@ enum RestoreTest {
     private static func restore(packageData: Data, pairingPath: String,
                                 report: inout [String: Any],
                                 onProgress: ((String, Double) -> Void)?,
-                                isCancelled: @escaping () -> Bool) throws -> RestoreOutcome {
+                                isCancelled: @escaping () -> Bool,
+                                displayName: String? = nil) throws -> RestoreOutcome {
         try checkCancelled(isCancelled)
         // V1.19：不分系统版本、不看配对记录，一律走 Vellum 同款路
         // （直读找库 + 逃逸直写，只写一个描述符目录，不碰表和偏好）。
         // 人家真机跑通的就是这条；备份路多出来的改表工序全停用，
         // 配对隧道一个字不碰——27.2 上不连 VPN 也装。
         return try restoreNoPairing(packageData: packageData, report: &report,
-                                    onProgress: onProgress, isCancelled: isCancelled)
+                                    onProgress: onProgress, isCancelled: isCancelled,
+                                    displayName: displayName)
     }
 
     // MARK: - 无配对安装（Vellum 同款，只写描述符目录）
@@ -505,7 +550,8 @@ enum RestoreTest {
     /// 只认描述符长出来的形状。这条新路整个照 Vellum 抄。
     private static func restoreNoPairing(packageData: Data, report: inout [String: Any],
                                          onProgress: ((String, Double) -> Void)?,
-                                         isCancelled: @escaping () -> Bool) throws -> RestoreOutcome {
+                                         isCancelled: @escaping () -> Bool,
+                                         displayName: String? = nil) throws -> RestoreOutcome {
         try checkCancelled(isCancelled)
         let fm = FileManager.default
         let stamp = timeStamp()
@@ -626,7 +672,8 @@ enum RestoreTest {
         let storeBase = container + PosterBoard.storePath(storeVersion)
         let targetDir = storeBase
             + "/Extensions/\(PosterBoard.collectionsExtension)/descriptors/\(descriptorUUID)"
-        try? fm.removeItem(atPath: targetDir)
+        // 旧目录不清在前面：直写已改成「暂存校验+原子改名」（Drift 同款），
+        // 校验过了才整体换新——写失败时老版本原地不动，不会装没装成还把旧的毁了。
         do {
             try directWriteDir(sourceDir: copyDir.path, targetDir: targetDir,
                                log: { InstallLog.shared.append("\($0)") })
@@ -634,10 +681,33 @@ enum RestoreTest {
             throw StepError(step: "写描述符", detail: "描述符直写没成：\(error.localizedDescription)")
         }
         report["descriptors"] = [["target": targetDir, "ok": true]]
-        let fileCount = (try? fm.subpathsOfDirectory(atPath: copyDir.path).count) ?? 0
-        InstallLog.shared.append(
-            "描述符写完（\(elapsed())）：\(targetDir)，\(fileCount) 个文件。"
-            + "不写表、不写 configurations、不写偏好——人家同款，行是系统重扫时自己补的。")
+
+        // 写后核验（Drift 的规矩）：重新枚举落地的目录，数对上了才报「已核验」；
+        // 对不上只说「已写入、未确认显示」，不把话说满。
+        let sourceStats = Self.directoryStats(at: copyDir)
+        let landedStats = Self.directoryStats(at: URL(fileURLWithPath: targetDir))
+        let verified = landedStats == sourceStats && landedStats.fileCount > 0
+        if verified {
+            InstallLog.shared.append(
+                "写后核验通过（\(elapsed())）：商店目录里数到 \(landedStats.fileCount) 个文件 \(landedStats.totalBytes) 字节，和源一致。")
+            markBuildVerified()
+        } else {
+            InstallLog.shared.append(
+                "已写入、未确认显示：文件已送达，但商店目录没有确认收录"
+                + "（数到 \(landedStats.fileCount) 个文件 \(landedStats.totalBytes) 字节，"
+                + "和源 \(sourceStats.fileCount) 个 \(sourceStats.totalBytes) 字节对不上）"
+                + "——先去锁屏图库看一眼；没有的话把日志包发出来排查。")
+        }
+        report["verified"] = verified
+
+        // 回执（Drift 同款）：落一张回执，之后可按回执把这张壁纸从商店里删掉。
+        // 包名和构建号一起记，管理页「刷入记录」列表要用。
+        InstallReceiptStore.record(InstallReceipt(
+            descriptorUUID: descriptorUUID, targetPath: targetDir,
+            fileCount: landedStats.fileCount, totalBytes: Int64(landedStats.totalBytes),
+            storeVersion: storeVersion, method: "no-pairing",
+            verified: verified, date: Date(),
+            packageName: displayName, buildNumber: systemBuildNumber()))
 
         // 4. 完事：没有配对记录，隧道重启做不了（Vellum 同样跳过），直接报
         //    重启手机。描述符已落盘，重启后系统重扫自己补行。
@@ -645,17 +715,25 @@ enum RestoreTest {
         report["mode"] = "backup"
         report["method"] = "vellum-descriptor-only"
         report["elapsed_seconds"] = Date().timeIntervalSince(restoreStart)
-        let summary = "壁纸已写好（人家同款，只写描述符目录）：\(fileCount) 个文件进了图库目录，"
-            + "表和偏好一个字没碰。重启手机后去 设置 › 墙纸 › 添加新壁纸 › 合集 长按看。完整结果见下面日志框."
+        let summary: String
+        if verified {
+            summary = "刷入完成：已核验，\(landedStats.fileCount) 个文件都在图库目录里，"
+                + "文件数和字节数都对上了。表和偏好一个字没碰。"
+                + "上滑关掉弹出的海报应用（或刷新桌面）后，锁屏长按进图库看。完整结果见下面日志框."
+        } else {
+            summary = "已写入、未确认显示：描述符目录送进了图库目录，但商店目录没有确认收录。"
+                + "先去锁屏图库看一眼；没有的话把日志包发出来排查。完整结果见下面日志框."
+        }
         return RestoreOutcome(success: true, summary: summary,
                               descriptorUUID: descriptorUUID, posterId: nil,
                               extensionID: PosterBoard.collectionsExtension,
-                              payloadCount: fileCount,
+                              payloadCount: sourceStats.fileCount,
                               storeSummary: nil,
                               preferencesWritten: false,
                               refreshConfirmed: false, rebootNeeded: true,
                               injectResults: [InjectResult(targetParentDir: targetDir,
                                                            ok: true, error: nil)],
+                              verified: verified,
                               json: jsonString(report))
     }
 
@@ -1664,21 +1742,118 @@ enum RestoreTest {
         return written
     }
 
-    /// 逃逸直写：把暂存目录整个拷到容器内目标目录（目录已存在则逐文件覆盖）。
+    /// 逃逸直写：把暂存目录整个拷到容器内目标目录（目录已存在则整体换新）。
     /// 只在拿着沙箱扩展句柄时用，普通 FileManager 就够了。
+    ///
+    /// Drift 同款规矩（V1.36 抄）：不往目标里一个文件一个文件地拷——那样
+    /// 中途断手就给商店留半个目录。先把东西拷进目标旁边的暂存目录，数文件
+    /// 数、数字节数，和源对上了才原子改名落盘；对不上直接放弃，商店里要么
+    /// 是完整的旧目录、要么是完整的新目录。上次崩溃可能留下的暂存残目录
+    /// （<名字>.staging- 开头）顺手清掉。
     private static func directWriteDir(sourceDir: String, targetDir: String,
                                        log: @escaping (String) -> Void) throws {
         let fm = FileManager.default
         let src = URL(fileURLWithPath: sourceDir)
         let dst = URL(fileURLWithPath: targetDir)
-        try fm.createDirectory(at: dst, withIntermediateDirectories: true)
-        let items = try fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil)
-        for item in items {
-            let dest = dst.appendingPathComponent(item.lastPathComponent)
-            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-            try fm.copyItem(at: item, to: dest)
+        let parent = dst.deletingLastPathComponent()
+        // 上次崩溃留下的暂存残目录清掉，免得在商店目录里越积越多。
+        if let leftovers = try? fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil) {
+            for leftover in leftovers where leftover.lastPathComponent.hasPrefix(dst.lastPathComponent + ".staging-") {
+                try? fm.removeItem(at: leftover)
+            }
         }
-        log("直写 \(dst.path)（\(items.count) 个文件）。")
+        let staging = parent
+            .appendingPathComponent(dst.lastPathComponent + ".staging-\(UUID().uuidString)")
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        do {
+            let items = try fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil)
+            for item in items {
+                try fm.copyItem(at: item, to: staging.appendingPathComponent(item.lastPathComponent))
+            }
+            let sourceStats = Self.directoryStats(at: src)
+            let stagedStats = Self.directoryStats(at: staging)
+            guard sourceStats.fileCount > 0, sourceStats == stagedStats else {
+                throw StepError(step: "直写",
+                                detail: "暂存校验不通过：文件数/字节数与源不一致（源 \(sourceStats.fileCount) 个文件 \(sourceStats.totalBytes) 字节，暂存 \(stagedStats.fileCount) 个 \(stagedStats.totalBytes) 字节），已放弃写入。")
+            }
+            // 校验过了才动目标：先清同名旧目录，再原子改名，不存在写一半。
+            if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
+            try fm.moveItem(at: staging, to: dst)
+            log("直写 \(dst.path)（\(sourceStats.fileCount) 个文件 \(sourceStats.totalBytes) 字节，暂存校验通过，原子改名落盘）。")
+        } catch {
+            // 任何一步没成，暂存目录都收走，不给商店留垃圾。
+            try? fm.removeItem(at: staging)
+            throw error
+        }
+    }
+
+    /// 数一个目录里的常规文件个数和总字节数（递归），暂存校验和写后核验共用。
+    /// 目录打不开返回 (0, 0)，调用方把 0 当「核对不上」处理。
+    static func directoryStats(at url: URL) -> (fileCount: Int, totalBytes: Int) {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) else { return (0, 0) }
+        var fileCount = 0
+        var totalBytes = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true else { continue }
+            fileCount += 1
+            totalBytes += values.fileSize ?? 0
+        }
+        return (fileCount, totalBytes)
+    }
+
+    // MARK: - 按回执删除（Drift 同款，V1.36 抄）
+
+    /// 按回执删掉一张已刷入的壁纸（只支持本机直写路；配对隧道路没有经验
+    /// 证的删除通道，Drift 同样不做，不让用户误以为删了）。
+    /// 三道保险，Drift 的原话照抄成规矩：
+    ///   1. 回执路径必须还在商店目录里（…/PRBPosterExtensionDataStore/…），
+    ///      且和回执里的描述符 UUID 对上号——「回执路径不在商店目录里，拒绝删除」；
+    ///   2. 沙箱逃逸拿到写通行证才动手；
+    ///   3. 删完重新枚举：目录真不在了才算数；还在就明说没删成，回执保留，
+    ///      不把话说满。
+    /// 返回 (用户可读的一句话结果, 是否确认删除成功)。
+    static func deleteByReceipt(_ receipt: InstallReceipt,
+                                log: @escaping (String) -> Void = { InstallLog.shared.append($0) }
+    ) -> (message: String, removed: Bool) {
+        let fm = FileManager.default
+        // 保险一：路径必须在商店目录里，且以 descriptors/<回执 UUID> 收尾。
+        guard receipt.targetPath.contains("PRBPosterExtensionDataStore/"),
+              receipt.targetPath.hasSuffix("/descriptors/\(receipt.descriptorUUID)") else {
+            log("按回执删除：回执路径不在商店目录里，拒绝删除。")
+            return ("回执路径不在商店目录里，拒绝删除。", false)
+        }
+        // 保险二：逃逸拿写通行证。
+        let parent = (receipt.targetPath as NSString).deletingLastPathComponent
+        let escape = WorseQueryEscape.consume(target: parent, log: { log($0) })
+        guard let escapeHandle = escape.handle else {
+            return ("删除没成：沙箱逃逸没成（\(escape.failReason ?? "原因见日志")）。", false)
+        }
+        defer { WorseQueryEscape.release(escapeHandle) }
+        // 目录本来就不在了：清掉回执，如实记账。
+        guard fm.fileExists(atPath: receipt.targetPath) else {
+            InstallReceiptStore.removeAll(descriptorUUID: receipt.descriptorUUID)
+            log("按回执删除：目录已经不在商店里，回执记录已清理。")
+            return ("目录已经不在商店里，回执记录已清理。", true)
+        }
+        do {
+            try fm.removeItem(atPath: receipt.targetPath)
+        } catch {
+            log("按回执删除：删除没成（\(error.localizedDescription)），回执先保留。")
+            return ("删除没成：\(error.localizedDescription)。回执先保留，下次再删。", false)
+        }
+        // 保险三：删完重新枚举，删干净了才算数。
+        if fm.fileExists(atPath: receipt.targetPath) {
+            log("按回执删除：删除后仍然能看到这个目录，没有确认删除。")
+            return ("删除后仍然能看到这个目录，没有确认删除。回执先保留，下次再删。", false)
+        }
+        InstallReceiptStore.removeAll(descriptorUUID: receipt.descriptorUUID)
+        log("按回执删除：已删除并在本机核验，\(receipt.descriptorUUID) 的描述符已不在商店里。")
+        return ("已删除并在本机核验：这张壁纸已不在商店里。上滑关掉海报应用（或刷新桌面）后生效。"
+            + "删的正是当前在用的壁纸时，生效后系统会换回默认壁纸。", true)
     }
 
     /// 逃逸直写写回表：stagedDir 里的表（+ 0 字节 -wal/-shm）直接拷进

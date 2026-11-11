@@ -1001,7 +1001,7 @@ private struct ImportDetailView: View {
                         } else {
                             // 没配对（V1.10 起）：跟人家一样刷新桌面，不再让重启手机。
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("没配对装完跟人家一样：点「刷新桌面」，桌面会黑一下自己回来（App 闪退属正常），回来后锁屏长按进图库看。")
+                                Text("没配对装完：点「刷新桌面」，桌面会黑一下自己回来（App 闪退属正常），回来后锁屏长按进图库看。")
                                     .font(.caption).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 HStack {
@@ -1192,8 +1192,24 @@ private struct ImportDetailView: View {
                 if state.hasPairingFile {
                     installResult = "安装成功：刷新没确认。重启手机，然后锁屏长按进图库查看。"
                 } else {
-                    installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库看。"
-                    DesktopRestart.trigger()
+                    // V1.35：先试暗号唤出海报应用——它一露头系统就重读壁纸，
+                    // 用户上滑关掉即生效；叫不动再退回网页压桌面（详情页 V1.25 同款）。
+                    if let posterBoardURL = URL(string: "posterboard://") {
+                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
+                        UIApplication.shared.open(posterBoardURL) { ok in
+                            guard !ok else { return }
+                            // open 的回调不保证主线程；这些是界面状态，必须回主线程改。
+                            DispatchQueue.main.async {
+                                InstallLog.shared.append("restore: 海报应用没叫动，退回网页压桌面的刷新。")
+                                installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面（老办法）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
+                                installLogText = InstallLog.shared.tail(60)
+                                DesktopRestart.trigger()
+                            }
+                        }
+                    } else {
+                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面——桌面会黑一下自己回来，回来后锁屏长按进图库看。"
+                        DesktopRestart.trigger()
+                    }
                 }
             }
         } else if Task.isCancelled {

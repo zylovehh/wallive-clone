@@ -250,7 +250,8 @@ final class AppState: ObservableObject {
             let outcome = try await BackupInstallFlow.install(
                 packageData: data,
                 pairingPath: "",
-                log: { InstallLog.shared.append($0) })
+                log: { InstallLog.shared.append($0) },
+                displayName: packageDisplayName)
             installHistory.append(outcome.descriptorUUID)
             return outcome.descriptorUUID
         } catch {
@@ -288,7 +289,8 @@ final class AppState: ObservableObject {
                 // 去碰配对隧道（27.2 上隧道必须回环 VPN）。
                 pairingPath: "",
                 log: { InstallLog.shared.append($0) },
-                onProgress: onProgress)
+                onProgress: onProgress,
+                displayName: packageDisplayName)
             let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
                 + "Extensions/\(outcome.extensionID)/configurations"
             // 走没走成 Vellum 同款看结果：这条路从不写偏好，preferencesWritten
@@ -299,6 +301,17 @@ final class AppState: ObservableObject {
                 ? outcome.injectResults
                 : [InjectResult(targetParentDir: configurationsDir, ok: true, error: nil)]
                     + outcome.injectResults
+            // V1.36（Drift 同款）：把写后核验结论带给界面——核验在册才报
+            // 「已核验」，核验不上如实说「已写入、未确认显示」，不把话说满。
+            let verifyNote: String
+            switch outcome.verified {
+            case .some(true):
+                verifyNote = "写后核验通过：商店里数到的文件和源一致。"
+            case .some(false):
+                verifyNote = "已写入、未确认显示：先去锁屏图库看一眼，没有就把日志发来。"
+            case .none:
+                verifyNote = ""
+            }
             let report = InstallReport(
                 descriptorUUID: outcome.descriptorUUID,
                 injectResults: injectResults,
@@ -310,8 +323,8 @@ final class AppState: ObservableObject {
                 refresh: RefreshResult(confirmed: outcome.refreshConfirmed),
                 mode: .backup,
                 backupSummary: isVellumPath
-                    ? "壁纸已写好（人家同款，只写描述符目录，表和偏好没碰）。"
-                        + "正在刷新桌面（跟人家一样），回来后去锁屏图库查看，出现后再点设为墙纸组合。"
+                    ? "壁纸已写好（只写描述符目录，表和偏好没碰）。" + verifyNote
+                        + "正在刷新桌面，回来后锁屏长按进图库，出现后再设为墙纸组合。"
                     : "备份还原已完成（\(outcome.payloadCount) 个载荷，"
                         + "商店：\(outcome.storeSummary)）。" + (outcome.needsReboot
                             ? "重启手机后去锁屏图库查看，出现后再点设为墙纸组合。"
