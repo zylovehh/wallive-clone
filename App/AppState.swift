@@ -7,6 +7,17 @@
 import Foundation
 import Network
 
+/// 导入库里的一张包：包文件存在沙盒 Documents/imported-packages/ 里，App 重启还在；
+/// 元数据（名字、大小、时间、封面文件名）记在 UserDefaults，启动时读回来。
+struct ImportedPackage: Identifiable, Codable, Equatable {
+    let id: String
+    let displayName: String
+    let fileName: String
+    let thumbFileName: String?
+    let size: Int
+    let importedAt: Date
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var selectedTab = 0
@@ -16,6 +27,10 @@ final class AppState: ObservableObject {
     @Published var packageError: String?
     /// 目录下载时带来的中文名（如“蜘蛛侠 2”）；直接导入文件时为空，详情页改显示清理过的包名。
     @Published var packageDisplayName: String?
+    /// 导入库：所有导过的壁纸包（新的导进来不顶掉旧的），存在沙盒里，重启还在。
+    @Published var importedPackages: [ImportedPackage] = []
+    private let importedDefaultsKey = "wallive-clone-imported-packages"
+    private let importedDirName = "imported-packages"
     @Published var pairingLoaded = false
     @Published var pairingDescription = "未导入"
     @Published var installHistory: [String] = []
@@ -29,6 +44,7 @@ final class AppState: ObservableObject {
         // 启动自愈：上次逃逸中途崩溃会把 App Group 的 Library/Caches 留成
         // 指向壁纸库的软链，不收拾会污染其他走 App Group 的读写。
         WorseQueryEscape.recoverStaleSymlink()
+        loadImportedPackages()
     }
 
     /// 读一次设备身份（只读不写）。隧道/配对不通就置空，不抛错——
@@ -81,6 +97,78 @@ final class AppState: ObservableObject {
             packageInfo = nil
             packageError = "包检查失败：\(error.localizedDescription)"
         }
+    }
+
+    /// 导入库文件目录：Documents/imported-packages，不存在就建一个。
+    var importedPackagesURL: URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(importedDirName)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// 启动时读回导入库记录；文件已经不在的条目直接丢掉（包删了就没用了）。
+    private func loadImportedPackages() {
+        guard let data = UserDefaults.standard.data(forKey: importedDefaultsKey),
+              let saved = try? JSONDecoder().decode([ImportedPackage].self, from: data) else {
+            importedPackages = []
+            return
+        }
+        importedPackages = saved.filter { pkg in
+            FileManager.default.fileExists(atPath: importedPackagesURL.appendingPathComponent(pkg.fileName).path)
+        }
+        saveImportedPackages()
+    }
+
+    private func saveImportedPackages() {
+        guard let data = try? JSONEncoder().encode(importedPackages) else { return }
+        UserDefaults.standard.set(data, forKey: importedDefaultsKey)
+    }
+
+    /// 往导入库里加一张：包文件（已转 WALLIVE1 加密版）+ 封面图存沙盒，记录记下来。
+    /// thumbnail：从包里抠出来的封面图（JPEG），没有就传 nil，卡片显示占位图。
+    func addImportedPackage(data: Data, displayName: String, thumbnail: Data?) {
+        let id = UUID().uuidString
+        let fileName = "\(id).tendies"
+        let fileURL = importedPackagesURL.appendingPathComponent(fileName)
+        do {
+            try data.write(to: fileURL)
+        } catch {
+            return
+        }
+        var thumbFileName: String?
+        if let thumbnail {
+            let thumbName = "\(id)-thumb.jpg"
+            if (try? thumbnail.write(to: importedPackagesURL.appendingPathComponent(thumbName))) != nil {
+                thumbFileName = thumbName
+            }
+        }
+        let pkg = ImportedPackage(
+            id: id, displayName: displayName, fileName: fileName,
+            thumbFileName: thumbFileName, size: data.count, importedAt: Date())
+        importedPackages.insert(pkg, at: 0)
+        saveImportedPackages()
+    }
+
+    /// 从导入库里删一张：沙盒里的包文件和封面一起删，记录也去掉（目录里的壁纸不受影响）。
+    func removeImportedPackage(_ pkg: ImportedPackage) {
+        try? FileManager.default.removeItem(at: importedPackagesURL.appendingPathComponent(pkg.fileName))
+        if let thumb = pkg.thumbFileName {
+            try? FileManager.default.removeItem(at: importedPackagesURL.appendingPathComponent(thumb))
+        }
+        importedPackages.removeAll { $0.id == pkg.id }
+        saveImportedPackages()
+    }
+
+    /// 读导入库里一张包的文件内容（装之前用）；文件没了返回 nil。
+    func importedPackageData(_ pkg: ImportedPackage) -> Data? {
+        try? Data(contentsOf: importedPackagesURL.appendingPathComponent(pkg.fileName))
+    }
+
+    /// 导入库里一张包的封面图地址（没有封面返回 nil，卡片显示占位图）。
+    func importedThumbURL(_ pkg: ImportedPackage) -> URL? {
+        guard let thumb = pkg.thumbFileName else { return nil }
+        return importedPackagesURL.appendingPathComponent(thumb)
     }
 
     /// 导入配对记录文件：拷进 App 沙盒 Documents，刷新状态。
