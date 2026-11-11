@@ -307,10 +307,12 @@ private struct ImportedPackageCard: View {
 /// 目录下载也用它从包里抠封面（不另外走网络），所以不加 private。
 enum ImportThumbnailMaker {
     /// 封面尽量是锁屏底图：1. 背景画布（Background.ca）里的图就是锁屏底图，
-    /// 挑其中最大的；2. 没有背景画布（整包都在 Floating 里）就挑 assets 里
-    /// 像素最大的——整幅场景图几乎总是最大的，人物抠图、装饰小图都比它小
-    ///（波妞就是这种情况：之前按顺序拿了第一张人物抠图，白底两小孩）；
-    /// 3. 连 assets 都没有，翻全包挑最大的。
+    /// 挑其中最像的；2. 没有背景画布（整包都在 Floating 里）就挑 assets 里
+    /// 最像的；3. 连 assets 都没有，翻全包挑最像的。
+    /// “最像” = 像素最大那批里最亮的那张：整幅场景图几乎总是最大的，
+    /// 人物抠图、装饰小图都比它小；白天那张底图又总比夜里那张亮
+    ///（波妞：白天蓝天和夜里星空一样大，亮度一比就分出来了；
+    /// 之前按顺序拿，第一张是人物抠图，白底两小孩）。
     static func make(from packageData: Data) -> Data? {
         let zip = ZipFoundationAdapter()
         let plain: Data
@@ -326,34 +328,57 @@ enum ImportThumbnailMaker {
             imageExts.contains((path as NSString).pathExtension.lowercased())
         }
         let assetImages = entries.filter { isImageEntry($0) && $0.lowercased().contains("assets") }
-        if let image = largestImage(in: assetImages.filter { $0.lowercased().contains("background") }, zip: zip, plain: plain) {
+        if let image = bestLockScreenImage(in: assetImages.filter { $0.lowercased().contains("background") }, zip: zip, plain: plain) {
             return compress(image)
         }
-        if let image = largestImage(in: assetImages, zip: zip, plain: plain) {
+        if let image = bestLockScreenImage(in: assetImages, zip: zip, plain: plain) {
             return compress(image)
         }
-        if let image = largestImage(in: entries.filter(isImageEntry), zip: zip, plain: plain) {
+        if let image = bestLockScreenImage(in: entries.filter(isImageEntry), zip: zip, plain: plain) {
             return compress(image)
         }
         return nil
     }
 
-    /// 在一串图片里挑像素最大的那张；一找到超过 200 万像素的就停，
-    /// 不用把包里所有图都解一遍。
-    private static func largestImage(in paths: [String], zip: ZipFoundationAdapter, plain: Data) -> UIImage? {
-        var bestImage: UIImage?
-        var bestPixels: CGFloat = 0
+    /// 在一串图片里挑最像锁屏底图的那张：先按像素筛出最大那批（不小于最大的一半），
+    /// 再在其中挑最亮的——白天那张底图总比夜里那张亮。
+    private static func bestLockScreenImage(in paths: [String], zip: ZipFoundationAdapter, plain: Data) -> UIImage? {
+        var sized: [(image: UIImage, pixels: CGFloat)] = []
+        var maxPixels: CGFloat = 0
         for path in paths {
             guard let data = try? zip.readEntry(path, in: plain),
                   let image = UIImage(data: data) else { continue }
             let pixels = image.size.width * image.size.height * image.scale
-            if pixels > bestPixels {
-                bestPixels = pixels
-                bestImage = image
-            }
-            if bestPixels > 2_000_000 { break }
+            maxPixels = max(maxPixels, pixels)
+            sized.append((image, pixels))
         }
-        return bestImage
+        guard maxPixels > 0 else { return nil }
+        var best: UIImage?
+        var bestLuma: CGFloat = -1
+        for (image, pixels) in sized where pixels >= maxPixels * 0.5 {
+            let luma = meanLuminance(image)
+            if luma > bestLuma { bestLuma = luma; best = image }
+        }
+        return best ?? sized.max(by: { $0.pixels < $1.pixels })?.image
+    }
+
+    /// 平均亮度：缩到 32×32 再取平均，够分白天黑夜就行。
+    /// 透明的地方算黑，所以人物抠图（大面积透明）亮度天然就低。
+    private static func meanLuminance(_ image: UIImage) -> CGFloat {
+        let w = 32, h = 32
+        guard let cg = image.cgImage else { return 0 }
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let data = ctx.data else { return 0 }
+        let ptr = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        var sum: CGFloat = 0
+        for i in 0..<(w * h) {
+            let r = CGFloat(ptr[i * 4]), g = CGFloat(ptr[i * 4 + 1]), b = CGFloat(ptr[i * 4 + 2])
+            sum += 0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+        return sum / CGFloat(w * h) / 255.0
     }
 
     /// 最长边压到 720，控制封面图体积。
