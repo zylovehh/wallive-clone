@@ -96,8 +96,24 @@ struct InstallView: View {
                 result = "安装完成，描述符 UUID：\(uuid)。配对刷新跑完去锁屏看；没确认就重启手机再看。"
             } else {
                 // 没配对（V1.10 起）：跟人家一样装完自动刷新桌面。
-                result = "安装完成，描述符 UUID：\(uuid)。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
-                DesktopRestart.trigger()
+                // V1.25：先试暗号唤出海报应用——它一露头系统就重读壁纸，
+                // 用户上滑关掉即生效（跟人家同款）；叫不动再退回网页压桌面。
+                if let posterBoardURL = URL(string: "posterboard://") {
+                    result = "安装完成，描述符 UUID：\(uuid)。海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
+                    UIApplication.shared.open(posterBoardURL) { ok in
+                        guard !ok else { return }
+                        // open 的回调不保证主线程；result 是界面状态，必须回主线程改。
+                        DispatchQueue.main.async {
+                            InstallLog.shared.append("restore: 海报应用没叫动，退回网页压桌面的刷新。")
+                            result = "安装完成，描述符 UUID：\(uuid)。正在刷新桌面（老办法）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
+                            installLog = InstallLog.shared.tail(200)
+                            DesktopRestart.trigger()
+                        }
+                    }
+                } else {
+                    result = "安装完成，描述符 UUID：\(uuid)。正在刷新桌面（跟人家一样）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
+                    DesktopRestart.trigger()
+                }
             }
         } else if state.statusMessage.isEmpty {
             result = "安装未完成：先去“导入”选包；失败原因看提示或安装日志。"
