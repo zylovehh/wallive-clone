@@ -56,9 +56,10 @@ public enum DepthPackageBuilder {
             throw Error.missingFloatingFile
         }
 
-        // 1. Floating .ca 改名加 Clownfish_ 前缀（已带前缀则不动）。
+        // 1. Floating .ca 改名加 Clownfish_ 前缀（名字里已含 Clownfish 则不动——
+        //    旧格式转换产物形如 7400.Clownfish_Floating-…，别再二次加前缀）。
         let newFloatingFile: String
-        if floatingFile.hasPrefix("Clownfish_") {
+        if floatingFile.contains("Clownfish") {
             newFloatingFile = floatingFile
         } else {
             newFloatingFile = "Clownfish_" + floatingFile
@@ -128,7 +129,7 @@ public enum DepthPackageBuilder {
                 return
             }
             if let floatingFile = def["floatingAnimationFileNameKey"] as? String,
-               !floatingFile.isEmpty, !floatingFile.hasPrefix("Clownfish_") {
+               !floatingFile.isEmpty, !floatingFile.contains("Clownfish") {
                 let oldDir = wallpaperDir.appendingPathComponent(floatingFile)
                 let newFile = "Clownfish_" + floatingFile
                 let newDir = wallpaperDir.appendingPathComponent(newFile)
