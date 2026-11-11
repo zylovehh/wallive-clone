@@ -296,7 +296,7 @@ enum RestoreTest {
                 summary: "已停止。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], verified: nil, json: jsonString(report))
+                injectResults: [], json: jsonString(report), verified: nil)
         } catch let e as StepError {
             report["step"] = e.step
             report["error"] = e.detail
@@ -306,7 +306,7 @@ enum RestoreTest {
                 summary: "备份还原停在\(e.step)：\(e.detail)原来的表还在 Documents/posterboard-table 里，没动。完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], verified: nil, json: jsonString(report))
+                injectResults: [], json: jsonString(report), verified: nil)
         } catch {
             report["error"] = error.localizedDescription
             InstallLog.shared.append("restore: FAILED \(error.localizedDescription) json=\(jsonString(report))")
@@ -315,7 +315,7 @@ enum RestoreTest {
                 summary: "备份还原失败：\(error.localizedDescription)完整结果见下面日志框。",
                 descriptorUUID: nil, posterId: nil, extensionID: nil, payloadCount: nil,
                 storeSummary: nil, preferencesWritten: false, refreshConfirmed: false, rebootNeeded: false,
-                injectResults: [], verified: nil, json: jsonString(report))
+                injectResults: [], json: jsonString(report), verified: nil)
         }
     }
 
@@ -733,8 +733,8 @@ enum RestoreTest {
                               refreshConfirmed: false, rebootNeeded: true,
                               injectResults: [InjectResult(targetParentDir: targetDir,
                                                            ok: true, error: nil)],
-                              verified: verified,
-                              json: jsonString(report))
+                              json: jsonString(report),
+                              verified: verified)
     }
 
     // MARK: - 拿表（Phase 0 备份优先，拷回是备选）
