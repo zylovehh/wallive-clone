@@ -825,6 +825,54 @@ enum RestoreTest {
         UserDefaults.standard.set(path, forKey: cachedContainerKey)
     }
 
+    /// 第 0 步：问系统要 PosterBoard 的容器路径（Vellum 的第一条路）。
+    /// 走 LaunchServices 私有接口直接拿精确路径，拿到就不用几百个挨个扫。
+    /// 拿不到（私有框架没载入、类或方法不在）返回 nil，走后面的扫描。
+    private static func posterBoardContainerViaLaunchServices() -> String? {
+        // 框架没载入时先载入；两个候选名字都试。
+        dlopen("/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY)
+        dlopen("/System/Library/PrivateFrameworks/LaunchServices.framework/LaunchServices", RTLD_LAZY)
+        let paths = [
+            lsProxyContainerURL(className: "LSApplicationProxy",
+                                factory: "applicationProxyForIdentifier:"),
+            lsProxyContainerURL(className: "LSApplicationWorkspace",
+                                factory: "objectForApplicationWithIdentifier:"),
+        ]
+        for p in paths.compactMap({ $0 }) {
+            if p.contains("Containers/Data/Application/") { return p }
+        }
+        return nil
+    }
+
+    /// 对一个 LaunchServices 私有类拿 proxy，再取 containerURL。
+    /// LSApplicationProxy 的工厂方法是类方法，直接在类上调；
+    /// LSApplicationWorkspace 的同名方法是实例方法，先取 defaultWorkspace 单例。
+    private static func lsProxyContainerURL(className: String, factory: String) -> String? {
+        let urlSel = NSSelectorFromString("containerURL")
+        guard let cls = NSClassFromString(className) as? NSObject.Type else { return nil }
+        let factorySel = NSSelectorFromString(factory)
+        let proxy: NSObject?
+        if cls.responds(to: factorySel) {
+            // 类方法路：applicationProxyForIdentifier:
+            proxy = cls.perform(factorySel, with: "com.apple.PosterBoard")?
+                .takeUnretainedValue() as? NSObject
+        } else if className == "LSApplicationWorkspace" {
+            // 实例方法路：先拿 defaultWorkspace 单例，再 objectForApplicationWithIdentifier:
+            let wsSel = NSSelectorFromString("defaultWorkspace")
+            guard cls.responds(to: wsSel),
+                  let ws = cls.perform(wsSel)?.takeUnretainedValue() as? NSObject,
+                  ws.responds(to: factorySel) else { return nil }
+            proxy = ws.perform(factorySel, with: "com.apple.PosterBoard")?
+                .takeUnretainedValue() as? NSObject
+        } else {
+            proxy = nil
+        }
+        guard let proxy, proxy.responds(to: urlSel),
+              let urlUnmanaged = proxy.perform(urlSel) else { return nil }
+        guard let url = urlUnmanaged.takeUnretainedValue() as? URL else { return nil }
+        return url.path
+    }
+
     /// 总目录直翻（V1.22 改成 Vellum 同款 inode-scan）：不再向「应用数据
     /// 总目录」要通行证——真机实测对父级路径的查询每台手机都被拒，第一
     /// 次装就找不到库。改为把总目录下的容器一个个列出来，逐个单独吃扩
@@ -835,6 +883,21 @@ enum RestoreTest {
     private static func discoverAndReadDirect(workDir: URL)
         -> (db: URL, wal: URL?, container: String, handle: Int64)? {
         let fm = FileManager.default
+
+        // 第 0 步：LaunchServices 直接指路（Vellum 的第一条路，拿到就不用扫）。
+        if let lsPath = posterBoardContainerViaLaunchServices() {
+            InstallLog.shared.append("vellum: LaunchServices 指到壁纸库容器：\(lsPath)。")
+            let esc = WorseQueryEscape.consume(target: lsPath, requireWrite: false) {
+                InstallLog.shared.append("restore: \($0)")
+            }
+            if let h = esc.handle,
+               let read = readStoreDirect(container: lsPath, workDir: workDir) {
+                return (db: read.db, wal: read.wal, container: lsPath, handle: h)
+            }
+            // 指到了但拿不到通行证或读不了表：继续走扫描。
+            WorseQueryEscape.release(esc.handle)
+        }
+
         // /var 和 /private/var 是同一个地方两种写法，列到哪个用哪个。
         let roots = ["/var/mobile/Containers/Data/Application",
                      "/private/var/mobile/Containers/Data/Application"]
@@ -843,10 +906,17 @@ enum RestoreTest {
             let entries = (try? fm.contentsOfDirectory(atPath: root)) ?? []
             guard !entries.isEmpty else { continue }
             InstallLog.shared.append("vellum: 总目录列到 \(entries.count) 个容器，逐个探头找库。")
-            // 第二步：逐个容器单独吃扩展，探到库就读表。
+            // 第二步：逐个容器单独吃扩展，探到库就读表。整段限 25 秒，
+            // 超时就放弃本机枚举（Vellum 同款规矩）。
+            let scanDeadline = Date().addingTimeInterval(25)
             var scanned = 0
             var consecutiveFails = 0
             for entry in entries {
+                if Date() > scanDeadline {
+                    InstallLog.shared.append("vellum: 扫描超过 25 秒，剩下的容器不再试。")
+                    scanned = entries.count
+                    break
+                }
                 let candidate = (root as NSString).appendingPathComponent(entry)
                 let esc = WorseQueryEscape.consume(target: candidate, requireWrite: false, quiet: true)
                 scanned += 1
