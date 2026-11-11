@@ -37,11 +37,24 @@ struct CatalogView: View {
     @State private var itemToDelete: CatalogItem?
     @State private var videoReplaceItem: CatalogItem?
 
-    /// 自适应列数：手机两列，iPad 横屏 6 列、竖屏 4 列，卡片不再一张占满屏。
-    /// 固定两列时 iPad 上一张卡能占半个屏还多，又高又空。
-    private let columns = [
-        GridItem(.adaptive(minimum: 165, maximum: 230), spacing: 12),
-    ]
+    /// 列数：手机 2 列，iPad 横屏 6 列、竖屏 4 列，卡片不再一张占满屏。
+    /// 不用 adaptive（实测 adaptive 在 iPad 上会算出宽窄不一的列，卡片一大一小对不齐），
+    /// 直接按屏宽算死每列宽，列列等宽。
+    private var catalogColumnCount: Int {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            return UIScreen.main.bounds.width > UIScreen.main.bounds.height ? 6 : 4
+        } else {
+            return 2
+        }
+    }
+
+    private var catalogCardWidth: CGFloat {
+        (UIScreen.main.bounds.width - 32 - CGFloat(catalogColumnCount - 1) * 12) / CGFloat(catalogColumnCount)
+    }
+
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.fixed(catalogCardWidth), spacing: 12), count: catalogColumnCount)
+    }
 
     /// 全部分类：全部 + 目录里出现过的标签。
     private var categories: [String] {
