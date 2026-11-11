@@ -471,11 +471,15 @@ enum RestoreTest {
         //    验过才算系统在读的那份；翻不到再试上次记下的路径。
         onProgress?("正在找壁纸库…", 0.05)
         var escapeHandle: Int64? = nil
-        defer { WorseQueryEscape.release(escapeHandle) }
+        // 侧门开着时（找库和写描述符都沿路标走），装完/失败都要把真
+        // Caches 换回来；普通逃逸路 restore 为 nil，不用管。
+        var sideDoorRestore: (() -> Void)? = nil
+        defer { sideDoorRestore?(); WorseQueryEscape.release(escapeHandle) }
         var container: String? = nil
-        if let found = discoverAndReadDirect(workDir: workDir) {
+        if let found = discoverAndReadDirect(workDir: workDir, groupPath: health.containerPath) {
             escapeHandle = found.handle
             container = found.container
+            sideDoorRestore = found.restore
             report["escape"] = ["ok": true, "detail": "总目录直翻"]
             InstallLog.shared.append("vellum: 壁纸库找到了（\(elapsed())）：\(found.container)。")
         }
@@ -830,8 +834,11 @@ enum RestoreTest {
     /// 拿不到（私有框架没载入、类或方法不在）返回 nil，走后面的扫描。
     private static func posterBoardContainerViaLaunchServices() -> String? {
         // 框架没载入时先载入；两个候选名字都试。
-        dlopen("/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY)
-        dlopen("/System/Library/PrivateFrameworks/LaunchServices.framework/LaunchServices", RTLD_LAZY)
+        let f1 = dlopen("/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY)
+        let f2 = dlopen("/System/Library/PrivateFrameworks/LaunchServices.framework/LaunchServices", RTLD_LAZY)
+        if f1 == nil, f2 == nil {
+            InstallLog.shared.append("vellum: LaunchServices 两个框架都没载入（系统没给），指路法作废。")
+        }
         let paths = [
             lsProxyContainerURL(className: "LSApplicationProxy",
                                 factory: "applicationProxyForIdentifier:"),
@@ -840,6 +847,7 @@ enum RestoreTest {
         ]
         for p in paths.compactMap({ $0 }) {
             if p.contains("Containers/Data/Application/") { return p }
+            InstallLog.shared.append("vellum: 指到的不是数据容器，是这个：\(p)。")
         }
         return nil
     }
@@ -849,7 +857,10 @@ enum RestoreTest {
     /// LSApplicationWorkspace 的同名方法是实例方法，先取 defaultWorkspace 单例。
     private static func lsProxyContainerURL(className: String, factory: String) -> String? {
         let urlSel = NSSelectorFromString("containerURL")
-        guard let cls = NSClassFromString(className) as? NSObject.Type else { return nil }
+        guard let cls = NSClassFromString(className) as? NSObject.Type else {
+            InstallLog.shared.append("vellum: \(className) 这个类没载进来，这条指路法不行。")
+            return nil
+        }
         let factorySel = NSSelectorFromString(factory)
         let proxy: NSObject?
         if cls.responds(to: factorySel) {
@@ -859,18 +870,130 @@ enum RestoreTest {
         } else if className == "LSApplicationWorkspace" {
             // 实例方法路：先拿 defaultWorkspace 单例，再 objectForApplicationWithIdentifier:
             let wsSel = NSSelectorFromString("defaultWorkspace")
-            guard cls.responds(to: wsSel),
-                  let ws = cls.perform(wsSel)?.takeUnretainedValue() as? NSObject,
-                  ws.responds(to: factorySel) else { return nil }
+            guard cls.responds(to: wsSel) else {
+                InstallLog.shared.append("vellum: \(className) 没有 defaultWorkspace，这条指路法不行。")
+                return nil
+            }
+            guard let ws = cls.perform(wsSel)?.takeUnretainedValue() as? NSObject else {
+                InstallLog.shared.append("vellum: \(className) 单例拿不到，这条指路法不行。")
+                return nil
+            }
+            guard ws.responds(to: factorySel) else {
+                InstallLog.shared.append("vellum: \(className) 单例上没有 \(factory)，这条指路法不行。")
+                return nil
+            }
             proxy = ws.perform(factorySel, with: "com.apple.PosterBoard")?
                 .takeUnretainedValue() as? NSObject
         } else {
+            InstallLog.shared.append("vellum: \(className) 没有 \(factory) 这个方法，这条指路法不行。")
             proxy = nil
         }
-        guard let proxy, proxy.responds(to: urlSel),
-              let urlUnmanaged = proxy.perform(urlSel) else { return nil }
-        guard let url = urlUnmanaged.takeUnretainedValue() as? URL else { return nil }
+        guard let proxy else {
+            InstallLog.shared.append("vellum: \(className) 里查不到 com.apple.PosterBoard（查出来是空的）。")
+            return nil
+        }
+        guard proxy.responds(to: urlSel) else {
+            InstallLog.shared.append("vellum: PosterBoard 的 proxy 上没有 containerURL，这条指路法不行。")
+            return nil
+        }
+        guard let urlUnmanaged = proxy.perform(urlSel) else {
+            InstallLog.shared.append("vellum: 调 containerURL 什么都没返回。")
+            return nil
+        }
+        guard let url = urlUnmanaged.takeUnretainedValue() as? URL else {
+            InstallLog.shared.append("vellum: containerURL 返回的不是地址，类型不对。")
+            return nil
+        }
+        InstallLog.shared.append("vellum: \(className) 指到容器：\(url.path)。")
         return url.path
+    }
+
+    /// 侧门直进（人家 inode-scan 的真走法）：不向看门人要通行证——把自家
+    /// 组容器里的 Library/Caches 换成一个"路标"（符号链接）直接指到应用
+    /// 数据总目录，然后沿路标列目录、找库、读表。沙箱查的是路径前缀（自
+    /// 家组容器内放行），链接指向哪是内核解析的事——正门全被拒时这条路
+    /// 照样能走。找成后侧门保持开着（Caches 暂时是路标），返回的容器路
+    /// 径也是路标路径，后续写描述符同样沿路标走；restore 闭包在装完（或
+    /// 失败）时把真 Caches 换回来。handle 固定给 0（免敲门，释放函数对
+    /// 0 直接忽略）。
+    private static func sideDoorRead(groupPath: String, workDir: URL)
+        -> (db: URL, wal: URL?, container: String, handle: Int64, restore: () -> Void)? {
+        let fm = FileManager.default
+        let caches = groupPath + "/Library/Caches"
+        let backup = groupPath + "/Library/Caches.sideDoor"
+        var hadRealCaches = false
+        let restore: () -> Void = {
+            if (try? fm.destinationOfSymbolicLink(atPath: caches)) != nil {
+                try? fm.removeItem(atPath: caches)
+            }
+            if hadRealCaches, fm.fileExists(atPath: backup) {
+                try? fm.moveItem(atPath: backup, toPath: caches)
+            }
+        }
+        // 上回没恢复成（中断/闪退留下的路标）：先修现场再开侧门。
+        if (try? fm.destinationOfSymbolicLink(atPath: caches)) != nil {
+            InstallLog.shared.append("vellum: 发现上次留下的路标，先恢复原样再开侧门。")
+            if fm.fileExists(atPath: backup) {
+                try? fm.removeItem(atPath: caches)
+                try? fm.moveItem(atPath: backup, toPath: caches)
+            }
+        }
+        if fm.fileExists(atPath: backup) { try? fm.removeItem(atPath: backup) }
+        if fm.fileExists(atPath: caches) {
+            do { try fm.moveItem(atPath: caches, toPath: backup); hadRealCaches = true }
+            catch {
+                InstallLog.shared.append("vellum: 侧门没开成：自家 Caches 挪不动（\(error.localizedDescription)）。")
+                return nil
+            }
+        }
+        if !fm.createSymbolicLink(atPath: caches,
+                                  withDestinationPath: "../../../../../../../../var/mobile/Containers/Data/Application") {
+            InstallLog.shared.append("vellum: 路标没立起来，侧门作废。")
+            restore()
+            return nil
+        }
+        InstallLog.shared.append("vellum: 侧门开了，沿路标直接翻总目录（不敲门）。")
+        // 沿路标列目录 + 逐个容器找库读表，整段同样限 25 秒。
+        let deadline = Date().addingTimeInterval(25)
+        var entries: [String] = []
+        do { entries = try fm.contentsOfDirectory(atPath: caches) }
+        catch {
+            InstallLog.shared.append("vellum: 沿路标列目录不行，系统报错：\(error.localizedDescription)。")
+            restore()
+            return nil
+        }
+        guard !entries.isEmpty else {
+            InstallLog.shared.append("vellum: 沿路标列到的是空的。")
+            restore()
+            return nil
+        }
+        InstallLog.shared.append("vellum: 侧门直接列到 \(entries.count) 个容器，逐个找库。")
+        let storeDir = PosterBoard.storePath(storeVersion)
+        let dbFile = PosterBoard.databaseFileName
+        var readable = 0
+        for entry in entries {
+            if Date() > deadline {
+                InstallLog.shared.append("vellum: 侧门翻超 25 秒，剩下的不再试。")
+                break
+            }
+            let candidate = caches + "/" + entry
+            let dbPath = candidate + storeDir + "/" + dbFile
+            guard fm.fileExists(atPath: dbPath) else { continue }
+            readable += 1
+            if let read = readStoreDirect(container: candidate, workDir: workDir) {
+                InstallLog.shared.append("vellum: 侧门探到壁纸库在：\(entry)（不用敲门，正门被拒也照走）。")
+                // 容器路径返回路标路径：后面写描述符也沿侧门走，恢复前完成。
+                return (db: read.db, wal: read.wal,
+                        container: candidate, handle: 0, restore: restore)
+            }
+        }
+        if readable == 0 {
+            InstallLog.shared.append("vellum: 侧门能列目录，但内容一个都读不了——这门只有半截，改走敲门路。")
+        } else {
+            InstallLog.shared.append("vellum: 侧门翻了 \(readable) 个有内容的容器，都不是壁纸库。")
+        }
+        restore()
+        return nil
     }
 
     /// 总目录直翻（V1.22 改成 Vellum 同款 inode-scan）：不再向「应用数据
@@ -880,8 +1003,8 @@ enum RestoreTest {
     /// 5.4s 全部拿到句柄）。头一回装也走直读，不依赖任何缓存。列出失败
     /// 才退回旧路（总目录扩展）和缓存路径。成了把句柄一并交回，写文件/
     /// 写回表复用同一个扩展。
-    private static func discoverAndReadDirect(workDir: URL)
-        -> (db: URL, wal: URL?, container: String, handle: Int64)? {
+    private static func discoverAndReadDirect(workDir: URL, groupPath: String?)
+        -> (db: URL, wal: URL?, container: String, handle: Int64, restore: (() -> Void)?)? {
         let fm = FileManager.default
 
         // 第 0 步：LaunchServices 直接指路（Vellum 的第一条路，拿到就不用扫）。
@@ -892,10 +1015,17 @@ enum RestoreTest {
             }
             if let h = esc.handle,
                let read = readStoreDirect(container: lsPath, workDir: workDir) {
-                return (db: read.db, wal: read.wal, container: lsPath, handle: h)
+                return (db: read.db, wal: read.wal, container: lsPath, handle: h, restore: nil)
             }
             // 指到了但拿不到通行证或读不了表：继续走扫描。
             WorseQueryEscape.release(esc.handle)
+        }
+
+        // 第 0.5 步：侧门直进（人家"直接进目录"的走法，不敲门）。
+        if let groupPath,
+           let found = sideDoorRead(groupPath: groupPath, workDir: workDir) {
+            return (db: found.db, wal: found.wal, container: found.container,
+                    handle: found.handle, restore: found.restore)
         }
 
         // /var 和 /private/var 是同一个地方两种写法，列到哪个用哪个。
@@ -903,8 +1033,17 @@ enum RestoreTest {
                      "/private/var/mobile/Containers/Data/Application"]
         for root in roots {
             // 第一步：把候选容器名列出来（只列名字，不读内容）。
-            let entries = (try? fm.contentsOfDirectory(atPath: root)) ?? []
-            guard !entries.isEmpty else { continue }
+            var entries: [String] = []
+            do {
+                entries = try fm.contentsOfDirectory(atPath: root)
+            } catch {
+                InstallLog.shared.append("vellum: 总目录 \(root) 列不了，系统报错：\(error.localizedDescription)。")
+                continue
+            }
+            guard !entries.isEmpty else {
+                InstallLog.shared.append("vellum: 总目录 \(root) 能列，但里面是空的。")
+                continue
+            }
             InstallLog.shared.append("vellum: 总目录列到 \(entries.count) 个容器，逐个探头找库。")
             // 第二步：逐个容器单独吃扩展，探到库就读表。整段限 25 秒，
             // 超时就放弃本机枚举（Vellum 同款规矩）。
@@ -937,7 +1076,7 @@ enum RestoreTest {
                 if fm.fileExists(atPath: dbPath),
                    let read = readStoreDirect(container: candidate, workDir: workDir) {
                     InstallLog.shared.append("vellum: 探了 \(scanned) 个，壁纸库在：\(candidate)。")
-                    return (db: read.db, wal: read.wal, container: candidate, handle: h)
+                    return (db: read.db, wal: read.wal, container: candidate, handle: h, restore: nil)
                 }
                 // 不是这个容器（或表读不了）：把扩展还回去，看下一个。
                 WorseQueryEscape.release(h)
@@ -957,7 +1096,7 @@ enum RestoreTest {
                     + "/" + PosterBoard.databaseFileName
                 guard fm.fileExists(atPath: dbPath) else { continue }
                 if let read = readStoreDirect(container: candidate, workDir: workDir) {
-                    return (db: read.db, wal: read.wal, container: candidate, handle: h)
+                    return (db: read.db, wal: read.wal, container: candidate, handle: h, restore: nil)
                 }
             }
             // 扩展给了但没翻到表：还回去，换个写法再试一次。
