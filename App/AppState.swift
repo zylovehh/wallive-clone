@@ -72,8 +72,9 @@ final class AppState: ObservableObject {
     }
 
     /// 这台设备是不是 iOS 27 起（需要转换旧格式）：只看大版本，与小版本和 build 号无关。
+    /// 直接读系统版本，不依赖配对/设备信息（没配对也能装旧包，照样要转）。
     var needsOldFormatConversion: Bool {
-        guard let version = deviceInfo?.systemVersion else { return true }
+        let version = UIDevice.current.systemVersion
         let major = Int(version.split(separator: ".").first ?? "0") ?? 0
         return major >= 27
     }
