@@ -1,12 +1,14 @@
 // ImportView.swift
-// V6 导入安装合并页：列表页 + 详情二级页，不再单独占安装页签。
-// 列表：已导入壁纸包、右上角清除已安装、＋导入新的壁纸包、左滑删除。
+// V6 导入安装合并页：导入库 + 详情二级页，不再单独占安装页签。
+// 导入库：导过的包都存下来排成卡片（封面、名字、大小、日期），点应用打开详情安装，
+// 点垃圾桶删掉本机存的这份；底部是导入壁纸和获取更多壁纸。
 // 详情：壁纸包信息、图层信息、深景状态、制作深景包、安装壁纸。
 // 安装：装完不重启桌面、不闪屏、不黑屏；写盘返回成功不代表图库已列出，
 // 诊断区显示逐目录结果、读回核对（HouseArrest 通道）、登记条数与进程刷新。
 
 import Foundation
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import WebKit
 
@@ -42,100 +44,71 @@ struct ImportView: View {
     @State private var pairingMessage = ""
     @State private var clearing = false
     @State private var clearResult = ""
+    @State private var showDetail = false
+    @State private var pkgToDelete: ImportedPackage?
 
     var body: some View {
         NavigationStack {
-            List {
-                // 导入新包入口：放列表上边，不然没地方导新包。
-                HStack {
-                    Spacer()
-                    Button("＋ 导入新的壁纸包") { showPicker = true }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 28).padding(.vertical, 12)
-                        .glassCapsule()
-                        .buttonStyle(PressBounceButtonStyle())
-                    Spacer()
-                }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-
-                // 26 系统用：配对文件下载/导入入口，只在 iOS 26 的手机上显示。
-                // 26 的手机自己生成不了配对文件，得电脑连 USB 生成、传到手机上再导进来；
-                // 27 的手机能自己生成，不需要这步，所以 27 不显示。
-                if isIOS26 {
-                    Section("配对文件（26 系统用）") {
-                        HStack {
-                            Spacer()
-                            Button("下载配置文件") { showPairingPicker = true }
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 28).padding(.vertical, 12)
-                                .glassCapsule()
-                                .buttonStyle(PressBounceButtonStyle())
-                            Spacer()
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // 26 系统用：配对文件下载/导入入口，只在 iOS 26 的手机上显示。
+                        if isIOS26 {
+                            pairingSection
                         }
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        Text("26 的手机自己生成不了配对文件：先在电脑上连 USB 生成，传到手机上（隔空投送，或存到文件 App），再点上面按钮选那个 .plist 导进来。")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .listRowBackground(Color.clear)
-                        if state.pairingLoaded {
-                            Text("配对文件已导入：\(state.pairingDescription)")
-                                .font(.caption)
-                                .listRowBackground(Color.clear)
-                        } else if !pairingMessage.isEmpty {
-                            Text(pairingMessage).foregroundStyle(.red).font(.caption)
-                                .listRowBackground(Color.clear)
-                        }
-                    }
-                }
-
-                if let info = state.packageInfo {
-                    Section("1 个壁纸包") {
-                        NavigationLink(destination: ImportDetailView()) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "folder.fill").foregroundStyle(.blue).font(.title2)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(packageName(from: info)).font(.headline).lineLimit(1)
-                                    Text("Collections · 1 项壁纸内容").font(.caption).foregroundStyle(.secondary)
-                                    Text("\(sizeText()) · \(importDateText())").font(.caption).foregroundStyle(.secondary)
+                        if state.importedPackages.isEmpty {
+                            Text("还没导入包。点下面“导入壁纸”选本地 .tendies / .wallive，没加密的包导入时会自动转成 WALLIVE1 加密版（只有本 App 能装），加密包会自动解密后再检查。导过的包都存在这一页，随时能看、随时能装。")
+                                .foregroundStyle(.secondary).font(.caption)
+                        } else {
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+                                ForEach(state.importedPackages) { pkg in
+                                    ImportedPackageCard(
+                                        pkg: pkg,
+                                        thumbURL: state.importedThumbURL(pkg),
+                                        onApply: { applyPackage(pkg) },
+                                        onDelete: { pkgToDelete = pkg }
+                                    )
                                 }
                             }
                         }
-                        .listRowBackground(Color.clear)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                state.packageData = nil
-                                state.packageInfo = nil
-                                state.packageError = nil
-                            } label: { Label("删除", systemImage: "trash") }
+                        if !clearResult.isEmpty {
+                            Text(clearResult).font(.caption)
+                        }
+                        if let err = state.packageError {
+                            Text(err).foregroundStyle(.red).font(.caption)
+                        }
+                        // 远端旧导入页底部的署名，合并页保留，不丢。
+                        Text("王炸奓制作")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        if !message.isEmpty {
+                            Text(message).foregroundStyle(.red).font(.caption)
                         }
                     }
-                } else {
-                    Text("还没导入包。点上面按钮选本地 .tendies / .wallive，没加密的包导入时会自动转成 WALLIVE1 加密版（只有本 App 能装），加密包会自动解密后再检查。")
-                        .foregroundStyle(.secondary).font(.caption)
-                        .listRowBackground(Color.clear)
+                    .padding()
                 }
-
-                if !clearResult.isEmpty {
-                    Text(clearResult).font(.caption).listRowBackground(Color.clear)
+                // 底部两个按钮：导入新的、去目录找更多。
+                HStack(spacing: 12) {
+                    Button("＋ 导入壁纸") { showPicker = true }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.blue)
+                        .clipShape(Capsule())
+                        .buttonStyle(PressBounceButtonStyle())
+                    Button("获取更多壁纸") { state.selectedTab = 0 }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .glassCapsule()
+                        .buttonStyle(PressBounceButtonStyle())
                 }
-                if let err = state.packageError {
-                    Text(err).foregroundStyle(.red).font(.caption).listRowBackground(Color.clear)
-                }
-                // 远端旧导入页底部的署名，合并页保留，不丢。
-                Text("王炸奓制作")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                if !message.isEmpty {
-                    Text(message).foregroundStyle(.red).font(.caption).listRowBackground(Color.clear)
-                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
             }
-            .scrollContentBackground(.hidden)
             .background(AppBackgroundView())
             .navigationTitle("已导入壁纸包")
             .toolbar {
@@ -152,9 +125,14 @@ struct ImportView: View {
                     Task { @MainActor in
                         do {
                             let data = try Data(contentsOf: url)
-                            // 名称行显示用户选的文件名（去后缀），不是包里的技术名。
                             let fileName = url.deletingPathExtension().lastPathComponent
+                            let name = fileName.isEmpty ? url.lastPathComponent : fileName
                             state.setPackage(data, displayName: fileName.isEmpty ? nil : fileName)
+                            // 存进导入库：包文件 + 封面图存沙盒，记录记下来，下次打开还在。
+                            if let stored = state.packageData {
+                                let thumb = ImportThumbnailMaker.make(from: stored)
+                                state.addImportedPackage(data: stored, displayName: name, thumbnail: thumb)
+                            }
                         } catch {
                             message = "读文件失败：\(error.localizedDescription)"
                         }
@@ -168,7 +146,7 @@ struct ImportView: View {
                         pairingMessage = ""
                         state.importPairingFile(from: url)
                         if state.pairingLoaded {
-                            pairingMessage = "配对文件已导入，可以装壁纸了。"
+                            pairingMessage = "配对文件导入，可以装壁纸了。"
                         } else if !state.statusMessage.isEmpty {
                             pairingMessage = state.statusMessage
                         } else {
@@ -177,7 +155,54 @@ struct ImportView: View {
                     }
                 }
             }
+            .navigationDestination(isPresented: $showDetail) {
+                ImportDetailView()
+            }
+            .alert("删除这张导入的壁纸包？", isPresented: Binding(
+                get: { pkgToDelete != nil },
+                set: { if !$0 { pkgToDelete = nil } }
+            )) {
+                Button("删除", role: .destructive) {
+                    if let pkg = pkgToDelete { state.removeImportedPackage(pkg) }
+                    pkgToDelete = nil
+                }
+                Button("取消", role: .cancel) { pkgToDelete = nil }
+            } message: {
+                Text("只删本机存的这份包，目录里的壁纸不受影响。")
+            }
         }
+    }
+
+    /// 26 系统用配对区：26 的手机自己生成不了配对文件，27 不显示。
+    private var pairingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("配对文件（26 系统用）").font(.headline)
+            Button("下载配置文件") { showPairingPicker = true }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 28).padding(.vertical, 12)
+                .glassCapsule()
+                .buttonStyle(PressBounceButtonStyle())
+            Text("26 的手机自己生成不了配对文件：先在电脑上连 USB 生成，传到手机上（隔空投送，或存到文件 App），再点上面按钮选那个 .plist 导进来。")
+                .font(.caption).foregroundStyle(.secondary)
+            if state.pairingLoaded {
+                Text("配对文件已导入：\(state.pairingDescription)")
+                    .font(.caption)
+            } else if !pairingMessage.isEmpty {
+                Text(pairingMessage).foregroundStyle(.red).font(.caption)
+            }
+        }
+    }
+
+    /// 应用一张导入的包：设为当前包，打开安装详情页。
+    private func applyPackage(_ pkg: ImportedPackage) {
+        guard let data = state.importedPackageData(pkg) else {
+            message = "这个包的文件找不到了，重新导一次。"
+            return
+        }
+        message = ""
+        state.setPackage(data, displayName: pkg.displayName)
+        showDetail = true
     }
 
     /// 只在 iOS 26 的手机上显示配对文件下载入口：26 的手机自己生成不了
@@ -185,27 +210,6 @@ struct ImportView: View {
     ///（App 就跑在这台手机上），不走 deviceInfo（没配对文件时读不到）。
     private var isIOS26: Bool {
         ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26
-    }
-
-    private func packageName(from info: TendiesPackageInfo) -> String {
-        // 目录下载的中文名 / 直接导入的文件名优先，包里的技术名只做兜底。
-        if let name = state.packageDisplayName, !name.isEmpty { return name }
-        let dir = info.wallpaperDirectory
-        let name = (dir as NSString).lastPathComponent
-        return name.hasSuffix(".wallpaper") ? String(name.dropLast(".wallpaper".count)) : name
-    }
-
-    private func sizeText() -> String {
-        let bytes = state.packageData?.count ?? 0
-        if bytes >= 1_000_000 { return String(format: "%.1f MB", Double(bytes) / 1_000_000.0) }
-        return "\(bytes) 字节"
-    }
-
-    private func importDateText() -> String {
-        guard let date = state.packageImportedAt else { return "本次导入" }
-        let f = DateFormatter()
-        f.dateFormat = "yyyy年M月d日 H:mm"
-        return f.string(from: date)
     }
 
     /// 清除已安装：只重索引，不直接删系统描述符文件。
@@ -219,6 +223,133 @@ struct ImportView: View {
         } else {
             clearResult = state.statusMessage.isEmpty ? "重索引未完成：请确认已导入配对记录、回环 VPN 已连接。" : state.statusMessage
         }
+    }
+}
+
+/// 导入库里一张卡：封面、名字、大小和日期，下面是删除圆钮和应用胶囊。
+/// 点封面就应用这张（打开安装详情页）。
+private struct ImportedPackageCard: View {
+    let pkg: ImportedPackage
+    let thumbURL: URL?
+    let onApply: () -> Void
+    let onDelete: () -> Void
+
+    @State private var thumbImage: UIImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: onApply) {
+                Group {
+                    if let thumbImage {
+                        Image(uiImage: thumbImage)
+                            .resizable().scaledToFill()
+                    } else {
+                        placeholder
+                    }
+                }
+                .aspectRatio(9 / 11, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(.plain)
+            Text(pkg.displayName)
+                .font(.subheadline).bold()
+                .lineLimit(1)
+            Text("\(sizeText(pkg.size)) · \(dateText(pkg.importedAt))")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .glassCapsule()
+                }
+                .buttonStyle(PressBounceButtonStyle())
+                Button("应用", action: onApply)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .glassCapsule()
+                    .buttonStyle(PressBounceButtonStyle())
+            }
+        }
+        .task(id: pkg.id) {
+            if let thumbURL, let data = try? Data(contentsOf: thumbURL),
+               let image = UIImage(data: data) {
+                thumbImage = image
+            }
+        }
+    }
+
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .fill(.quaternary)
+            .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+    }
+
+    private func sizeText(_ bytes: Int) -> String {
+        if bytes >= 1_000_000 { return String(format: "%.1f MB", Double(bytes) / 1_000_000.0) }
+        return "\(bytes) 字节"
+    }
+
+    private func dateText(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "M/d"
+        return f.string(from: date)
+    }
+}
+
+/// 从壁纸包里抠一张封面图（给导入库的卡片用）：跟目录“增加壁纸”那套找图逻辑一样，
+/// 包是 WALLIVE1 加密包先解密再翻；背景层优先，其次 assets 下第一张，
+/// 都没有就挑像素最大的那张；最长边压到 720。
+private enum ImportThumbnailMaker {
+    static func make(from packageData: Data) -> Data? {
+        let zip = ZipFoundationAdapter()
+        let plain: Data
+        if Wallive1Crypto.isWallive1(packageData) {
+            guard let decrypted = try? Wallive1Crypto.decrypt(packageData) else { return nil }
+            plain = decrypted
+        } else {
+            plain = packageData
+        }
+        guard let entries = try? zip.listEntries(in: plain) else { return nil }
+        let imageExts = ["jpeg", "jpg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"]
+        let isImageEntry = { (path: String) -> Bool in
+            imageExts.contains((path as NSString).pathExtension.lowercased())
+        }
+        let assetImages = entries.filter { isImageEntry($0) && $0.lowercased().contains("assets") }
+        if let picked = assetImages.first(where: { $0.lowercased().contains("background") })
+            ?? assetImages.first,
+            let data = try? zip.readEntry(picked, in: plain),
+            let image = UIImage(data: data) {
+            return compress(image)
+        }
+        var bestImage: UIImage?
+        var bestPixels: CGFloat = 0
+        for path in entries.filter(isImageEntry) {
+            guard let data = try? zip.readEntry(path, in: plain),
+                  let image = UIImage(data: data) else { continue }
+            let pixels = image.size.width * image.size.height * image.scale
+            if pixels > bestPixels {
+                bestPixels = pixels
+                bestImage = image
+            }
+            if bestPixels > 2_000_000 { break }
+        }
+        guard let image = bestImage else { return nil }
+        return compress(image)
+    }
+
+    /// 最长边压到 720，控制封面图体积。
+    private static func compress(_ image: UIImage) -> Data? {
+        let maxSide: CGFloat = 720
+        let size = image.size
+        let longest = max(size.width, size.height)
+        let scale = min(1, maxSide / max(longest, 1))
+        let scaled = UIGraphicsImageRenderer(size: CGSize(width: size.width * scale, height: size.height * scale)).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale))
+        }
+        return scaled.jpegData(compressionQuality: 0.85)
     }
 }
 
