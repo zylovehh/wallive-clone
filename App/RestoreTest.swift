@@ -668,7 +668,10 @@ enum RestoreTest {
                 clearContainerCache()
             }
         }
-        if let found = discoverAndReadDirect(workDir: workDir, groupPath: health.containerPath) {
+        // Drift 同款：缓存核对通过了就到此为止，不再扫描——重扫一遍
+        // 几十秒，全耗在逐个探头上，白白抹掉缓存省下的工夫。
+        if container == nil,
+           let found = discoverAndReadDirect(workDir: workDir, groupPath: health.containerPath) {
             escapeHandle = found.handle
             container = found.container
             sideDoorRestore = found.restore
@@ -679,6 +682,10 @@ enum RestoreTest {
             throw StepError(step: "找壁纸库",
                             detail: "直读没找到壁纸库。这条路不用 VPN：看上面日志——有「总目录列到 N 个容器」就是列目录成了、但逐个探都没拿到通行证（系统封了这条路，换签名/换描述文件再试）；连「总目录列到」这句都没有，就是系统连列目录都不给，把这份日志发回来接着查；容器正常还报错就先重启手机再装一次。")
         }
+        // Drift 同款：这回定下的容器路径记进缓存，下回安装先查缓存、
+        // 核对通过直接跳到写盘。侧门的路标路径只在侧门开着这一阵有效，
+        // 不记（sideDoorRestore 非 nil 就是侧门路）。
+        if sideDoorRestore == nil { saveContainerPath(container) }
         report["container"] = container
 
         // 2. 暂存包、拷描述符副本、对齐三个身份字段（和配对路同一个改法）。
@@ -1212,12 +1219,12 @@ enum RestoreTest {
         return nil
     }
 
-    /// 总目录直翻（V1.24 改成 Erosion 同款爆编号）：不再向「应用数据
-    /// 总目录」要通行证，也先不列总目录——先用内核的报编号换门牌接口把
-    /// 容器名单爆出来（不需要任何通行证，「总目录列不了」的手机照样能爆），
-    /// 爆不出来才退回直接列。拿到名单后逐个容器单独吃扩展、探头找 61 号
-    /// 店（对具体容器的查询系统放行）。头一回装也走直读，不依赖任何缓存。
-    /// 成了把句柄一并交回，写文件/写回表复用同一个扩展。
+    /// 总目录直翻（V1.49 重排，Drift 同款顺序）：先向总目录吃「根目录扩
+    /// 展」，给了就一次列完整个名单、直接翻到库（不用逐个敲门）；被拒再
+    /// 用内核的报编号换门牌接口把容器名单爆出来（不需要任何通行证，「总
+    /// 目录列不了」的手机照样能爆），拿到名单后逐个容器单独吃扩展、探头
+    /// 找 61 号店（对具体容器的查询系统放行）。头一回装也走直读，不依赖
+    /// 任何缓存。成了把句柄一并交回，写文件/写回表复用同一个扩展。
     private static func discoverAndReadDirect(workDir: URL, groupPath: String?)
         -> (db: URL, wal: URL?, container: String, handle: Int64, restore: (() -> Void)?)? {
         let fm = FileManager.default
@@ -1246,6 +1253,38 @@ enum RestoreTest {
         // /var 和 /private/var 是同一个地方两种写法，列到哪个用哪个。
         let roots = ["/var/mobile/Containers/Data/Application",
                      "/private/var/mobile/Containers/Data/Application"]
+        // 第 2.5 步：根目录扩展直翻（Drift 同款「根目录扩展可用，N 个应用
+        // 容器路径」）。一次扩展吃在总目录上，整个总目录连同里面的内容全
+        // 放开——列一次名单、直接探头找库，不用给几百个容器逐个敲门。
+        // 扩展被拒就往下走爆编号路。
+        for root in roots {
+            let esc = WorseQueryEscape.consume(target: root, requireWrite: false) {
+                InstallLog.shared.append("restore: \($0)")
+            }
+            guard let h = esc.handle else {
+                InstallLog.shared.append("根目录扩展也被拒（\(root)）——改走爆编号路。")
+                continue
+            }
+            do {
+                let entries = try fm.contentsOfDirectory(atPath: root)
+                InstallLog.shared.append("根目录扩展可用，\(root) 下列到 \(entries.count) 个应用容器路径。")
+                for entry in entries {
+                    let candidate = (root as NSString).appendingPathComponent(entry)
+                    let dbPath = candidate + PosterBoard.storePath(storeVersion)
+                        + "/" + PosterBoard.databaseFileName
+                    guard fm.fileExists(atPath: dbPath) else { continue }
+                    if let read = readStoreDirect(container: candidate, workDir: workDir) {
+                        InstallLog.shared.append("根目录扩展一趟翻到壁纸库：\(candidate)。")
+                        return (db: read.db, wal: read.wal, container: candidate, handle: h, restore: nil)
+                    }
+                }
+                InstallLog.shared.append("根目录扩展列完了，里面没有壁纸库。")
+            } catch {
+                InstallLog.shared.append("根目录扩展给了但总目录列不了（\(error.localizedDescription)）。")
+            }
+            // 扩展给了但没翻到库：还回去，走爆编号路再试。
+            WorseQueryEscape.release(h)
+        }
         var pathleakWorked = false
         for root in roots {
             // 第一步：把候选容器名列出来。先试「爆编号」（内核老接口，
@@ -1309,25 +1348,6 @@ enum RestoreTest {
                 WorseQueryEscape.release(h)
             }
             InstallLog.shared.append("这 \(scanned) 个容器里都没翻到壁纸库。")
-        }
-        // 旧路兜底：对总目录吃扩展（多半被拒，留给系统放行的情形）。
-        for root in roots {
-            let esc = WorseQueryEscape.consume(target: root, requireWrite: false) {
-                InstallLog.shared.append("restore: \($0)")
-            }
-            guard let h = esc.handle else { continue }
-            let entries = (try? fm.contentsOfDirectory(atPath: root)) ?? []
-            for entry in entries {
-                let candidate = (root as NSString).appendingPathComponent(entry)
-                let dbPath = candidate + PosterBoard.storePath(storeVersion)
-                    + "/" + PosterBoard.databaseFileName
-                guard fm.fileExists(atPath: dbPath) else { continue }
-                if let read = readStoreDirect(container: candidate, workDir: workDir) {
-                    return (db: read.db, wal: read.wal, container: candidate, handle: h, restore: nil)
-                }
-            }
-            // 扩展给了但没翻到表：还回去，换个写法再试一次。
-            WorseQueryEscape.release(h)
         }
         return nil
     }
