@@ -696,7 +696,10 @@ enum RestoreTest {
             InstallLog.shared.append("备料直接用（\(elapsed())）：导入时已解包改号补配置，安装只差写盘。")
         } else {
             do {
-                (copyDir, descriptorUUID, _) = try Self.prepareDescriptorCopy(packageData: packageData)
+                // 拆开写：元组一步解构赋值编译器类型检查卡死（构建 #387 报错原话）。
+                let prepared = try Self.prepareDescriptorCopy(packageData: packageData)
+                copyDir = prepared.dir
+                descriptorUUID = prepared.uuid
             } catch let error as TendiesPackage.Error {
                 switch error {
                 case .notATendiesPackage:
