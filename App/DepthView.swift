@@ -4,6 +4,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 
 /// 液态透明按钮样式：iOS 26+ 用透明系统玻璃，低版本回退半透明白胶囊。
 private struct GlassButtonStyle: ButtonStyle {
@@ -370,16 +371,40 @@ private struct ReceiptManageView: View {
                 }
                 // V1.46：免杀进程刷新（Drift 同款按钮）——发系统通知让图库
                 // 自己重读商店，装没装上的、删没删掉的，卡片立刻对账。
+                // V1.48：通知之外再把海报应用唤出来——它一露头系统就重读，
+                // 黑卡、新卡靠这一下对上账；私有接口叫不动退 posterboard://
+                // 暗号（跟装完那次同一个唤法）。
                 Button("刷新 PosterBoard") {
                     deleteBusy = true
                     Task {
                         let sent = await Task.detached(priority: .userInitiated) {
                             RestoreTest.notifyPosterBoardReread()
                         }.value
-                        resultOK = sent
-                        resultNote = sent
-                            ? "已发通知让图库重读（免杀进程），卡片一般立刻对上。没变化就上滑关掉海报应用（或重启手机）再看。"
-                            : "通知没发出去（见安装日志）。上滑关掉海报应用（或重启手机）后照样生效。"
+                        if PosterBoardLauncher.launch() {
+                            resultOK = true
+                            resultNote = "通知发了，海报界面也拉起来了——上滑关掉它，卡片立刻对上账。"
+                        } else if let posterBoardURL = URL(string: "posterboard://") {
+                            InstallLog.shared.append("manage: 私有接口没叫动海报应用，退 posterboard:// 暗号。")
+                            resultOK = true
+                            resultNote = "通知发了，海报应用马上弹出来——上滑关掉它，卡片立刻对上账。"
+                            UIApplication.shared.open(posterBoardURL) { ok in
+                                DispatchQueue.main.async {
+                                    guard !ok else { return }
+                                    InstallLog.shared.append("manage: 暗号也没叫动，靠通知自己刷新。")
+                                    resultOK = sent
+                                    resultNote = sent
+                                        ? "海报没叫动，靠通知刷新（免杀进程），卡片一般立刻对上。没变化就重启手机再看。"
+                                        : "海报没叫动，通知也没发出去（见安装日志）。重启手机后再看。"
+                                    deleteBusy = false
+                                }
+                            }
+                            return
+                        } else {
+                            resultOK = sent
+                            resultNote = sent
+                                ? "已发通知让图库重读（免杀进程），卡片一般立刻对上。没变化就重启手机再看。"
+                                : "通知没发出去（见安装日志）。重启手机后照样生效。"
+                        }
                         deleteBusy = false
                     }
                 }
