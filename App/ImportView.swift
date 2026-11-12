@@ -808,6 +808,41 @@ private struct ImportDetailView: View {
     @State private var showConvertPrompt = false
     @State private var convertPromptDescriptor = ""
 
+    /// 安装方式（Drift 同款分段控件）：自动=没配对走直刷、有配对走隧道；
+    /// 直刷=逃逸直写；隧道=配对隧道写盘（27.2 上要先开好回环 VPN）。
+    private enum Method {
+        case auto, direct, tunnel
+    }
+    @State private var method: Method = .auto
+
+    /// iOS 27.3 起参照应用标「无可用通道」——直刷未必还走得通，只提醒不拦。
+    private var directMayBeBlocked: Bool {
+        let p = UIDevice.current.systemVersion.split(separator: ".").compactMap { Int($0) }
+        guard p.count >= 2 else { return false }
+        return p[0] > 27 || (p[0] == 27 && p[1] >= 3)
+    }
+
+    /// 分段下面的判定说明（照效果图话术）。
+    private var methodNote: String {
+        let blocked = directMayBeBlocked
+            ? "（注意：iOS 27.3 起参照应用标「无可用通道」，直刷未必装得上。）"
+            : ""
+        switch method {
+        case .auto:
+            let verdict = state.hasPairingFile
+                ? "本机判定：读到了配对文件 → 这次走隧道（先开好回环 VPN）。删掉配对文件再点，就自动改走直刷。"
+                : "本机判定：没读到配对文件 → 这次走直刷。导了配对文件再点，就自动改走隧道。"
+            return "自动=看本机情况：没配对走直刷，导了配对文件走隧道。判定结果在结果区写明。" + verdict + blocked
+        case .direct:
+            return "手动指定直刷：不管有没有配对文件，都走逃逸直写，不碰配对、不需要 VPN。" + blocked
+        case .tunnel:
+            let ready = state.hasPairingFile
+                ? ""
+                : "还没读到配对文件：先在状态页导入配对文件，再走隧道。"
+            return "手动指定隧道：走配对隧道写盘。27.2 上隧道必须回环 VPN——先开好 VPN 再点安装。" + ready
+        }
+    }
+
     // 详情页两个按钮同宽。
     private let buttonWidth: CGFloat = 220
 
@@ -861,6 +896,18 @@ private struct ImportDetailView: View {
                         Text(depthMessage)
                             .font(.caption).foregroundStyle(depthMessage.hasPrefix("深景已开启") ? .green : .red)
                             .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("安装方式").font(.headline)
+                        Picker("安装方式", selection: $method) {
+                            Text("自动").tag(Method.auto)
+                            Text("直刷").tag(Method.direct)
+                            Text("隧道").tag(Method.tunnel)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        Text(methodNote).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack {
                         Spacer()
@@ -1176,7 +1223,15 @@ private struct ImportDetailView: View {
         installFailedReason = nil
         installLogText = ""
         defer { installing = false }
-        if let report = try? await state.installWithReport(host: "10.7.0.1", onProgress: { step, fraction in
+        // 自动=没配对走直刷、有配对走隧道；手动选定不自动改道（Drift 同款）。
+        let channel: InstallChannel
+        switch method {
+        case .auto: channel = state.hasPairingFile ? .tunnel : .direct
+        case .direct: channel = .direct
+        case .tunnel: channel = .tunnel
+        }
+        if let report = try? await state.installWithReport(
+            host: "10.7.0.1", forceRefresh: true, channel: channel, onProgress: { step, fraction in
             Task { @MainActor in
                 installStep = step
                 installProgress = fraction
@@ -1184,8 +1239,24 @@ private struct ImportDetailView: View {
         }) {
             installReport = report
             installLogText = InstallLog.shared.tail(60)
-            // 统一一条路：成功只写四个字，载荷数、描述符这些长日志留在日志框里。
-            installResult = "安装成功"
+            if channel == .tunnel {
+                // 隧道结果：读回核对按通道可信度分话术，不把话说满。
+                var note = "安装成功（隧道）"
+                if report.verifyResults.contains(where: { $0.channelUnavailable }) {
+                    note += "：读回通道不可用，写没写进设备没法现场核实——去锁屏图库看，没有就把日志发来。"
+                } else if !report.verifyResults.isEmpty, report.verifyResults.allSatisfy({ $0.allPresent }) {
+                    note += "：读回核对在册，描述符已在商店目录里。"
+                } else {
+                    note += "：读回核对没过，描述符缺了东西——把日志发来看。"
+                }
+                if report.refresh?.confirmed != true {
+                    note += "配对刷新没确认，重启手机后再去锁屏图库看。"
+                }
+                installResult = note
+                return
+            }
+            // 直刷统一一条路：成功只写四个字，载荷数、描述符这些长日志留在日志框里。
+            installResult = "安装成功（直刷）"
             // 装完本地刷新没成时：有配对让用户重启手机；没配对跟人家一样
             // 自动刷新桌面，详情页另留手动按钮。
             if !(report.refresh?.confirmed ?? false) {
@@ -1262,9 +1333,13 @@ private struct ImportDetailView: View {
         return lines.suffix(3).joined(separator: "\n")
     }
 
-    /// 安装失败原因：statusMessage 是“备份安装失败：<原因>”，核对区只留 <原因>。
+    /// 安装失败原因：statusMessage 是“备份安装失败：<原因>”或“隧道安装失败：<原因>”，
+    /// 核对区只留 <原因>。
     private func installFailureReason(from statusMessage: String) -> String {
         if let range = statusMessage.range(of: "备份安装失败：") {
+            return String(statusMessage[range.upperBound...])
+        }
+        if let range = statusMessage.range(of: "隧道安装失败：") {
             return String(statusMessage[range.upperBound...])
         }
         return statusMessage
