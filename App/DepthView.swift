@@ -310,22 +310,26 @@ private struct ReceiptManageView: View {
                     // 三档：自己装的（账本对上）／别的工具装的（没对账、比系统晚）／
                     // 大概率是系统的（没对账、跟最早一批同期）。线是按写入时间划的，推断。
                     let groups = Self.grouped(entries)
+                    // 计数先拆成本地常量，避免编译器把整段表达式当一类推导（会超时）。
+                    let ownCount = groups.own.count
+                    let thirdPartyCount = groups.thirdParty.count
+                    let systemishCount = groups.systemish.count
                     if !groups.own.isEmpty {
-                        sectionHeader("自己装的（\(groups.own.count)）",
+                        sectionHeader("自己装的（\(ownCount)）",
                                       note: nil, color: .green)
                         ForEach(groups.own) { entry in
                             liveRow(entry)
                         }
                     }
                     if !groups.thirdParty.isEmpty {
-                        sectionHeader("别的工具装的（\(groups.thirdParty.count)）",
+                        sectionHeader("别的工具装的（\(thirdPartyCount)）",
                                       note: "多半是第三方或旧版本，想清就删", color: .orange)
                         ForEach(groups.thirdParty) { entry in
                             liveRow(entry)
                         }
                     }
                     if !groups.systemish.isEmpty {
-                        sectionHeader("大概率是系统的（\(groups.systemish.count)）",
+                        sectionHeader("大概率是系统的（\(systemishCount)）",
                                       note: "跟系统最早一批同一时期，建议别动", color: .blue)
                         ForEach(groups.systemish) { entry in
                             liveRow(entry)
@@ -457,8 +461,8 @@ private struct ReceiptManageView: View {
         return (own, thirdParty, systemish)
     }
 
-    private func sectionHeader(_ title: String, note: String?, color: Color) {
-        VStack(alignment: .leading, spacing: 2) {
+    private func sectionHeader(_ title: String, note: String?, color: Color) -> some View {
+        return VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.headline).foregroundStyle(color)
             if let note {
                 Text(note).font(.caption2).foregroundStyle(.secondary)
