@@ -120,44 +120,41 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // QQ 群：企鹅图标去掉，左边渐变文字、右边加入 QQ 群按钮（绿色去掉），两个挨在一起放中间，点哪边都进群领视频教程。
-                    HStack {
-                        Spacer()
-                        HStack(spacing: 8) {
-                            Button {
-                                if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                    openURL(url)
-                                }
-                            } label: {
-                                TimelineView(.animation) { timeline in
-                                    let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
-                                    Text("进群领取视频教程")
-                                        .font(.headline.weight(.light))
-                                        .foregroundStyle(
-                                            // 无缝循环渐变：色序首尾是同一个青色、渐变正好跨一个字宽，
-                                            // phase 从 1 回到 0 时颜色完全接上，没有跳变；色阶排密一点，过渡更柔。
-                                            LinearGradient(
-                                                colors: [.cyan, .teal, .blue, .indigo, .purple, .pink, .red, .orange, .yellow, .green, .cyan],
-                                                startPoint: UnitPoint(x: phase, y: 0.5),
-                                                endPoint: UnitPoint(x: phase + 1, y: 0.5)
-                                            )
+                    // QQ 群：收成一条细的——左边渐变文字、右边加入按钮，点哪边都进群领视频教程。
+                    HStack(spacing: 10) {
+                        Button {
+                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                                openURL(url)
+                            }
+                        } label: {
+                            TimelineView(.animation) { timeline in
+                                let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
+                                Text("进群领取视频教程")
+                                    .font(.subheadline.weight(.light))
+                                    .foregroundStyle(
+                                        // 无缝循环渐变：色序首尾是同一个青色、渐变正好跨一个字宽，
+                                        // phase 从 1 回到 0 时颜色完全接上，没有跳变；色阶排密一点，过渡更柔。
+                                        LinearGradient(
+                                            colors: [.cyan, .teal, .blue, .indigo, .purple, .pink, .red, .orange, .yellow, .green, .cyan],
+                                            startPoint: UnitPoint(x: phase, y: 0.5),
+                                            endPoint: UnitPoint(x: phase + 1, y: 0.5)
                                         )
-                                }
+                                    )
                             }
-                            .buttonStyle(.plain)
-                            Button("加入 QQ 群") {
-                                if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                    openURL(url)
-                                }
-                            }
-                            .buttonStyle(GlassButtonStyle())
                         }
+                        .buttonStyle(.plain)
                         Spacer()
+                        Button("加入 QQ 群") {
+                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                                openURL(url)
+                            }
+                        }
+                        .buttonStyle(GlassButtonStyle())
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
                     Text("说明：本 App 不含广告、不含会员与解锁逻辑；配对记录文件只存在 App 沙盒内，不会发给任何人。")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

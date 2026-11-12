@@ -2399,6 +2399,24 @@ enum RestoreTest {
                 "error": sb["error"] as? String ?? "SpringBoard 重启没确认"]
     }
 
+    /// 给管理页用的删后刷新（V1.45）：跟装后刷新同一套规矩（27.2 先重启
+    /// 桌面、以下杀 PosterBoard），但只返回给用户看的结论，不抛错。
+    /// 没配对（空路径）直接说没做，让用户手动上滑。
+    public static func refreshAfterDelete(pairingPath: String) -> String {
+        let r = refreshAfterInstall(pairingPath: pairingPath)
+        if r["attempted"] as? Bool != true {
+            return "自动刷新没做（没有配对文件）：上滑关掉海报应用（或刷新桌面）后生效。"
+        }
+        if r["confirmed"] as? Bool == true {
+            let method = r["method"] as? String == "springboard" ? "桌面已重启重读" : "海报进程已重启重读"
+            return "自动刷新完成（\(method)）。"
+        }
+        if r["rebootNeeded"] as? Bool == true {
+            return "自动刷新没确认：重启手机后生效。"
+        }
+        return "自动刷新没确认（\(r["error"] as? String ?? "见日志")）：上滑关掉海报应用后生效。"
+    }
+
     /// 同步版 SpringBoard 重启：给 restore() 第 8 步用（restore 是同步的，
     /// 不能 await 那个异步版）。跟 posterboardRefresh 一个写法：直接在调用
     /// 线程调 al_springboard_respring（FFI 会阻塞，调用方必须在后台线程，

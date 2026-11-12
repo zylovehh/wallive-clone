@@ -843,6 +843,15 @@ private struct ImportDetailView: View {
         }
     }
 
+    /// 图层行文案：认得出层名就显示层名；认不出但包里实际有 .ca 层，
+    /// 就把真实文件列出来，不再报「无/空壳」；包里真没有才说没有。
+    private func layerText(_ file: String?, emptyWord: String) -> String {
+        if let file, !file.isEmpty { return file }
+        let layers = state.packageInfo?.layerFiles ?? []
+        if layers.isEmpty { return emptyWord }
+        return "清单没写，包里实际有：" + layers.joined(separator: "、")
+    }
+
     // 详情页两个按钮同宽。
     private let buttonWidth: CGFloat = 220
 
@@ -872,9 +881,9 @@ private struct ImportDetailView: View {
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("图层信息").font(.headline)
-                        row("背景", info.backgroundFile ?? "无")
-                        row("漂浮", info.floatingFile ?? "无")
-                        row("前景", info.foregroundFile ?? "空壳")
+                        row("背景", layerText(info.backgroundFile, emptyWord: "无"))
+                        row("漂浮", layerText(info.floatingFile, emptyWord: "无"))
+                        row("前景", layerText(info.foregroundFile, emptyWord: "空壳"))
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("深景状态").font(.headline)
@@ -1114,10 +1123,11 @@ private struct ImportDetailView: View {
     }
 
     private func row(_ key: String, _ value: String) -> some View {
-        HStack {
+        HStack(alignment: .top) {
             Text(key).font(.caption).foregroundStyle(.secondary)
             Spacer()
-            Text(value).font(.caption).lineLimit(1).textSelection(.enabled)
+            Text(value).font(.caption).lineLimit(3)
+                .multilineTextAlignment(.trailing).textSelection(.enabled)
         }
     }
 
@@ -1172,6 +1182,8 @@ private struct ImportDetailView: View {
             }
             let out = try DepthPackageBuilder.addingDepthConfiguration(to: plain, zip: ZipFoundationAdapter())
             state.setPackage(out, displayName: state.packageDisplayName)
+            // 包里没有漂浮层也放行（只补渲染配置、跳过改名），提示里说清楚：
+            // 开关是加上了，但没层就没有浮出来的效果。
             depthMessage = "深景已开启，可以直接点“安装壁纸”了。"
         } catch is Wallive1Crypto.Error {
             depthMessage = "开启失败：这个包解不开了，重新导入一次原包再试。"
@@ -1180,7 +1192,7 @@ private struct ImportDetailView: View {
             case .missingWallpaperPlist:
                 depthMessage = "开启失败：包里找不到壁纸清单，结构不对。"
             case .missingFloatingFile:
-                depthMessage = "开启失败：包里读不到漂浮层文件名，做不了深景。"
+                depthMessage = "开启失败：包里读不到壁纸清单内容，做不了深景。"
             case .badTemplate:
                 depthMessage = "开启失败：内置模板坏了，把这条发我，我来修。"
             }

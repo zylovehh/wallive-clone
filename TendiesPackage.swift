@@ -27,6 +27,9 @@ public struct TendiesPackageInfo {
     public let backgroundFile: String?      // 如 7400.WWDC_2022_Background-...ca
     public let floatingFile: String?        // 如 7400.WWDC_2022_Floating-...ca（或 Clownfish_ 前缀版）
     public let foregroundFile: String?
+    /// 包里实际有的全部层文件（.ca，相对壁纸目录），清单认不出的也列进来，
+    /// 界面拿它兜底展示——不再没头没脑报「无/空壳」。
+    public let layerFiles: [String]
     public let hasRenderingConfiguration: Bool
     public let floatingHasClownfishPrefix: Bool
 }
@@ -420,19 +423,38 @@ public enum TendiesPackage {
             floatingFile = def["floatingAnimationFileNameKey"] as? String
             foregroundFile = def["foregroundAnimationFileName"] as? String
         }
-        _ = prefix // 保留目录前缀供调用方拼条目路径。
+        // 识别修正：不能光信清单键——键写了但包里没这个文件，照样算「无」；
+        // 键没写但包里实际躺着对应层目录（.ca 结尾、名字含 Background/Floating/Foreground），
+        // 按目录名补认。两边对上才报「有」。
+        let wallpaperEntries = entries.filter { $0.hasPrefix(prefix) && $0 != prefix + "Wallpaper.plist" }
+        let childDirs = Set(wallpaperEntries.compactMap { path -> String? in
+            let rest = path.dropFirst(prefix.count)
+            let comps = rest.split(separator: "/")
+            return comps.count >= 1 ? String(comps[0]) : nil
+        }).filter { $0.hasSuffix(".ca") }
+
+        func effectiveLayer(_ key: String?, keyword: String) -> String? {
+            if let key, !key.isEmpty, childDirs.contains(key) { return key }
+            return childDirs.first { $0.localizedCaseInsensitiveContains(keyword) }
+        }
+        let effectiveBackground = effectiveLayer(backgroundFile, keyword: "Background")
+        let effectiveFloating = effectiveLayer(floatingFile, keyword: "Floating")
+        let effectiveForeground = effectiveLayer(foregroundFile, keyword: "Foreground")
+        // 包里实际有的层，全部列出来（相对壁纸目录的 .ca 项）。
+        let layerFiles = childDirs.sorted()
 
         let hasRenderingConfiguration = entries.contains {
             $0.hasSuffix("com.apple.posterkit.provider.instance.renderingConfiguration.plist")
         }
-        let floatingHasClownfishPrefix = (floatingFile ?? "").hasPrefix("Clownfish_")
+        let floatingHasClownfishPrefix = (effectiveFloating ?? "").hasPrefix("Clownfish_")
 
         return TendiesPackageInfo(
             descriptorUUID: uuid,
             wallpaperDirectory: wallpaperDir,
-            backgroundFile: backgroundFile,
-            floatingFile: floatingFile,
-            foregroundFile: foregroundFile,
+            backgroundFile: effectiveBackground,
+            floatingFile: effectiveFloating,
+            foregroundFile: effectiveForeground,
+            layerFiles: layerFiles,
             hasRenderingConfiguration: hasRenderingConfiguration,
             floatingHasClownfishPrefix: floatingHasClownfishPrefix
         )

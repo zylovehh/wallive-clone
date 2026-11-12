@@ -44,42 +44,46 @@ public enum DepthPackageBuilder {
         let versionsDir = parts[0..<4].joined(separator: "/") // descriptors/<UUID>/versions/1
         let wallpaperDir = parts[0..<parts.count - 1].joined(separator: "/")
 
-        // 读 Wallpaper.plist，取当前 Floating 文件名。
+        // 读 Wallpaper.plist，取当前 Floating 文件名；没有漂浮层也照加深景开关
+        // （只补渲染配置、跳过改名），用户拍板：没层也不拦。
         var format = PropertyListSerialization.PropertyListFormat.xml
         guard var root = try PropertyListSerialization.propertyList(
             from: entries[plistIndex].data, format: &format
         ) as? [String: Any],
         var assets = root["assets"] as? [String: Any],
         var lockAndHome = assets["lockAndHome"] as? [String: Any],
-        var def = lockAndHome["default"] as? [String: Any],
-        let floatingFile = def["floatingAnimationFileNameKey"] as? String else {
-            throw Error.missingFloatingFile
+        var def = lockAndHome["default"] as? [String: Any] else {
+            throw Error.missingWallpaperPlist
         }
+        let floatingFile = def["floatingAnimationFileNameKey"] as? String
 
         // 1. Floating .ca 改名加 Clownfish_ 前缀（名字里已含 Clownfish 则不动——
         //    旧格式转换产物形如 7400.Clownfish_Floating-…，别再二次加前缀）。
-        let newFloatingFile: String
-        if floatingFile.contains("Clownfish") {
-            newFloatingFile = floatingFile
-        } else {
-            newFloatingFile = "Clownfish_" + floatingFile
-            let oldDir = wallpaperDir + "/" + floatingFile
-            let newDir = wallpaperDir + "/" + newFloatingFile
-            entries = entries.map { entry in
-                if entry.path == oldDir || entry.path.hasPrefix(oldDir + "/") {
-                    return (path: newDir + entry.path.dropFirst(oldDir.count), data: entry.data)
+        //    没有漂浮层（键都没有）就整段跳过，只补下面的渲染配置。
+        if let floatingFile {
+            let newFloatingFile: String
+            if floatingFile.contains("Clownfish") {
+                newFloatingFile = floatingFile
+            } else {
+                newFloatingFile = "Clownfish_" + floatingFile
+                let oldDir = wallpaperDir + "/" + floatingFile
+                let newDir = wallpaperDir + "/" + newFloatingFile
+                entries = entries.map { entry in
+                    if entry.path == oldDir || entry.path.hasPrefix(oldDir + "/") {
+                        return (path: newDir + entry.path.dropFirst(oldDir.count), data: entry.data)
+                    }
+                    return entry
                 }
-                return entry
+                // 同步 Wallpaper.plist 的键值。
+                def["floatingAnimationFileNameKey"] = newFloatingFile
+                lockAndHome["default"] = def
+                assets["lockAndHome"] = lockAndHome
+                root["assets"] = assets
+                let newPlist = try PropertyListSerialization.data(
+                    fromPropertyList: root, format: format, options: 0
+                )
+                entries[plistIndex] = (path: plistPath, data: newPlist)
             }
-            // 同步 Wallpaper.plist 的键值。
-            def["floatingAnimationFileNameKey"] = newFloatingFile
-            lockAndHome["default"] = def
-            assets["lockAndHome"] = lockAndHome
-            root["assets"] = assets
-            let newPlist = try PropertyListSerialization.data(
-                fromPropertyList: root, format: format, options: 0
-            )
-            entries[plistIndex] = (path: plistPath, data: newPlist)
         }
 
         // 2. 加入渲染配置 plist（已存在则替换为模板字节，保证一致）。
