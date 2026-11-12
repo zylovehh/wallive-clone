@@ -38,7 +38,8 @@ enum BackupInstallFlow {
                         pairingPath: String,
                         log: @escaping BackupLog = { _ in },
                         onProgress: ((String, Double) -> Void)? = nil,
-                        displayName: String? = nil) async throws -> Outcome {
+                        displayName: String? = nil,
+                        preparedStage: RestoreTest.PreparedStage? = nil) async throws -> Outcome {
         onProgress?("正在取表…", 0.05)
         // 没配对：RestoreTest.restore 一进来就分岔到 Vellum 同款路
         //（只写一个描述符目录），下面这句日志跟着说人话。
@@ -59,7 +60,8 @@ enum BackupInstallFlow {
                 packageData: packageData, pairingPath: pairingPath,
                 onProgress: onProgress,
                 isCancelled: { cancelBox.isCancelled },
-                displayName: displayName)
+                displayName: displayName,
+                preparedStage: preparedStage)
             outcomeBox.finish(outcome)
         }
         let outcome: RestoreOutcome

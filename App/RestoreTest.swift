@@ -284,14 +284,15 @@ enum RestoreTest {
     static func runRestore(packageData: Data, pairingPath: String,
                            onProgress: ((String, Double) -> Void)? = nil,
                            isCancelled: @escaping () -> Bool = { false },
-                           displayName: String? = nil) -> RestoreOutcome {
+                           displayName: String? = nil,
+                           preparedStage: PreparedStage? = nil) -> RestoreOutcome {
         var report: [String: Any] = ["channel": "restore_test", "success": false]
         do {
             // 开装先记系统构建号（Drift 的规矩：可用范围按构建号判断）。
             logSystemBuild(log: { InstallLog.shared.append("restore: \($0)") })
             let outcome = try restore(packageData: packageData, pairingPath: pairingPath, report: &report,
                                       onProgress: onProgress, isCancelled: isCancelled,
-                                      displayName: displayName)
+                                      displayName: displayName, preparedStage: preparedStage)
             report["success"] = true
             InstallLog.shared.append("restore: json=\(jsonString(report))")
             return outcome
@@ -530,7 +531,8 @@ enum RestoreTest {
                                 report: inout [String: Any],
                                 onProgress: ((String, Double) -> Void)?,
                                 isCancelled: @escaping () -> Bool,
-                                displayName: String? = nil) throws -> RestoreOutcome {
+                                displayName: String? = nil,
+                                preparedStage: PreparedStage? = nil) throws -> RestoreOutcome {
         try checkCancelled(isCancelled)
         // V1.19：不分系统版本、不看配对记录，一律走 Vellum 同款路
         // （直读找库 + 逃逸直写，只写一个描述符目录，不碰表和偏好）。
@@ -538,7 +540,68 @@ enum RestoreTest {
         // 配对隧道一个字不碰——27.2 上不连 VPN 也装。
         return try restoreNoPairing(packageData: packageData, report: &report,
                                     onProgress: onProgress, isCancelled: isCancelled,
-                                    displayName: displayName)
+                                    displayName: displayName, preparedStage: preparedStage)
+    }
+
+    /// V1.46 备料结果：导入时后台做好的描述符目录（已解包、已改号、
+    /// 已补深景配置）。dir 由 AppState 持有，安装只读不删。
+    struct PreparedStage {
+        let dir: URL
+        let uuid: String
+        let numericId: Int
+    }
+
+    /// 备料（Drift 差距一，V1.46）：把安装第 2 步（解包→拷副本→改号→
+    /// 补深景配置）从「点安装时」挪到「导入时后台做」。包大的时候
+    /// 解压要十几秒，提前做完，点安装就只剩写文件那几秒。
+    /// 目录去留由调用方管：备料路留着当缓存，安装兜底路用完即删。
+    static func prepareDescriptorCopy(
+        packageData: Data,
+        log: @escaping (String) -> Void = { InstallLog.shared.append($0) }
+    ) throws -> PreparedStage {
+        let fm = FileManager.default
+        let installer = DescriptorInstaller(zip: ZipFoundationAdapter())
+        let (stage, descriptorUUID) = try installer.stage(packageData)
+        defer { try? fm.removeItem(at: stage) }
+        let source = stage.appendingPathComponent("descriptors").appendingPathComponent(descriptorUUID)
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue else {
+            throw TendiesPackage.Error.missingWallpaperDirectory
+        }
+        let numericId = Int.random(in: 9_999...99_999)
+        log("备料：新编号 \(numericId)（装包时包里所有编号统一换成它）。")
+        let copyDir = fm.temporaryDirectory
+            .appendingPathComponent("wallive-clone-vellum-desc-\(UUID().uuidString)")
+        do {
+            try fm.copyItem(at: source, to: copyDir)
+        } catch {
+            throw StepError(step: "写描述符", detail: "描述符目录拷副本失败：\(error.localizedDescription)")
+        }
+        // V1.12：userInfo 必须在 versions/1/contents 根层（系统标准位置，
+        // 朋友可用包和参照树都是；一部分 -static 包塞在壁纸目录里，系统
+        // 可能因此认不出描述符）。挪正；原包压根没有就照朋友的包补一份。
+        relocateUserInfoToContentsRoot(in: copyDir)
+        rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
+        // V1.9：文件名前缀也整体换成新 id（人家同款，id 和文件名一致）。
+        renameDescriptorContentsToMatch(in: copyDir, newId: numericId)
+        // V1.11：内层 assets.lockAndHome.default.identifier 也得跟着换——
+        // 提供方按内层 id 找 .ca 动画文件（编包器那路有 alignedForFamily 干
+        // 这事，无配对路之前漏了）。只改顶层的话，系统拿旧 id 找改名后的
+        // 文件，找不着，图库卡片就一直转圈（V1.10 真机黑块卡加载）。
+        syncDescriptorInnerIdentifier(in: copyDir, id: numericId)
+        // V1.13：补渲染配置（深景总开关）。系统渲染壁纸前要读这份配置，缺了
+        // 就是黑卡片——Vellum 装包时同样补（静态包也照补），朋友包原样走我们
+        // 这条路仍黑，拆人家程序发现它装包时补配置 + 浮动层加 Clownfish_ 前缀。
+        // 有浮动层才改前缀；调用放在改 id/改名之后，保证清单值和目录名一致。
+        DepthPackageBuilder.applyingDepthConfiguration(
+            toDescriptorDir: copyDir,
+            log: { log("\($0)") })
+        // V1.11：建议元数据里嵌着旧 id（"<旧id>.DYNAMIC"），朋友的可用包
+        // 没这个文件照样能用，直接删掉，省得图库按旧 id 找条目。
+        try? fm.removeItem(at: copyDir.appendingPathComponent(
+            "com.apple.posterkit.provider.identifierURL.suggestionMetadata.plist"))
+        log("备料完成。")
+        return PreparedStage(dir: copyDir, uuid: descriptorUUID, numericId: numericId)
     }
 
     // MARK: - 无配对安装（Vellum 同款，只写描述符目录）
@@ -558,7 +621,8 @@ enum RestoreTest {
     private static func restoreNoPairing(packageData: Data, report: inout [String: Any],
                                          onProgress: ((String, Double) -> Void)?,
                                          isCancelled: @escaping () -> Bool,
-                                         displayName: String? = nil) throws -> RestoreOutcome {
+                                         displayName: String? = nil,
+                                         preparedStage: PreparedStage? = nil) throws -> RestoreOutcome {
         try checkCancelled(isCancelled)
         let fm = FileManager.default
         let stamp = timeStamp()
@@ -618,61 +682,33 @@ enum RestoreTest {
         report["container"] = container
 
         // 2. 暂存包、拷描述符副本、对齐三个身份字段（和配对路同一个改法）。
+        //    V1.46 起这段整体叫「备料」：导入时后台已做好一份的，直接拿来
+        //    写盘（Drift 差距一：备料时机）。没备好的照旧现场做，行为不变。
         try checkCancelled(isCancelled)
         onProgress?("正在准备壁纸…", 0.25)
-        let installer = DescriptorInstaller(zip: ZipFoundationAdapter())
-        let stage: URL
+        let copyDir: URL
         let descriptorUUID: String
-        do {
-            (stage, descriptorUUID) = try installer.stage(packageData)
-        } catch let error as TendiesPackage.Error {
-            switch error {
-            case .notATendiesPackage:
-                throw StepError(step: "解包", detail: "这不是一个 .tendies / .wallive 包。")
-            case .missingWallpaperDirectory:
-                throw StepError(step: "解包", detail: "包里找不到壁纸目录，结构不对。")
-            case .missingWallpaperPlist:
-                throw StepError(step: "解包", detail: "包里找不到 Wallpaper.plist，结构不对。")
+        var ownsCopyDir = true
+        if let prep = preparedStage {
+            copyDir = prep.dir
+            descriptorUUID = prep.uuid
+            ownsCopyDir = false
+            InstallLog.shared.append("备料直接用（\(elapsed())）：导入时已解包改号补配置，安装只差写盘。")
+        } else {
+            do {
+                (copyDir, descriptorUUID, _) = try Self.prepareDescriptorCopy(packageData: packageData)
+            } catch let error as TendiesPackage.Error {
+                switch error {
+                case .notATendiesPackage:
+                    throw StepError(step: "解包", detail: "这不是一个 .tendies / .wallive 包。")
+                case .missingWallpaperDirectory:
+                    throw StepError(step: "解包", detail: "包里找不到壁纸目录，结构不对。")
+                case .missingWallpaperPlist:
+                    throw StepError(step: "解包", detail: "包里找不到 Wallpaper.plist，结构不对。")
+                }
             }
         }
-        let source = stage.appendingPathComponent("descriptors").appendingPathComponent(descriptorUUID)
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue else {
-            throw StepError(step: "解包", detail: "包里找不到描述符目录：descriptors/\(descriptorUUID)")
-        }
-        let numericId = Int.random(in: 9_999...99_999)
-        InstallLog.shared.append("新编号 \(numericId)（装包时包里所有编号统一换成它）。")
-        let copyDir = fm.temporaryDirectory
-            .appendingPathComponent("wallive-clone-vellum-desc-\(UUID().uuidString)")
-        do {
-            try fm.copyItem(at: source, to: copyDir)
-        } catch {
-            throw StepError(step: "写描述符", detail: "描述符目录拷副本失败：\(error.localizedDescription)")
-        }
-        defer { try? fm.removeItem(at: copyDir) }
-        // V1.12：userInfo 必须在 versions/1/contents 根层（系统标准位置，
-        // 朋友可用包和参照树都是；一部分 -static 包塞在壁纸目录里，系统
-        // 可能因此认不出描述符）。挪正；原包压根没有就照朋友的包补一份。
-        relocateUserInfoToContentsRoot(in: copyDir)
-        rewriteDescriptorIdentity(in: copyDir, identifier: numericId)
-        // V1.9：文件名前缀也整体换成新 id（人家同款，id 和文件名一致）。
-        renameDescriptorContentsToMatch(in: copyDir, newId: numericId)
-        // V1.11：内层 assets.lockAndHome.default.identifier 也得跟着换——
-        // 提供方按内层 id 找 .ca 动画文件（编包器那路有 alignedForFamily 干
-        // 这事，无配对路之前漏了）。只改顶层的话，系统拿旧 id 找改名后的
-        // 文件，找不着，图库卡片就一直转圈（V1.10 真机黑块卡加载）。
-        syncDescriptorInnerIdentifier(in: copyDir, id: numericId)
-        // V1.13：补渲染配置（深景总开关）。系统渲染壁纸前要读这份配置，缺了
-        // 就是黑卡片——Vellum 装包时同样补（静态包也照补），朋友包原样走我们
-        // 这条路仍黑，拆人家程序发现它装包时补配置 + 浮动层加 Clownfish_ 前缀。
-        // 有浮动层才改前缀；调用放在改 id/改名之后，保证清单值和目录名一致。
-        DepthPackageBuilder.applyingDepthConfiguration(
-            toDescriptorDir: copyDir,
-            log: { InstallLog.shared.append("\($0)") })
-        // V1.11：建议元数据里嵌着旧 id（"<旧id>.DYNAMIC"），朋友的可用包
-        // 没这个文件照样能用，直接删掉，省得图库按旧 id 找条目。
-        try? fm.removeItem(at: copyDir.appendingPathComponent(
-            "com.apple.posterkit.provider.identifierURL.suggestionMetadata.plist"))
+        defer { if ownsCopyDir { try? fm.removeItem(at: copyDir) } }
 
         // 3. 只写一个目录：主扩展 descriptors/<新UUID>。同名旧目录先删再写，
         //    防止上次装剩的半新半旧混在一起。

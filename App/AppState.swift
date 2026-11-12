@@ -59,6 +59,16 @@ final class AppState: ObservableObject {
     /// 界面显示"设备版本读不到"，安装按 fail closed 走备份路。
     @Published var deviceInfo: BackupFFI.DeviceInfo?
 
+    // MARK: - 备料缓存（V1.46，Drift 差距一：备料时机）
+
+    /// 备料记录：对应哪份数据 + 备好的描述符目录。
+    private struct PreparedRecord {
+        let data: Data
+        let stage: RestoreTest.PreparedStage
+    }
+    private var preparedRecord: PreparedRecord?
+    private let preparedLock = NSLock()
+
     init() {
         // 启动自愈：上次逃逸中途崩溃会把 App Group 的 Library/Caches 留成
         // 指向壁纸库的软链，不收拾会污染其他走 App Group 的读写。
@@ -118,7 +128,14 @@ final class AppState: ObservableObject {
     /// V8：不是 WALLIVE1 加密的包，先转成加密版再存——这样装出去的包
     /// 只有咱们安装器能解开用，3105、CAPlayground、Wallive 打不开。
     /// 加密失败（极少）不拦安装，原样用明文包继续。
+    /// V1.46：换包时把旧备料清掉，新包后台备料（转换+解包+改号提前做），
+    /// 点安装只剩写盘。
     func setPackage(_ data: Data, displayName: String? = nil) {
+        preparedLock.lock()
+        let stale = preparedRecord
+        preparedRecord = nil
+        preparedLock.unlock()
+        if let stale { try? FileManager.default.removeItem(at: stale.stage.dir) }
         var stored = data
         if !Wallive1Crypto.isWallive1(data) {
             do {
@@ -138,6 +155,70 @@ final class AppState: ObservableObject {
             packageInfo = nil
             packageError = "包检查失败：\(error.localizedDescription)"
         }
+        // 后台备料：把点安装时要花的解包、改号、补配置的功夫提前花掉。
+        // 转换选择已记住的旧格式包，连转换也一起提前（没记住的不猜，
+        // 等安装时问过再备下一轮）。
+        let autoConvert = autoConvertOldFormat
+        Task.detached(priority: .userInitiated) { [weak self] in
+            self?.prepareInBackground(stored: stored, autoConvert: autoConvert)
+        }
+    }
+
+    /// 后台备料（非主线程）：已记住「要转」的旧格式包先转换，
+    /// 然后解包改号补配置。做完把包数据（如转换过）和备料一起记账；
+    /// 转换过的包数据要回主线程换上，详情页和安装拿到的就是转好的。
+    nonisolated private func prepareInBackground(stored: Data, autoConvert: Bool) {
+        var working = stored
+        do {
+            let plain: Data = Wallive1Crypto.isWallive1(stored) ? try Wallive1Crypto.decrypt(stored) : stored
+            if autoConvert,
+               let info = try? TendiesPackage.inspect(stored, zip: ZipFoundationAdapter()),
+               rememberedConvertChoice(descriptorUUID: info.descriptorUUID) == true,
+               TendiesPackage.isOldFormat(plain, zip: ZipFoundationAdapter()),
+               let converted = try? TendiesPackage.convertingOldFormatToNew(plain, zip: ZipFoundationAdapter()) {
+                InstallLog.shared.append("备料：老格式包导入时就转好（按记住的选择），不等点安装。")
+                working = (try? Wallive1Crypto.encrypt(converted)) ?? converted
+            }
+        } catch {
+            InstallLog.shared.append("备料：解密核对没过（\(error.localizedDescription)），按原包备。")
+        }
+        guard let stage = try? RestoreTest.prepareDescriptorCopy(packageData: working) else {
+            InstallLog.shared.append("备料没成：点安装时照老路现场备。")
+            return
+        }
+        let record = PreparedRecord(data: working, stage: stage)
+        let converted = working != stored
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if converted, self.packageData == stored {
+                self.packageData = working
+                self.packageInfo = try? TendiesPackage.inspect(working, zip: ZipFoundationAdapter())
+            }
+            // 只在包没被换掉时记账：用户中途换了包，这份备料作废。
+            guard self.packageData == working else {
+                try? FileManager.default.removeItem(at: stage.dir)
+                return
+            }
+            preparedLock.lock()
+            preparedRecord = record
+            preparedLock.unlock()
+        }
+    }
+
+    /// 安装取备料：当前要装的包和备料对上才给，对不上返回 nil（照老路现场备）。
+    private func takePreparedStage(matching data: Data) -> RestoreTest.PreparedStage? {
+        preparedLock.lock()
+        defer { preparedLock.unlock() }
+        guard let rec = preparedRecord, rec.data == data else { return nil }
+        // tmp 目录系统闲置时可能回收：备好却没了就当场作废，照老路现场备。
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: rec.stage.dir.path, isDirectory: &isDir),
+              isDir.boolValue else {
+            preparedRecord = nil
+            InstallLog.shared.append("备料目录没了（系统回收？），点安装时照老路现场备。")
+            return nil
+        }
+        return rec.stage
     }
 
     /// 导入库文件目录：Documents/imported-packages，不存在就建一个。
@@ -288,7 +369,8 @@ final class AppState: ObservableObject {
             return try await installWithReportTunnel(
                 data: data, host: host, forceRefresh: forceRefresh, onProgress: onProgress)
         }
-        return try await installWithReportBackup(data: data, onProgress: onProgress)
+        return try await installWithReportBackup(data: data, onProgress: onProgress,
+                                                  preparedStage: takePreparedStage(matching: data))
     }
 
     /// 隧道路安装（配对路）：本地暂存 → AirliftInstaller 经配对隧道写盘
@@ -327,7 +409,8 @@ final class AppState: ObservableObject {
     /// 用结果的 `preferencesWritten` 判断：这条路从不写偏好，为 false；
     /// 老的改表路才为 true。
     private func installWithReportBackup(data: Data,
-                                         onProgress: ((String, Double) -> Void)? = nil) async throws -> InstallReport? {
+                                         onProgress: ((String, Double) -> Void)? = nil,
+                                         preparedStage: RestoreTest.PreparedStage? = nil) async throws -> InstallReport? {
         do {
             InstallLog.shared.clear()
             let outcome = try await BackupInstallFlow.install(
@@ -337,7 +420,8 @@ final class AppState: ObservableObject {
                 pairingPath: "",
                 log: { InstallLog.shared.append($0) },
                 onProgress: onProgress,
-                displayName: packageDisplayName)
+                displayName: packageDisplayName,
+                preparedStage: preparedStage)
             let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
                 + "Extensions/\(outcome.extensionID)/configurations"
             // 走没走成 Vellum 同款看结果：这条路从不写偏好，preferencesWritten
