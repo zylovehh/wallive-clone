@@ -575,28 +575,34 @@ enum RestoreTest {
         var sideDoorRestore: (() -> Void)? = nil
         defer { sideDoorRestore?(); WorseQueryEscape.release(escapeHandle) }
         var container: String? = nil
+        // 已知路径先行（Drift 同款）：上次记下的容器路径先核对身份——
+        // 商店目录还在、还是目录才算数；核不过就清掉缓存重新找。
+        if let cached = cachedContainerPath() {
+            let esc = WorseQueryEscape.consume(target: cached, requireWrite: false, quiet: true)
+            if let h = esc.handle {
+                var isStoreDir: ObjCBool = false
+                let storeRootPath = cached + PosterBoard.storeRoot
+                if fm.fileExists(atPath: storeRootPath, isDirectory: &isStoreDir), isStoreDir.boolValue {
+                    escapeHandle = h
+                    container = cached
+                    report["escape"] = ["ok": true, "detail": esc.detail ?? "已知路径身份核对通过"]
+                    InstallLog.shared.append("已知容器路径：\(cached)（商店目录在，身份核对通过，不用再扫）。")
+                } else {
+                    WorseQueryEscape.release(h)
+                    InstallLog.shared.append("缓存路径不再属于壁纸库（商店目录不存在或不是目录）——清掉缓存，重新扫描。")
+                    clearContainerCache()
+                }
+            } else {
+                InstallLog.shared.append("已知路径拿不到通行证——照旧重新扫描。")
+                clearContainerCache()
+            }
+        }
         if let found = discoverAndReadDirect(workDir: workDir, groupPath: health.containerPath) {
             escapeHandle = found.handle
             container = found.container
             sideDoorRestore = found.restore
             report["escape"] = ["ok": true, "detail": "总目录直翻"]
             InstallLog.shared.append("壁纸库找到了（\(elapsed())）：\(found.container)。")
-        }
-        if container == nil, let cached = cachedContainerPath() {
-            let esc = WorseQueryEscape.consume(target: cached, log: {
-                InstallLog.shared.append("\($0)")
-            })
-            if let h = esc.handle {
-                if readStoreDirect(container: cached, workDir: workDir) != nil {
-                    escapeHandle = h
-                    container = cached
-                    report["escape"] = ["ok": true, "detail": esc.detail ?? ""]
-                    InstallLog.shared.append("上次记下的路径能用（\(elapsed())）：\(cached)。")
-                } else {
-                    WorseQueryEscape.release(h)
-                    InstallLog.shared.append("上次记下的路径读不到表（可能路径变了）。")
-                }
-            }
         }
         guard let container else {
             throw StepError(step: "找壁纸库",
@@ -669,7 +675,10 @@ enum RestoreTest {
             throw StepError(step: "写描述符",
                             detail: "沙箱逃逸没成，描述符写不进。重试一次；还不行就先恢复配对记录再装。")
         }
-        let storeBase = container + PosterBoard.storePath(storeVersion)
+        let writeGeneration = chooseWriteGeneration(container: container)
+        let genList = storeGenerations(container: container).map(String.init).joined(separator: "、")
+        InstallLog.shared.append("商店代际目录：\(genList.isEmpty ? "（没列到）" : genList)；写入代际：\(writeGeneration)。")
+        let storeBase = container + PosterBoard.storePath(writeGeneration)
         let targetDir = storeBase
             + "/Extensions/\(PosterBoard.collectionsExtension)/descriptors/\(descriptorUUID)"
         // 旧目录不清在前面：直写已改成「暂存校验+原子改名」（Drift 同款），
@@ -705,7 +714,7 @@ enum RestoreTest {
         InstallReceiptStore.record(InstallReceipt(
             descriptorUUID: descriptorUUID, targetPath: targetDir,
             fileCount: landedStats.fileCount, totalBytes: Int64(landedStats.totalBytes),
-            storeVersion: storeVersion, method: "no-pairing",
+            storeVersion: writeGeneration, method: "no-pairing",
             verified: verified, date: Date(),
             packageName: displayName, buildNumber: systemBuildNumber()))
 
@@ -958,6 +967,35 @@ enum RestoreTest {
             UserDefaults(suiteName: group)?.set(path, forKey: cachedContainerKey)
         }
         UserDefaults.standard.set(path, forKey: cachedContainerKey)
+    }
+
+    /// 清掉缓存的容器路径（Drift 同款：已知路径核对不过就清，下次重扫）。
+    private static func clearContainerCache() {
+        for group in WorseQueryEscape.candidateGroups {
+            UserDefaults(suiteName: group)?.removeObject(forKey: cachedContainerKey)
+        }
+        UserDefaults.standard.removeObject(forKey: cachedContainerKey)
+    }
+
+    // MARK: - 代际选择（Drift 同款：枚举代际，挑 Extensions 目录在的那代写）
+
+    /// 商店里的代际目录（61、62……），从新到旧排。列不出来就算没有。
+    static func storeGenerations(container: String) -> [Int] {
+        let fm = FileManager.default
+        let root = container + PosterBoard.storeRoot
+        let names = (try? fm.contentsOfDirectory(atPath: root)) ?? []
+        return names.compactMap { Int($0) }.sorted(by: >)
+    }
+
+    /// 挑写入代际：从新到旧，挑 Extensions 目录存在的那一代；
+    /// 一代都没有就退回默认版本，照老行为走。
+    static func chooseWriteGeneration(container: String) -> Int {
+        let gens = storeGenerations(container: container)
+        for g in gens where FileManager.default.fileExists(
+            container + PosterBoard.storeRoot + "/\(g)/Extensions") {
+            return g
+        }
+        return gens.first ?? storeVersion
     }
 
     /// 第 0 步：问系统要 PosterBoard 的容器路径（Vellum 的第一条路）。
@@ -1776,7 +1814,9 @@ enum RestoreTest {
                 throw StepError(step: "直写",
                                 detail: "暂存校验不通过：文件数/字节数与源不一致（源 \(sourceStats.fileCount) 个文件 \(sourceStats.totalBytes) 字节，暂存 \(stagedStats.fileCount) 个 \(stagedStats.totalBytes) 字节），已放弃写入。")
             }
-            // 校验过了才动目标：先清同名旧目录，再原子改名，不存在写一半。
+            // 校验过了才动目标：全树同步落盘（Drift 同款：改名前把每个文件
+            // 都写透），先清同名旧目录，再原子改名，不存在写一半。
+            fsyncTree(at: staging)
             if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
             try fm.moveItem(at: staging, to: dst)
             log("直写 \(dst.path)（\(sourceStats.fileCount) 个文件 \(sourceStats.totalBytes) 字节，暂存校验通过，原子改名落盘）。")
@@ -1784,6 +1824,21 @@ enum RestoreTest {
             // 任何一步没成，暂存目录都收走，不给商店留垃圾。
             try? fm.removeItem(at: staging)
             throw error
+        }
+    }
+
+    /// 全树同步落盘（Drift 同款）：原子改名前把暂存里的每个常规文件
+    /// 都 synchronize 写透，断电也不出半新半旧。
+    private static func fsyncTree(at dir: URL) {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: dir, includingPropertiesForKeys: [.isRegularFileKey]) else { return }
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true else { continue }
+            guard let fh = FileHandle(forWritingAtPath: fileURL.path) else { continue }
+            try? fh.synchronize()
+            try? fh.close()
         }
     }
 
@@ -1854,6 +1909,17 @@ enum RestoreTest {
         log("按回执删除：已删除并在本机核验，\(receipt.descriptorUUID) 的描述符已不在商店里。")
         return ("已删除并在本机核验：这张壁纸已不在商店里。上滑关掉海报应用（或刷新桌面）后生效。"
             + "删的正是当前在用的壁纸时，生效后系统会换回默认壁纸。", true)
+    }
+
+    // MARK: - 实时扫商店（V1.44，Drift 同款：管理页照 Drift 实时扫）
+
+    /// 给管理页用的容器定位：先查缓存，没有再走 LaunchServices 指路。
+    /// 定位到了顺手记进缓存。拿不到返回 nil，管理页如实降级显示账本。
+    static func containerForLiveScan() -> String? {
+        if let c = cachedContainerPath() { return c }
+        guard let ls = posterBoardContainerViaLaunchServices() else { return nil }
+        saveContainerPath(ls)
+        return ls
     }
 
     /// 逃逸直写写回表：stagedDir 里的表（+ 0 字节 -wal/-shm）直接拷进

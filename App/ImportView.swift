@@ -1263,23 +1263,25 @@ private struct ImportDetailView: View {
                 if state.hasPairingFile {
                     installResult = "安装成功：刷新没确认。重启手机，然后锁屏长按进图库查看。"
                 } else {
-                    // V1.35：先试暗号唤出海报应用——它一露头系统就重读壁纸，
-                    // 用户上滑关掉即生效；叫不动再退回网页压桌面（详情页 V1.25 同款）。
-                    if let posterBoardURL = URL(string: "posterboard://") {
+                    // Drift 同款私有接口打头，暗号退路用户拍板保留；压桌面
+                    // 不进自动链路（详情页的「刷新桌面」手动按钮还在）。
+                    if PosterBoardLauncher.launch() {
+                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报界面拉起来了——上滑关掉卡片，锁屏长按进图库查看。"
+                    } else if let posterBoardURL = URL(string: "posterboard://") {
+                        InstallLog.shared.append("restore: 私有接口没叫动海报应用，退 posterboard:// 暗号。")
                         installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
                         UIApplication.shared.open(posterBoardURL) { ok in
                             guard !ok else { return }
                             // open 的回调不保证主线程；这些是界面状态，必须回主线程改。
                             DispatchQueue.main.async {
-                                InstallLog.shared.append("restore: 海报应用没叫动，退回网页压桌面的刷新。")
-                                installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面（老办法）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
+                                InstallLog.shared.append("restore: 暗号也没叫动，去锁屏长按进图库看装没装上。")
+                                installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报没叫动——锁屏长按进图库看看装没装上；详情页的「刷新桌面」还能手动再来一下。"
                                 installLogText = InstallLog.shared.tail(60)
-                                DesktopRestart.trigger()
                             }
                         }
                     } else {
-                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。正在刷新桌面——桌面会黑一下自己回来，回来后锁屏长按进图库看。"
-                        DesktopRestart.trigger()
+                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报没叫动——锁屏长按进图库看看装没装上。"
+                        installLogText = InstallLog.shared.tail(60)
                     }
                 }
             }

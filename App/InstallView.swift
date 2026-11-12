@@ -152,27 +152,59 @@ struct InstallView: View {
         return text
     }
 
-    /// 直刷结果（V1.6/V1.25 同款分流）：先试暗号唤出海报应用——它一露头
-    /// 系统就重读壁纸，用户上滑关掉即生效（跟人家同款）；叫不动再退回网页压桌面。
+    /// 直刷结果（Drift 打头 + 暗号退路）：装完用私有接口把 PosterBoard 应用
+    /// 整个唤出来——它一露头系统就重读壁纸，用户上滑关掉卡片即生效；
+    /// 私有接口叫不动，退 posterboard:// 暗号（用户拍板保留的退路）；
+    /// 暗号也不行就照实说明，不自动压桌面。
     private func directResult(_ report: InstallReport) async {
         let uuid = report.descriptorUUID
         let verify = report.backupSummary ?? ""
+        if PosterBoardLauncher.launch() {
+            result = "安装完成（直刷路），描述符 UUID：\(uuid)。\(verify)海报界面拉起来了——上滑关掉卡片，锁屏长按进图库查看。"
+            installLog = InstallLog.shared.tail(200)
+            return
+        }
+        InstallLog.shared.append("restore: 私有接口没叫动海报应用，退 posterboard:// 暗号。")
         if let posterBoardURL = URL(string: "posterboard://") {
             result = "安装完成（直刷路），描述符 UUID：\(uuid)。\(verify)海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
             UIApplication.shared.open(posterBoardURL) { ok in
                 guard !ok else { return }
                 // open 的回调不保证主线程；result 是界面状态，必须回主线程改。
                 DispatchQueue.main.async {
-                    InstallLog.shared.append("restore: 海报应用没叫动，退回网页压桌面的刷新。")
-                    result = "安装完成（直刷路），描述符 UUID：\(uuid)。\(verify)海报没叫动，正在刷新桌面（老办法）——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
+                    InstallLog.shared.append("restore: 暗号也没叫动，去锁屏长按进图库看装没装上。")
+                    result = "安装完成（直刷路），描述符 UUID：\(uuid)。\(verify)海报没叫动——锁屏长按进图库看看装没装上，日志里有调用结果。"
                     installLog = InstallLog.shared.tail(200)
-                    DesktopRestart.trigger()
                 }
             }
         } else {
-            result = "安装完成（直刷路），描述符 UUID：\(uuid)。\(verify)正在刷新桌面——桌面会黑一下自己回来，回来后锁屏长按进图库查看。"
-            DesktopRestart.trigger()
+            result = "安装完成（直刷路），描述符 UUID：\(uuid)。\(verify)海报没叫动——锁屏长按进图库看看装没装上，日志里有调用结果。"
+            installLog = InstallLog.shared.tail(200)
         }
+    }
+}
+/// Drift 同款唤出海报应用：不拼 URL 暗号，直接用私有接口把 PosterBoard
+/// 整个打开（Drift 二进制里 openApplicationWithBundleID: 对着
+/// com.apple.PosterBoard 调，posterboard:// 一次都没出现过）。
+/// 私有接口打头，暗号作退路（用户拍板保留）；同 target 免改工程文件。
+enum PosterBoardLauncher {
+    /// 唤出成功返回 true；接口不存在、类拿不到或调用报错一律 false，
+    /// 由调用方退暗号或照实告知。
+    static func launch() -> Bool {
+        // LSApplicationWorkspace 是私有类，运行时 NSClassFromString 找。
+        guard let cls = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type,
+              let workspace = cls.perform(NSSelectorFromString("defaultWorkspace"))?
+                  .takeUnretainedValue() as? NSObject
+        else { return false }
+        let selector = NSSelectorFromString("openApplicationWithBundleID:")
+        // 返回值是 BOOL，不是对象——perform 拿不准，走函数指针原样读。
+        guard workspace.responds(to: selector),
+              let method = class_getInstanceMethod(type(of: workspace), selector)
+        else { return false }
+        typealias OpenMethod = @convention(c) (AnyObject, Selector, String) -> Bool
+        let open = unsafeBitCast(method_getImplementation(method), to: OpenMethod.self)
+        let ok = open(workspace, selector, "com.apple.PosterBoard")
+        InstallLog.shared.append("restore: openApplicationWithBundleID: 调用返回 \(ok)。")
+        return ok
     }
 }
 // 只重启桌面，不重启手机。
