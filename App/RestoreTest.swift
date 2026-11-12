@@ -992,7 +992,7 @@ enum RestoreTest {
     static func chooseWriteGeneration(container: String) -> Int {
         let gens = storeGenerations(container: container)
         for g in gens where FileManager.default.fileExists(
-            container + PosterBoard.storeRoot + "/\(g)/Extensions") {
+            atPath: container + PosterBoard.storeRoot + "/\(g)/Extensions") {
             return g
         }
         return gens.first ?? storeVersion
