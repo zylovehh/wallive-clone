@@ -274,6 +274,8 @@ private struct ReceiptManageView: View {
     @State private var showClearConfirm = false
     @State private var detailEntry: LiveDescriptor?
     @State private var resultOK: Bool?
+    // 折叠状态：收起哪组记哪组，退出本页自动全展开。
+    @State private var foldedGroups: Set<String> = []
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -315,24 +317,30 @@ private struct ReceiptManageView: View {
                     let thirdPartyCount = groups.thirdParty.count
                     let systemishCount = groups.systemish.count
                     if !groups.own.isEmpty {
-                        sectionHeader("自己装的（\(ownCount)）",
+                        sectionHeader("own", "自己装的（\(ownCount)）",
                                       note: nil, color: .green)
-                        ForEach(groups.own) { entry in
-                            liveRow(entry)
+                        if !foldedGroups.contains("own") {
+                            ForEach(groups.own) { entry in
+                                liveRow(entry)
+                            }
                         }
                     }
                     if !groups.thirdParty.isEmpty {
-                        sectionHeader("别的工具装的（\(thirdPartyCount)）",
+                        sectionHeader("thirdParty", "别的工具装的（\(thirdPartyCount)）",
                                       note: "多半是第三方或旧版本，想清就删", color: .orange)
-                        ForEach(groups.thirdParty) { entry in
-                            liveRow(entry)
+                        if !foldedGroups.contains("thirdParty") {
+                            ForEach(groups.thirdParty) { entry in
+                                liveRow(entry)
+                            }
                         }
                     }
                     if !groups.systemish.isEmpty {
-                        sectionHeader("大概率是系统的（\(systemishCount)）",
+                        sectionHeader("systemish", "大概率是系统的（\(systemishCount)）",
                                       note: "跟系统最早一批同一时期，建议别动", color: .blue)
-                        ForEach(groups.systemish) { entry in
-                            liveRow(entry)
+                        if !foldedGroups.contains("systemish") {
+                            ForEach(groups.systemish) { entry in
+                                liveRow(entry)
+                            }
                         }
                     }
                 }
@@ -478,11 +486,27 @@ private struct ReceiptManageView: View {
         return (own, thirdParty, systemish)
     }
 
-    private func sectionHeader(_ title: String, note: String?, color: Color) -> some View {
+    /// 组标题：带折叠箭头，点一下整组收起 / 展开（V1.47）。
+    /// 收起时副注也藏住，只留标题、条数和转向的箭头。
+    private func sectionHeader(_ id: String, _ title: String, note: String?, color: Color) -> some View {
+        let folded = foldedGroups.contains(id)
         return VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.headline).foregroundStyle(color)
-            if let note {
+            HStack(spacing: 6) {
+                Text(title).font(.headline).foregroundStyle(color)
+                Text(folded ? "▶" : "▼").font(.caption).foregroundStyle(.secondary)
+            }
+            if let note, !folded {
                 Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                if folded {
+                    foldedGroups.remove(id)
+                } else {
+                    foldedGroups.insert(id)
+                }
             }
         }
     }
