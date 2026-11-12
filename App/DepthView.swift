@@ -360,6 +360,23 @@ private struct ReceiptManageView: View {
                     Button("清空记录", role: .destructive) { showClearConfirm = true }
                         .buttonStyle(.bordered)
                 }
+                // V1.46：免杀进程刷新（Drift 同款按钮）——发系统通知让图库
+                // 自己重读商店，装没装上的、删没删掉的，卡片立刻对账。
+                Button("刷新 PosterBoard") {
+                    deleteBusy = true
+                    Task {
+                        let sent = await Task.detached(priority: .userInitiated) {
+                            RestoreTest.notifyPosterBoardReread()
+                        }.value
+                        resultOK = sent
+                        resultNote = sent
+                            ? "已发通知让图库重读（免杀进程），卡片一般立刻对上。没变化就上滑关掉海报应用（或重启手机）再看。"
+                            : "通知没发出去（见安装日志）。上滑关掉海报应用（或重启手机）后照样生效。"
+                        deleteBusy = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(deleteBusy)
                 Text("列表是实时扫出来的：自己装的=账本对上；剩下两条按写入时间划线（跟最早一批同期算系统，更晚算第三方），是推断不是官方标记。所有条目左滑删除、点开看完整信息，删除按当前路径删，删完重新数一遍，删干净才算数。")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -518,7 +535,15 @@ private struct ReceiptManageView: View {
                 let del = ManagedWallpaperStore.deleteLive(entry)
                 guard del.removed else { return (false, del.message) }
                 var note = del.message
-                if !pairingPath.isEmpty {
+                // 删完先发系统通知让图库自己重读（Drift 同款，免杀进程）；
+                // 通知发出去就不杀进程了。通知没发出去才走老兜底：
+                // 有配对文件自动重启桌面/杀海报进程，没有提醒手动上滑。
+                if RestoreTest.notifyPosterBoardReread() {
+                    note = note
+                        .replacingOccurrences(of: "上滑关掉海报应用（或刷新桌面）后生效。", with: "")
+                        .trimmingCharacters(in: .whitespaces)
+                    note += " 已通知图库重读（免杀进程），卡片一般立刻消失；没消再上滑关掉海报应用（或重启手机）看一眼。"
+                } else if !pairingPath.isEmpty {
                     // 有配对就自动刷新：原话里的「上滑关掉海报应用」被刷新
                     // 结论取代，避免自相矛盾。
                     note = note
@@ -592,11 +617,19 @@ private struct ReceiptManageView: View {
         resultOK = nil
         Task {
             let result = await Task.detached(priority: .userInitiated) {
-                RestoreTest.deleteByReceipt(receipt)
+                let result = RestoreTest.deleteByReceipt(receipt)
+                // 删成了先发系统通知让图库自己重读（跟实时删同款，免杀进程）。
+                // 统一返回 (是否删成, 一句话结果)，两个分支顺序一致。
+                if result.removed, RestoreTest.notifyPosterBoardReread() {
+                    let note = result.message
+                        .replacingOccurrences(of: "上滑关掉海报应用（或刷新桌面）后生效。", with: "已通知图库重读（免杀进程）。")
+                    return (result.removed, note)
+                }
+                return (result.removed, result.message)
             }.value
             // 同样带上名字、分清成败。
-            resultOK = result.removed
-            resultNote = "「\(receipt.packageName ?? receipt.descriptorUUID)」\(result.message)"
+            resultOK = result.0
+            resultNote = "「\(receipt.packageName ?? receipt.descriptorUUID)」\(result.1)"
             receipts = Array(InstallReceiptStore.receipts().reversed())
             deleteBusy = false
         }

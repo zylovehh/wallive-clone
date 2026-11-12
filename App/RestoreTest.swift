@@ -2399,6 +2399,22 @@ enum RestoreTest {
                 "error": sb["error"] as? String ?? "SpringBoard 重启没确认"]
     }
 
+    /// 给删除用的「免杀进程刷新」（V1.46）：拆 Drift 原包挖到的——系统海报
+    /// 进程自己听这两个通知，一听就重读商店，不用杀进程、不用重启桌面。
+    /// 发通知零成本，先发它；没生效再走杀进程/重启那套兜底。
+    /// notify_post 返回 0 才算发出（系统通知不回执「重读完成」，话术里说明白）。
+    @discardableResult
+    public static func notifyPosterBoardReread() -> Bool {
+        let names = ["PBF_RESET_FILE_PROTECTIONS", "PBF_LOCALE_DID_CHANGE"]
+        var allOK = true
+        for name in names {
+            let rc = notify_post(name)
+            InstallLog.shared.append("删除刷新：已发系统通知 \(name)（rc=\(rc)）。")
+            if rc != 0 { allOK = false }
+        }
+        return allOK
+    }
+
     /// 给管理页用的删后刷新（V1.45）：跟装后刷新同一套规矩（27.2 先重启
     /// 桌面、以下杀 PosterBoard），但只返回给用户看的结论，不抛错。
     /// 没配对（空路径）直接说没做，让用户手动上滑。
