@@ -57,6 +57,13 @@ import Darwin
 import AirliftFFI
 import SQLite3
 
+// V1.46 补丁（构建 #381）：notify_post 在当前 SDK 的模块图里不归
+// Darwin 直接管，import Darwin 够不着（报 cannot find in scope）。
+// 不赌它挂在哪个模块下，直接按符号把 C 函数绑进来：函数就在系统
+// 库里、进程里就能调，跟以前 import Darwin 时一个效果。
+@_silgen_name("notify_post")
+fileprivate func c_notify_post(_ name: UnsafePointer<CChar>) -> UInt32
+
 /// 备份还原一次跑完的结果（页面只显示 summary 这一行，完整 JSON 进日志框）。
 /// 原来是状态页上的还原测试按钮用的，正式版已接进 BackupInstallFlow；
 /// 探针按钮已拿掉，引擎留在这里，正式备份路调 runRestore。
@@ -2408,7 +2415,7 @@ enum RestoreTest {
         let names = ["PBF_RESET_FILE_PROTECTIONS", "PBF_LOCALE_DID_CHANGE"]
         var allOK = true
         for name in names {
-            let rc = notify_post(name)
+            let rc = c_notify_post(name)
             InstallLog.shared.append("删除刷新：已发系统通知 \(name)（rc=\(rc)）。")
             if rc != 0 { allOK = false }
         }
