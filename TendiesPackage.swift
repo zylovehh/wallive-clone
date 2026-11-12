@@ -405,8 +405,17 @@ public enum TendiesPackage {
             throw Error.missingWallpaperDirectory
         }
         let uuid = String(parts[1])
-        let wallpaperDir = parts[3..<parts.count - 1].joined(separator: "/")
-        let prefix = "descriptors/\(uuid)/versions/1/contents/\(wallpaperDir)/"
+        // V1.46 修回归（构建 #381 后用户报「图层全是无/空壳」）：原来
+        // wallpaperDir 取 parts[3..<count-1]，把 "1/contents" 又带了一遍，
+        // 拼出的前缀变成 …/1/contents/1/contents/<名>.wallpaper/，按它找层
+        // 永远是空——三行全报无/空壳。目录名只取 .wallpaper 那一段；
+        // 前缀直接从清单路径裁出来（最后一段 Wallpaper.plist 去掉），
+        // 不管中间几层都对得上。
+        let wallpaperDir = String(parts[parts.count - 2])
+        guard let slash = plistPath.lastIndex(of: "/") else {
+            throw Error.missingWallpaperDirectory
+        }
+        let prefix = String(plistPath[plistPath.startIndex...slash])
 
         // 读 Wallpaper.plist，取三层文件名（键在 assets.lockAndHome.default 下）。
         let plistData = try zip.readEntry(plistPath, in: zipData)
