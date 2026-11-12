@@ -85,7 +85,8 @@ final class AppState: ObservableObject {
     }
 
     /// 取某个包记住的转换选择：nil 表示还没问过。
-    func rememberedConvertChoice(descriptorUUID: String) -> Bool? {
+    /// nonisolated：后台备料线程也要读（只碰 UserDefaults，不碰界面数据）。
+    nonisolated func rememberedConvertChoice(descriptorUUID: String) -> Bool? {
         let choices = UserDefaults.standard.dictionary(forKey: convertChoiceKey) as? [String: Bool] ?? [:]
         return choices[descriptorUUID]
     }
