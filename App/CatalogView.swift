@@ -1974,14 +1974,16 @@ private struct ShareSheet: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-        if let popover = controller.popoverPresentationController,
-           let window = UIApplication.shared.connectedScenes
-               .compactMap { $0 as? UIWindowScene }
-               .flatMap { $0.windows }
-               .first(where: { $0.isKeyWindow }) {
-            popover.sourceView = window.rootViewController?.view
-            popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
-            popover.permittedArrowDirections = []
+        if let popover = controller.popoverPresentationController {
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { scene in scene as? UIWindowScene }
+                .flatMap { scene in scene.windows }
+                .first { window in window.isKeyWindow }
+            if let window = keyWindow {
+                popover.sourceView = window.rootViewController?.view
+                popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
         }
         return controller
     }
