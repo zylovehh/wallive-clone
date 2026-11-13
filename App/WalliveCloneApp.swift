@@ -24,6 +24,27 @@ struct WalliveCloneApp: App {
                 // 没选中的安装方式、底部页签全是这么糊住的。深色下标题白字、
                 // 次要文字浅灰、玻璃按钮白字，全部可读；系统浅色/深色切换不再影响。
                 .preferredColorScheme(.dark)
+                // 分享进来的壁纸包：别人手机上分享 .tendies 选壁纸匣，
+                // 直接进这张壁纸的安装页（导入详情页），不用再去导入库里找。
+                // 只认 .tendies / .wallive，别的格式不接。
+                .onOpenURL { url in
+                    Task { @MainActor in
+                        let ext = url.pathExtension.lowercased()
+                        guard ext == "tendies" || ext == "wallive" else { return }
+                        let didAccess = url.startAccessingSecurityScopedResource()
+                        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+                        guard let data = try? Data(contentsOf: url) else { return }
+                        let fileName = url.deletingPathExtension().lastPathComponent
+                        let name = fileName.isEmpty ? url.lastPathComponent : fileName
+                        state.setPackage(data, displayName: fileName.isEmpty ? nil : fileName)
+                        if let stored = state.packageData {
+                            let thumb = ImportThumbnailMaker.make(from: stored)
+                            state.addImportedPackage(data: stored, displayName: name, thumbnail: thumb)
+                        }
+                        state.selectedTab = 1
+                        state.showImportDetail = true
+                    }
+                }
         }
     }
 }

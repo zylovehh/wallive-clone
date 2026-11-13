@@ -179,6 +179,14 @@ struct ImportView: View {
                     state.showImportDetail = false
                 }
             }
+            .onAppear {
+                // 分享进来的包：冷启动时 Hello 页挡着，showImportDetail 置 true 时导入页还没出来，
+                // onChange 收不到；进页面时直接打开详情页（安装页），消费后清旗。
+                if state.showImportDetail {
+                    showDetail = true
+                    state.showImportDetail = false
+                }
+            }
             .alert("删除这张导入的壁纸包？", isPresented: Binding(
                 get: { pkgToDelete != nil },
                 set: { if !$0 { pkgToDelete = nil } }
