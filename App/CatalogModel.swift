@@ -175,8 +175,21 @@ final class CatalogStore: ObservableObject {
 
     /// 下载一张壁纸：存到沙盒并记入已下载，成功返回包数据（供安装页直接用）。
     /// 下载中、失败都不抛崩溃，失败只写 errorMessage。
+    /// 目录表里有的包只写了相对路径（wallpapers/xxx.tendies），没写完整地址，
+    /// 直接拿去下会失败（没域名），这里先拼成 Fastly 加速的完整地址再下。
+    /// 注意 wallpapersRawBase 末尾已经是 wallpapers/，相对路径开头的 wallpapers/ 要去掉再拼，
+    /// 不然会拼出两层 wallpapers。
     func download(_ item: CatalogItem) async -> Data? {
-        guard let url = URL(string: item.packageURL),
+        let packageAddress: String
+        if item.packageURL.hasPrefix("http") {
+            packageAddress = item.packageURL
+        } else {
+            let path = item.packageURL.hasPrefix("wallpapers/")
+                ? String(item.packageURL.dropFirst("wallpapers/".count))
+                : item.packageURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            packageAddress = Self.wallpapersRawBase + path
+        }
+        guard let url = URL(string: packageAddress),
               !downloadingIDs.contains(item.id) else { return nil }
         downloadingIDs.insert(item.id)
         defer { downloadingIDs.remove(item.id) }

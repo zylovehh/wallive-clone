@@ -1401,6 +1401,9 @@ private struct CatalogDetailView: View {
     @State private var showingRetag = false
     @State private var adminMessage = ""
     @State private var adminMessageIsError = false
+    /// 分享壁纸：下好的包写进临时文件后调系统分享单。
+    @State private var shareFileURL: URL?
+    @State private var sharing = false
 
     /// 目录表里最新那条（改名、换标签、换视频后都从这里读，不用打开时那份旧的）。
     private var live: CatalogItem {
@@ -1454,6 +1457,7 @@ private struct CatalogDetailView: View {
                         adminButton("换壁纸") { showingReplacePackage = true }
                         adminButton("换名字") { showingRename = true }
                         adminButton("换标签") { showingRetag = true }
+                        adminButton("分享壁纸") { shareWallpaper() }
                     }
                     Button("删除壁纸", action: onDelete)
                         .font(.subheadline.weight(.semibold))
@@ -1498,6 +1502,14 @@ private struct CatalogDetailView: View {
                 adminMessage = "标签已换好。"
                 adminMessageIsError = false
             })
+        }
+        .sheet(isPresented: Binding(
+            get: { shareFileURL != nil },
+            set: { if !$0 { shareFileURL = nil } }
+        )) {
+            if let shareFileURL {
+                ShareSheet(activityItems: [shareFileURL])
+            }
         }
         .onReceive(store.$items) { items in
             if !items.contains(where: { $0.id == item.id }) { dismiss() }
@@ -1568,6 +1580,41 @@ private struct CatalogDetailView: View {
             .modifier(LiquidGlassBar())
             .buttonStyle(PressBounceButtonStyle())
             .disabled(adminBusy)
+    }
+
+    /// 分享壁纸（管理员）：把这张的 .tendies 包下下来（已下好的直接拿缓存），
+    /// 写进临时文件调系统分享单。对方收到文件点开、选壁纸匣，就直接进安装页。
+    private func shareWallpaper() {
+        guard !sharing else { return }
+        Task {
+            sharing = true
+            defer { sharing = false }
+            var data: Data?
+            if store.isDownloaded(live),
+               let cached = try? Data(contentsOf: store.localURL(for: live)) {
+                data = cached
+            } else {
+                data = await store.download(live)
+            }
+            guard let data else {
+                adminMessage = "分享失败：壁纸包没下下来。"
+                adminMessageIsError = true
+                return
+            }
+            let base = live.title
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: "\\", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+            let fileName = (base.isEmpty ? live.id : base) + ".tendies"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+            do {
+                try data.write(to: url, options: .atomic)
+                shareFileURL = url
+            } catch {
+                adminMessage = "分享失败：\(error.localizedDescription)"
+                adminMessageIsError = true
+            }
+        }
     }
 
     /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封面播。
@@ -1918,4 +1965,26 @@ private struct RetagView: View {
         errorDetail = detail.isEmpty ? code : "\(code) | \(detail)"
         copiedError = false
     }
+}
+
+/// 系统分享单：把文件发出去（微信、隔空投送、存文件都行）。
+/// iPad 上分享单是浮层，没给锚点会闪退，这里锚到主窗口中间。
+private struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        if let popover = controller.popoverPresentationController,
+           let window = UIApplication.shared.connectedScenes
+               .compactMap { $0 as? UIWindowScene }
+               .flatMap { $0.windows }
+               .first(where: { $0.isKeyWindow }) {
+            popover.sourceView = window.rootViewController?.view
+            popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
