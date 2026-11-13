@@ -26,11 +26,12 @@ struct WalliveCloneApp: App {
                 .preferredColorScheme(.dark)
                 // 分享进来的壁纸包：别人手机上分享 .tendies 选壁纸匣，
                 // 直接进这张壁纸的安装页（导入详情页），不用再去导入库里找。
-                // 只认 .tendies / .wallive，别的格式不接。
+                // 认 .tendies / .wallive / .tendiesx / .tendiex 四种，
+                // 后两种和 .tendies 里面是一样的东西（zip 或 WALLIVE1 加密），只是换了个后缀。
                 .onOpenURL { url in
                     Task { @MainActor in
                         let ext = url.pathExtension.lowercased()
-                        guard ext == "tendies" || ext == "wallive" else { return }
+                        guard ext == "tendies" || ext == "wallive" || ext == "tendiesx" || ext == "tendiex" else { return }
                         let didAccess = url.startAccessingSecurityScopedResource()
                         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
                         guard let data = try? Data(contentsOf: url) else { return }
