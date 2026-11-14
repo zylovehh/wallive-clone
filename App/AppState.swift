@@ -57,6 +57,9 @@ final class AppState: ObservableObject {
     /// 包到了先等一等，视频到了再凑成一套；前后脚（10 秒内）到的才算同一批。
     private var pendingSharePackage: (data: Data, name: String, at: Date)?
     private var pendingShareVideo: (data: Data, name: String, at: Date)?
+    /// 最近一次发出去的分享上传（包 + 时间）：视频来晚了（包到了 2.5 秒后才到）
+    /// 也能凭这个找回来、补进已经打开的上传页，不会白白丢掉。
+    private var lastShareUpload: (tendiesData: Data, tendiesName: String, uuid: String?, at: Date)?
     /// 分享配对的等待窗口：包到了等视频最多 2.5 秒，没等到也走上传（不带视频）。
     private let sharePairWindow: TimeInterval = 2.5
     /// 导入库：所有导过的壁纸包（新的导进来不顶掉旧的），存在沙盒里，重启还在。
@@ -328,21 +331,34 @@ final class AppState: ObservableObject {
     /// 分享进来的一个预览视频（.mp4 / .mov）：先暂存，等包到了凑成一套。
     /// 包已经到了就直接凑套，不用等；前后脚（10 秒内）到的才算同一批，
     /// 隔太久的视频是上一批落下的，不跟新包乱配。
+    /// 来晚了也没事：上传页已经开了（没视频版），10 秒内到的视频会重新发一次
+    /// 上传请求，目录页收到后用新请求刷新上传页，视频就填进去了。
     func receiveSharedVideo(data: Data, name: String) {
         let now = Date()
         pendingShareVideo = (data: data, name: name, at: now)
-        guard let pending = pendingSharePackage,
-              now.timeIntervalSince(pending.at) <= 10 else { return }
-        guard let video = takeFreshPendingShareVideo(within: 10, of: now) else { return }
-        let uuid = packageInfo?.descriptorUUID
-        emitShareUpload(tendiesData: pending.data, tendiesName: pending.name, video: video, uuid: uuid)
+        if let pending = pendingSharePackage,
+           now.timeIntervalSince(pending.at) <= 10 {
+            guard let video = takeFreshPendingShareVideo(within: 10, of: now) else { return }
+            let uuid = packageInfo?.descriptorUUID
+            emitShareUpload(tendiesData: pending.data, tendiesName: pending.name, video: video, uuid: uuid)
+            return
+        }
+        // 视频比包晚到：包那边的 2.5 秒已经过了，上传页（没视频版）已经开了。
+        // 10 秒内到的还算同一批分享，把视频补进那次上传，重新发一次请求刷新上传页。
+        if let last = lastShareUpload,
+           now.timeIntervalSince(last.at) <= 10,
+           let video = takeFreshPendingShareVideo(within: 10, of: now) {
+            emitShareUpload(tendiesData: last.tendiesData, tendiesName: last.tendiesName, video: video, uuid: last.uuid)
+        }
     }
 
     /// 凑成一套发给目录页：包 + 视频 + 描述符 UUID。发完清掉暂存。
+    /// 同时记下这次上传，视频来晚了还能凭它补上去。
     private func emitShareUpload(tendiesData: Data, tendiesName: String,
                                  video: (data: Data, name: String)?, uuid: String?) {
         pendingSharePackage = nil
         pendingShareVideo = nil
+        lastShareUpload = (tendiesData: tendiesData, tendiesName: tendiesName, uuid: uuid, at: Date())
         sharedUploadRequest = ShareUploadRequest(
             tendiesName: tendiesName, tendiesData: tendiesData,
             videoData: video?.data, videoName: video?.name, descriptorUUID: uuid)
