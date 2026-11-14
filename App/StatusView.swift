@@ -34,6 +34,10 @@ struct StatusView: View {
     @StateObject private var vpn = VPNManager()
     @State private var host = "10.7.0.1"
     @State private var portText = "62078"
+    /// 手动查更新：有新版时这里有值，弹更新提示框。
+    @State private var remoteVersion: RemoteVersion?
+    /// 查完没新版时显示“已经是最新版了。”。
+    @State private var updateCheckMessage: String?
     // QQ 卡渐变文字：细体，从左往右流动循环。
 
     var body: some View {
@@ -162,6 +166,27 @@ struct StatusView: View {
                     Text("版本：\(AppBuild.tag)")
                         .font(.caption).foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                    // 手动查更新：点一下拉 version.json，有新版弹提示框、点“去下载”跳下载页。
+                    Button {
+                        Task {
+                            if let remote = await UpdateChecker.checkForUpdate() {
+                                remoteVersion = remote
+                            } else {
+                                updateCheckMessage = "已经是最新版了。"
+                            }
+                        }
+                    } label: {
+                        Text("检查更新")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 20).padding(.vertical, 10)
+                            .background(Capsule().fill(.white.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
+                    if let updateCheckMessage {
+                        Text(updateCheckMessage)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 .padding()
                 .background(AppBackgroundView())
@@ -173,6 +198,7 @@ struct StatusView: View {
                     vpn.autoConnectIfNeeded()
                 }
             }
+            .updateAlert(remote: $remoteVersion)
         }
     }
 }
