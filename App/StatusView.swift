@@ -109,6 +109,22 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
+                    // 导出入口：进二级页后先过管理员验证，才出现每条记录的导出按钮。
+                    NavigationLink(destination: ExportFlowView()) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up.on.square").foregroundStyle(.blue).font(.title3)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("导出已装壁纸").font(.headline)
+                                Text("管理员登录后，把已装壁纸导出为 .tendies").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
                     NavigationLink(destination: StatusLogPage()) {
                         HStack {
                             Image(systemName: "doc.text.magnifyingglass").foregroundStyle(.blue).font(.title3)
