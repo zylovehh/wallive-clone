@@ -34,6 +34,10 @@ struct CatalogView: View {
     @State private var adminMessage = ""
     @State private var adminMessageIsError = false
     @State private var showingAdd = false
+    /// 查看器分享进来的一套（包 + 视频）：去重后打开上传页，包和视频都已填好。
+    @State private var shareUpload: ShareUploadRequest?
+    /// 分享进来的包目录里已经有了：弹提示告诉管理员是哪张，不导入。
+    @State private var shareDuplicateTitle: String?
     @State private var itemToDelete: CatalogItem?
     @State private var videoReplaceItem: CatalogItem?
 
@@ -209,6 +213,27 @@ struct CatalogView: View {
             .sheet(isPresented: $showingAdd) {
                 AddWallpaperView(store: store, onAdded: { showingAdd = false })
             }
+            .sheet(item: $shareUpload) { request in
+                AddWallpaperView(store: store, onAdded: { shareUpload = nil },
+                                 prefilledTitle: request.tendiesName,
+                                 prefilledTendiesName: request.tendiesName,
+                                 prefilledTendiesData: request.tendiesData,
+                                 prefilledVideoData: request.videoData)
+            }
+            .alert("目录里已有这张壁纸", isPresented: Binding(
+                get: { shareDuplicateTitle != nil },
+                set: { if !$0 { shareDuplicateTitle = nil } }
+            )) {
+                Button("知道了", role: .cancel) { shareDuplicateTitle = nil }
+            } message: {
+                Text(shareDuplicateTitle.map { "「\($0)」已经在目录里了（包一样），不用再传。" } ?? "")
+            }
+            .onChange(of: state.sharedUploadRequest) { _, request in
+                if let request { handleShareUpload(request) }
+            }
+            .onAppear {
+                if let request = state.sharedUploadRequest { handleShareUpload(request) }
+            }
             .sheet(item: $videoReplaceItem) { item in
                 ReplaceVideoView(store: store, item: item, onDone: {
                     videoReplaceItem = nil
@@ -228,6 +253,19 @@ struct CatalogView: View {
                 Text("只从目录表里删掉这条，仓库里的文件还留着。")
             }
         }
+    }
+
+    /// 查看器分享进来的一套（包 + 视频）：先按包的描述符 UUID 去重，
+    /// 目录里已经有了就弹提示不导入；没重复就打开上传页，包和视频都已填好。
+    /// 老条目没记 UUID 时比不上，就直接开上传页（上传时再按包比一次）。
+    private func handleShareUpload(_ request: ShareUploadRequest) {
+        state.sharedUploadRequest = nil
+        if let uuid = request.descriptorUUID,
+           let dup = store.item(withUUID: uuid) {
+            shareDuplicateTitle = dup.title
+            return
+        }
+        shareUpload = request
     }
 
     // MARK: - iPhone 页
@@ -745,6 +783,19 @@ private struct AddWallpaperView: View {
     @Environment(\.dismiss) private var dismiss
     let onAdded: () -> Void
 
+    /// 分享预填：查看器分享进来时包、视频、标题都已填好，管理员只改标题和标签就传。
+    /// 平时走管理员“增加壁纸”时四个都是默认值，全部自己填。
+    init(store: CatalogStore, onAdded: @escaping () -> Void,
+         prefilledTitle: String = "", prefilledTendiesName: String = "",
+         prefilledTendiesData: Data? = nil, prefilledVideoData: Data? = nil) {
+        self.store = store
+        self.onAdded = onAdded
+        _title = State(initialValue: prefilledTitle)
+        _tendiesName = State(initialValue: prefilledTendiesName)
+        _tendiesData = State(initialValue: prefilledTendiesData)
+        _videoData = State(initialValue: prefilledVideoData)
+    }
+
     @State private var title = ""
     @State private var tags = "动漫"
     /// 壁纸给哪个设备：iphone 或 ipad，选 ipad 的传上去就进 iPad 页。
@@ -1027,6 +1078,13 @@ private struct AddWallpaperView: View {
             return
         }
         let id = CatalogStore.safeID(from: tendiesName)
+        // 按包去重：同名可能是不同包、不同名可能是同一个包，只比名字会认错。
+        // 包的描述符 UUID 才是包本身的身份，目录里已有同样 UUID 的就别再传。
+        let descriptorUUID = (try? TendiesPackage.inspect(packageData, zip: ZipFoundationAdapter()))?.descriptorUUID
+        if let descriptorUUID, let dup = store.item(withUUID: descriptorUUID) {
+            fail("目录里已有这张壁纸「\(dup.title)」（包一样），不用再传。", code: "E-305 增加壁纸-包已重复")
+            return
+        }
         guard !store.items.contains(where: { $0.id == id }) else {
             fail("已有同名壁纸，换个文件名。", code: "E-303 增加壁纸-条目重名")
             return
@@ -1060,7 +1118,7 @@ private struct AddWallpaperView: View {
                 thumbnailURL: thumbnailURL,
                 previewURL: previewURL,
                 packageURL: CatalogStore.wallpapersRawBase + "\(id).tendies",
-                pinned: false, downloads: 0, device: device)
+                pinned: false, downloads: 0, device: device, uuid: descriptorUUID)
             // 新传的放第一个非置顶位置（置顶后面、其他旧条目前面），不再追加到最后。
             var updatedItems = store.items
             let insertAt = updatedItems.firstIndex(where: { !$0.pinned }) ?? updatedItems.endIndex

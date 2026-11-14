@@ -24,9 +24,13 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
     let downloads: Int
     /// 壁纸给哪个设备：iphone 或 ipad，老目录表没有这字段时默认 iphone。
     let device: String
+    /// 包的描述符 UUID（包里的东西，不是名字）：分享/自动导入时按它去重，
+    /// 同名可能是不同包、不同名可能是同一个包，只比名字会认错。
+    /// 老目录表没有这字段时为 nil，比不上就跳过，不拦着用。
+    let uuid: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, tags, pinned, downloads, device
+        case id, title, tags, pinned, downloads, device, uuid
         case thumbnailURL = "thumbnail"
         case previewURL = "preview"
         case packageURL = "package"
@@ -44,10 +48,11 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         downloads = try c.decodeIfPresent(Int.self, forKey: .downloads) ?? 0
         device = try c.decodeIfPresent(String.self, forKey: .device) ?? "iphone"
+        uuid = try c.decodeIfPresent(String.self, forKey: .uuid)
     }
 
     /// 管理员改目录时直接拼一张新卡（改置顶、增加都用这个，不走解码）。
-    init(id: String, title: String, tags: [String], thumbnailURL: String, previewURL: String, packageURL: String, pinned: Bool, downloads: Int, device: String = "iphone") {
+    init(id: String, title: String, tags: [String], thumbnailURL: String, previewURL: String, packageURL: String, pinned: Bool, downloads: Int, device: String = "iphone", uuid: String? = nil) {
         self.id = id
         self.title = title
         self.tags = tags
@@ -57,6 +62,7 @@ struct CatalogItem: Identifiable, Decodable, Equatable {
         self.pinned = pinned
         self.downloads = downloads
         self.device = device
+        self.uuid = uuid
     }
 }
 
@@ -280,10 +286,14 @@ final class CatalogStore: ObservableObject {
     func pushCatalog(_ newItems: [CatalogItem], token: String) async throws {
         let (merged, knownSHA) = await mergedCatalog(newItems, token: token)
         let dicts: [[String: Any]] = merged.map { item in
-            ["id": item.id, "title": item.title, "tags": item.tags,
-             "thumbnail": item.thumbnailURL, "preview": item.previewURL,
-             "package": item.packageURL, "pinned": item.pinned, "downloads": item.downloads,
-             "device": item.device]
+            var dict: [String: Any] =
+                ["id": item.id, "title": item.title, "tags": item.tags,
+                 "thumbnail": item.thumbnailURL, "preview": item.previewURL,
+                 "package": item.packageURL, "pinned": item.pinned, "downloads": item.downloads,
+                 "device": item.device]
+            // 有描述符 UUID 才写进表：老条目没这字段就留空，不硬塞。
+            if let uuid = item.uuid { dict["uuid"] = uuid }
+            return dict
         }
         let data = try JSONSerialization.data(
             withJSONObject: ["items": dicts], options: [.withoutEscapingSlashes])
@@ -423,6 +433,12 @@ final class CatalogStore: ObservableObject {
             try await Task.sleep(nanoseconds: 900_000_000)
         }
         throw PushError.http(lastStatus)
+    }
+
+    /// 按包的描述符 UUID 找目录条目：同名可能是不同包、不同名可能是同一个包，
+    /// 只比名字会认错。条目没记 uuid 时比不上，返回 nil。
+    func item(withUUID uuid: String) -> CatalogItem? {
+        items.first { $0.uuid == uuid }
     }
 
     /// id 转安全串：只留字母数字、下划线、横线，其余换成下划线（增加壁纸时用文件名当 id）。

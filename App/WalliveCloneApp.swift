@@ -24,26 +24,26 @@ struct WalliveCloneApp: App {
                 // 没选中的安装方式、底部页签全是这么糊住的。深色下标题白字、
                 // 次要文字浅灰、玻璃按钮白字，全部可读；系统浅色/深色切换不再影响。
                 .preferredColorScheme(.dark)
-                // 分享进来的壁纸包：别人手机上分享 .tendies 选壁纸匣，
-                // 直接进这张壁纸的安装页（导入详情页），不用再去导入库里找。
-                // 认 .tendies / .wallive / .tendiesx / .tendiex 四种，
-                // 后两种和 .tendies 里面是一样的东西（zip 或 WALLIVE1 加密），只是换了个后缀。
+                // 分享进来的文件：包（.tendies / .wallive / .tendiesx / .tendiex）
+                // 和预览视频（.mp4 / .mov）。
+                // 查看器分享时包在前、视频在后，系统会逐个调 onOpenURL：
+                // 包到了先等 2.5 秒看视频来不来，来了就凑成一套去上传页（先按包去重），
+                // 没来就按老路走安装（进导入库、打开安装详情页）。
+                // 单独一个包（从文件 App 分享）没有视频，直接走安装。
                 .onOpenURL { url in
                     Task { @MainActor in
                         let ext = url.pathExtension.lowercased()
-                        guard ext == "tendies" || ext == "wallive" || ext == "tendiesx" || ext == "tendiex" else { return }
                         let didAccess = url.startAccessingSecurityScopedResource()
                         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
                         guard let data = try? Data(contentsOf: url) else { return }
                         let fileName = url.deletingPathExtension().lastPathComponent
                         let name = fileName.isEmpty ? url.lastPathComponent : fileName
-                        state.setPackage(data, displayName: fileName.isEmpty ? nil : fileName)
-                        if let stored = state.packageData {
-                            let thumb = ImportThumbnailMaker.make(from: stored)
-                            state.addImportedPackage(data: stored, displayName: name, thumbnail: thumb)
+                        if ext == "mp4" || ext == "mov" {
+                            state.receiveSharedVideo(data: data, name: name)
+                            return
                         }
-                        state.selectedTab = 1
-                        state.showImportDetail = true
+                        guard ext == "tendies" || ext == "wallive" || ext == "tendiesx" || ext == "tendiex" else { return }
+                        state.receiveSharedPackage(data: data, displayName: name)
                     }
                 }
         }

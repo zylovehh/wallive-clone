@@ -27,6 +27,18 @@ enum InstallChannel {
     case tunnel
 }
 
+/// 查看器分享进来的一套（包 + 预览视频）：目录页收到后先按包的描述符 UUID 去重，
+/// 没重复才打开上传页，包和视频都已填好，标题默认填包名、管理员自己改。
+struct ShareUploadRequest: Identifiable, Equatable {
+    let id = UUID()
+    let tendiesName: String
+    let tendiesData: Data
+    let videoData: Data
+    let videoName: String
+    /// 包的描述符 UUID（包里的东西）：去重就比它，不比名字。
+    let descriptorUUID: String?
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var selectedTab = 0
@@ -38,6 +50,14 @@ final class AppState: ObservableObject {
     @Published var packageError: String?
     /// 目录下载时带来的中文名（如“蜘蛛侠 2”）；直接导入文件时为空，详情页改显示清理过的包名。
     @Published var packageDisplayName: String?
+    /// 查看器分享进来的一套（包 + 预览视频）：目录页收到后去重、开上传页；目录页消费后自己置回 nil。
+    @Published var sharedUploadRequest: ShareUploadRequest?
+    /// 分享配对暂存：查看器先发包、后发视频（分享单里包在前、视频在后），
+    /// 包到了先等一等，视频到了再凑成一套；前后脚（10 秒内）到的才算同一批。
+    private var pendingSharePackage: (data: Data, name: String, at: Date)?
+    private var pendingShareVideo: (data: Data, name: String, at: Date)?
+    /// 分享配对的等待窗口：包到了等视频最多 2.5 秒，没等到就按老路走安装。
+    private let sharePairWindow: TimeInterval = 2.5
     /// 导入库：所有导过的壁纸包（新的导进来不顶掉旧的），存在沙盒里，重启还在。
     @Published var importedPackages: [ImportedPackage] = []
     private let importedDefaultsKey = "wallive-clone-imported-packages"
@@ -271,6 +291,73 @@ final class AppState: ObservableObject {
             thumbFileName: thumbFileName, size: data.count, importedAt: Date())
         importedPackages.insert(pkg, at: 0)
         saveImportedPackages()
+    }
+
+    /// 分享进来的一个包（.tendies / .wallive / .tendiesx / .tendiex）：
+    /// 先按老路设为当前包（加密、检查、后台备料），再等一等看有没有同批的视频。
+    /// 查看器分享时包在前、视频在后，包到了等 2.5 秒：视频到了就凑成一套发上传请求，
+    /// 没等到就按老路走安装（进导入库、打开安装详情页）。
+    func receiveSharedPackage(data: Data, displayName: String) {
+        setPackage(data, displayName: displayName)
+        // 先落到导入页：用户一分享过来就切到导入页，不干等。
+        selectedTab = 1
+        guard let stored = packageData else { return }
+        let uuid = packageInfo?.descriptorUUID
+        pendingSharePackage = (data: stored, name: displayName, at: Date())
+        // 视频可能已经先到了（极少数情况）：前后脚（10 秒内）到的才算同一批，直接凑套。
+        if let video = takeFreshPendingShareVideo(within: 10, of: Date()) {
+            emitShareUpload(tendiesData: stored, tendiesName: displayName, video: video, uuid: uuid)
+            return
+        }
+        // 等视频：2.5 秒内没等到，按老路走安装。
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let self else { return }
+            // 已经被视频那路凑成套了（pending 已清），就不用再走安装。
+            guard let pending = self.pendingSharePackage, pending.data == stored else { return }
+            self.pendingSharePackage = nil
+            self.pendingShareVideo = nil
+            let thumb = ImportThumbnailMaker.make(from: stored)
+            self.addImportedPackage(data: stored, displayName: displayName, thumbnail: thumb)
+            self.selectedTab = 1
+            self.showImportDetail = true
+        }
+    }
+
+    /// 分享进来的一个预览视频（.mp4 / .mov）：先暂存，等包到了凑成一套。
+    /// 包已经到了就直接凑套，不用等；前后脚（10 秒内）到的才算同一批，
+    /// 隔太久的视频是上一批落下的，不跟新包乱配。
+    func receiveSharedVideo(data: Data, name: String) {
+        let now = Date()
+        pendingShareVideo = (data: data, name: name, at: now)
+        guard let pending = pendingSharePackage,
+              now.timeIntervalSince(pending.at) <= 10 else { return }
+        guard let video = takeFreshPendingShareVideo(within: 10, of: now) else { return }
+        let uuid = packageInfo?.descriptorUUID
+        emitShareUpload(tendiesData: pending.data, tendiesName: pending.name, video: video, uuid: uuid)
+    }
+
+    /// 凑成一套发给目录页：包 + 视频 + 描述符 UUID。发完清掉暂存。
+    private func emitShareUpload(tendiesData: Data, tendiesName: String,
+                                 video: (data: Data, name: String), uuid: String?) {
+        pendingSharePackage = nil
+        pendingShareVideo = nil
+        sharedUploadRequest = ShareUploadRequest(
+            tendiesName: tendiesName, tendiesData: tendiesData,
+            videoData: video.data, videoName: video.name, descriptorUUID: uuid)
+        selectedTab = 0
+    }
+
+    /// 取暂存视频：within 秒内到的才算同一批分享，隔太久的视频是上一批落下的，
+    /// 丢掉返回 nil；取走后暂存清空。
+    private func takeFreshPendingShareVideo(within seconds: TimeInterval, of date: Date) -> (data: Data, name: String)? {
+        guard let video = pendingShareVideo,
+              date.timeIntervalSince(video.at) <= seconds else {
+            pendingShareVideo = nil
+            return nil
+        }
+        pendingShareVideo = nil
+        return (data: video.data, name: video.name)
     }
 
     /// 从导入库里删一张：沙盒里的包文件和封面一起删，记录也去掉（目录里的壁纸不受影响）。
