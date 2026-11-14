@@ -11,6 +11,14 @@ import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
 
+/// 共用/占位描述符 UUID：多张老包共用一个（回填实测：09E9B685… 有 8 张、99990000… 有 2 张），
+/// 单凭它认不出是不是同一张包，不能拿它判重；判重跳过它，只留名字那道。
+private func isSharedPlaceholderDescriptorUUID(_ uuid: String) -> Bool {
+    let u = uuid.uppercased()
+    return u == "09E9B685-7456-4856-9C10-47DF26B76C33"
+        || u == "99990000-0000-0000-0000-000000000000"
+}
+
 /// 发版角标：用于一眼确认手机上装的是哪个版本。tag 来自 BuildInfo，
 /// 编包时由 Codemagic 按“日期-构建号”盖戳（见 codemagic.yaml），
 /// 本地没盖戳时用 BuildInfo.swift 里的 fallback。
@@ -34,7 +42,7 @@ struct CatalogView: View {
     @State private var adminMessage = ""
     @State private var adminMessageIsError = false
     @State private var showingAdd = false
-    /// 查看器分享进来的一套（包 + 视频）：去重后打开上传页，包和视频都已填好。
+    /// 查看器分享进来的一套（包 + 视频，视频可空）：去重后打开上传页，包和视频都已填好。
     @State private var shareUpload: ShareUploadRequest?
     /// 分享进来的包目录里已经有了：弹提示告诉管理员是哪张，不导入。
     @State private var shareDuplicateTitle: String?
@@ -261,6 +269,7 @@ struct CatalogView: View {
     private func handleShareUpload(_ request: ShareUploadRequest) {
         state.sharedUploadRequest = nil
         if let uuid = request.descriptorUUID,
+           !isSharedPlaceholderDescriptorUUID(uuid),
            let dup = store.item(withUUID: uuid) {
             shareDuplicateTitle = dup.title
             return
@@ -1080,8 +1089,10 @@ private struct AddWallpaperView: View {
         let id = CatalogStore.safeID(from: tendiesName)
         // 按包去重：同名可能是不同包、不同名可能是同一个包，只比名字会认错。
         // 包的描述符 UUID 才是包本身的身份，目录里已有同样 UUID 的就别再传。
+        // （共用/占位 UUID 除外：多张老包共用一个，单凭它认不出，跳过这道。）
         let descriptorUUID = (try? TendiesPackage.inspect(packageData, zip: ZipFoundationAdapter()))?.descriptorUUID
-        if let descriptorUUID, let dup = store.item(withUUID: descriptorUUID) {
+        if let descriptorUUID, !isSharedPlaceholderDescriptorUUID(descriptorUUID),
+           let dup = store.item(withUUID: descriptorUUID) {
             fail("目录里已有这张壁纸「\(dup.title)」（包一样），不用再传。", code: "E-305 增加壁纸-包已重复")
             return
         }

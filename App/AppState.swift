@@ -33,8 +33,9 @@ struct ShareUploadRequest: Identifiable, Equatable {
     let id = UUID()
     let tendiesName: String
     let tendiesData: Data
-    let videoData: Data
-    let videoName: String
+    /// 预览视频（可空）：查看器没录视频、只发包时也照样开上传页，封面从包里自动抠。
+    let videoData: Data?
+    let videoName: String?
     /// 包的描述符 UUID（包里的东西）：去重就比它，不比名字。
     let descriptorUUID: String?
 }
@@ -56,7 +57,7 @@ final class AppState: ObservableObject {
     /// 包到了先等一等，视频到了再凑成一套；前后脚（10 秒内）到的才算同一批。
     private var pendingSharePackage: (data: Data, name: String, at: Date)?
     private var pendingShareVideo: (data: Data, name: String, at: Date)?
-    /// 分享配对的等待窗口：包到了等视频最多 2.5 秒，没等到就按老路走安装。
+    /// 分享配对的等待窗口：包到了等视频最多 2.5 秒，没等到也走上传（不带视频）。
     private let sharePairWindow: TimeInterval = 2.5
     /// 导入库：所有导过的壁纸包（新的导进来不顶掉旧的），存在沙盒里，重启还在。
     @Published var importedPackages: [ImportedPackage] = []
@@ -296,7 +297,7 @@ final class AppState: ObservableObject {
     /// 分享进来的一个包（.tendies / .wallive / .tendiesx / .tendiex）：
     /// 先按老路设为当前包（加密、检查、后台备料），再等一等看有没有同批的视频。
     /// 查看器分享时包在前、视频在后，包到了等 2.5 秒：视频到了就凑成一套发上传请求，
-    /// 没等到就按老路走安装（进导入库、打开安装详情页）。
+    /// 没等到也发上传请求（没视频也能传，封面从包里自动抠）；包同时进导入库，想装也能装。
     func receiveSharedPackage(data: Data, displayName: String) {
         setPackage(data, displayName: displayName)
         // 先落到导入页：用户一分享过来就切到导入页，不干等。
@@ -309,18 +310,18 @@ final class AppState: ObservableObject {
             emitShareUpload(tendiesData: stored, tendiesName: displayName, video: video, uuid: uuid)
             return
         }
-        // 等视频：2.5 秒内没等到，按老路走安装。
+        // 等视频：2.5 秒内没等到，照样走上传（没视频也能传，封面从包里自动抠）。
+        // 包同时存进导入库：上传页取消了，也能从导入页安装，老路不断。
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard let self else { return }
-            // 已经被视频那路凑成套了（pending 已清），就不用再走安装。
+            // 已经被视频那路凑成套了（pending 已清），就不用再走上传。
             guard let pending = self.pendingSharePackage, pending.data == stored else { return }
             self.pendingSharePackage = nil
             self.pendingShareVideo = nil
             let thumb = ImportThumbnailMaker.make(from: stored)
             self.addImportedPackage(data: stored, displayName: displayName, thumbnail: thumb)
-            self.selectedTab = 1
-            self.showImportDetail = true
+            self.emitShareUpload(tendiesData: stored, tendiesName: displayName, video: nil, uuid: uuid)
         }
     }
 
@@ -339,12 +340,12 @@ final class AppState: ObservableObject {
 
     /// 凑成一套发给目录页：包 + 视频 + 描述符 UUID。发完清掉暂存。
     private func emitShareUpload(tendiesData: Data, tendiesName: String,
-                                 video: (data: Data, name: String), uuid: String?) {
+                                 video: (data: Data, name: String)?, uuid: String?) {
         pendingSharePackage = nil
         pendingShareVideo = nil
         sharedUploadRequest = ShareUploadRequest(
             tendiesName: tendiesName, tendiesData: tendiesData,
-            videoData: video.data, videoName: video.name, descriptorUUID: uuid)
+            videoData: video?.data, videoName: video?.name, descriptorUUID: uuid)
         selectedTab = 0
     }
 
