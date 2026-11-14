@@ -1,5 +1,8 @@
 {
-  "tag": "V1.5 正式版",
-  "number": 1.5,
+  "tag": "V1.1",
+  "number": 1.1,
+  "viewer": {"tag": "V1.0", "number": 1.0},
+  "installer": {"tag": "V1.1", "number": 1.1},
+  "editor": {"tag": "V1.2", "number": 1.2},
   "url": "https://zylovehh.github.io/wallive-clone/"
 }
