@@ -99,6 +99,8 @@ struct ContentView: View {
     @EnvironmentObject private var state: AppState
     @StateObject private var accountStore = AccountStore()
     @State private var phase: AppPhase = .hello
+    /// 有新版时这里有值，弹更新提示框；没有新版是 nil。
+    @State private var remoteVersion: RemoteVersion?
 
     var body: some View {
         ZStack {
@@ -116,7 +118,11 @@ struct ContentView: View {
             withAnimation(.easeOut(duration: 0.5)) {
                 phase = .main
             }
+            // 进主界面后查一次更新：有新版就弹提示框，点“去下载”跳下载页。
+            // 没网、拉不到就当没新版，不打扰。
+            remoteVersion = await UpdateChecker.checkForUpdate()
         }
+        .updateAlert(remote: $remoteVersion)
     }
 
     private var mainTabs: some View {
