@@ -1,9 +1,14 @@
 import SwiftUI
+import UIKit
 
 /// 导出流程页：管理员门控 + 已装壁纸列表 + 逐条导出 + 系统分享。
+/// 支持扫描容器里全部壁纸（不限本 App 安装记录）。
 struct ExportFlowView: View {
     @EnvironmentObject private var state: AppState
     @State private var unlocked = false
+    @State private var scanning = false
+    @State private var scannedBackupDir: URL?
+    @State private var descriptors: [InstalledWallpaperExporter.DescriptorInfo] = []
     @State private var exportingUUID: String?
     @State private var exportedFileURL: URL?
     @State private var showShareSheet = false
@@ -31,11 +36,18 @@ struct ExportFlowView: View {
     private var exportList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if state.installHistory.isEmpty {
-                    Text("还没有成功安装的记录。")
-                        .foregroundStyle(.secondary).font(.caption)
-                } else {
-                    Text("共 \(state.installHistory.count) 条安装记录，点“导出”生成 .tendies 文件。")
+                // 扫描容器：备份一次，列出全部描述符，不只本 App 的安装记录。
+                Button {
+                    Task { await scan() }
+                } label: {
+                    Text(scanning ? "扫描中…" : (scannedBackupDir == nil ? "扫描容器里的壁纸" : "重新扫描"))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(GlassButtonStyle())
+                .disabled(scanning || exportingUUID != nil)
+
+                if !state.installHistory.isEmpty && descriptors.isEmpty && scannedBackupDir == nil {
+                    Text("共 \(state.installHistory.count) 条本 App 安装记录，点“导出”生成 .tendies 文件。")
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(state.installHistory, id: \.self) { uuid in
                         HStack(spacing: 10) {
@@ -53,6 +65,12 @@ struct ExportFlowView: View {
                         .padding(.vertical, 4)
                     }
                 }
+
+                if !descriptors.isEmpty {
+                    Text("共扫到 \(descriptors.count) 个壁纸（含其他 App 装入容器的）。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 if let exportingUUID {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -71,6 +89,25 @@ struct ExportFlowView: View {
         }
     }
 
+    private func scan() async {
+        guard state.hasPairingFile else {
+            errorMessage = "还没导入配对记录，先去“配对记录”页导入。"
+            return
+        }
+        exportingUUID = nil
+        errorMessage = nil
+        do {
+            let dir = try await InstalledWallpaperExporter.fetchBackup(
+                pairingPath: state.pairingFileURL.path,
+                log: { InstallLog.shared.append($0) })
+            scannedBackupDir = dir
+            descriptors = try InstalledWallpaperExporter.listAllDescriptors(backupDir: dir)
+        } catch {
+            errorMessage = "扫描失败：\(error.localizedDescription)"
+        }
+        scanning = false
+    }
+
     private func export(uuid: String) async {
         guard state.hasPairingFile else {
             errorMessage = "还没导入配对记录，先去“配对记录”页导入。"
@@ -79,9 +116,18 @@ struct ExportFlowView: View {
         exportingUUID = uuid
         errorMessage = nil
         do {
-            let result = try await InstalledWallpaperExporter.exportWallpaper(
+            let dir: URL
+            if let cached = scannedBackupDir {
+                dir = cached
+            } else {
+                dir = try await InstalledWallpaperExporter.fetchBackup(
+                    pairingPath: state.pairingFileURL.path,
+                    log: { InstallLog.shared.append($0) })
+                scannedBackupDir = dir
+            }
+            let result = try InstalledWallpaperExporter.exportWallpaper(
                 descriptorUUID: uuid,
-                pairingPath: state.pairingFileURL.path,
+                backupDir: dir,
                 log: { InstallLog.shared.append($0) })
             let url = try Self.writeToExports(result: result)
             exportedFileURL = url
@@ -102,4 +148,15 @@ struct ExportFlowView: View {
         try result.data.write(to: url, options: .atomic)
         return url
     }
+}
+
+/// UIActivityViewController 的 SwiftUI 包装（分享 .tendies 文件用）。
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

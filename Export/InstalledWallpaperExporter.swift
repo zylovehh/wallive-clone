@@ -18,39 +18,70 @@ enum InstalledWallpaperExporter {
         let fileCount: Int
     }
 
-    /// 取备份并重打指定描述符的 .tendies（明文 zip，调用方按需再加密）。
-    static func exportWallpaper(descriptorUUID: String, pairingPath: String,
-                                log: BackupLog = { _ in }) async throws -> ExportResult {
+    /// 容器里的一条描述符记录。
+    struct DescriptorInfo {
+        let uuid: String
+        /// 尽力而为的显示名（来自 providerInfo.plist），读不到为 nil。
+        let name: String?
+    }
+
+    /// 取一份新的 PosterBoard 备份，返回备份目录。
+    ///
+    /// 备份覆盖整个 PosterBoard 容器，拿到目录后可反复用于扫描和导出。
+    static func fetchBackup(pairingPath: String,
+                            log: BackupLog = { _ in }) async throws -> URL {
         let fm = FileManager.default
         let backupRoot = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("posterboard-export")
 
-        // 1. 拿 UDID：取表目录按 UDID 分（与 RestoreTest 同一做法）。
+        // 拿 UDID：取表目录按 UDID 分（与 RestoreTest 同一做法）。
         let info = try await BackupFFI.deviceInfo(
             pairingPath: pairingPath, log: log)
-        let udid = info.udid
 
-        // 2. 备好取表目录：旧目录先清掉，别让上次的残留混进来。
+        // 备好取表目录：旧目录先清掉，别让上次的残留混进来。
         try? fm.removeItem(at: backupRoot)
         try PosterBoardBackup.prepareFetchDirectory(
-            backupRoot: backupRoot, udid: udid, log: log)
+            backupRoot: backupRoot, udid: info.udid, log: log)
 
-        // 3. 跑备份：只备 PosterBoard 一个容器。
         let fetch = try await BackupFFI.fetchPosterBoard(
             pairingPath: pairingPath, backupRoot: backupRoot, log: log)
         guard fetch.keptFiles > 0 else {
             throw BackupError("备份跑完了，但一个文件都没留下来（手机可能没发 PosterBoard 的文件）。")
         }
+        return fetch.backupDir
+    }
 
-        // 4. 从备份清单里挑出该描述符的载荷行。
-        let manifest = ManifestStore(deviceDir: fetch.backupDir, log: log)
+    /// 扫描备份清单，列出容器里全部描述符——不限于本 App 装的。
+    /// 其他 App（如 Walllive）装进系统容器的壁纸也在其中：装进容器后
+    /// 系统要直接渲染，掏出来的是已可用的内容，与其原始下载包是否
+    /// 加密无关。
+    static func listAllDescriptors(backupDir: URL) throws -> [DescriptorInfo] {
+        let manifest = ManifestStore(deviceDir: backupDir)
+        let rows = try manifest.rows(relativePathLike: "%descriptors/%")
+
+        var order: [String] = []
+        var names: [String: String] = [:]
+        for row in rows {
+            guard let uuid = descriptorUUID(of: row.relativePath) else { continue }
+            if !order.contains(uuid) { order.append(uuid) }
+            if row.relativePath.lowercased().hasSuffix("descriptors/\(uuid)/providerinfo.plist"),
+               let url = row.payload, names[uuid] == nil {
+                names[uuid] = providerInfoName(url: url)
+            }
+        }
+        return order.map { DescriptorInfo(uuid: $0, name: names[$0]) }
+    }
+
+    /// 重打指定描述符的 .tendies（明文 zip，调用方按需再加密）。
+    static func exportWallpaper(descriptorUUID: String, backupDir: URL,
+                                log: BackupLog = { _ in }) throws -> ExportResult {
+        let manifest = ManifestStore(deviceDir: backupDir)
         let rows = try manifest.rows(relativePathLike: "%descriptors/\(descriptorUUID)%")
             .filter { $0.payload != nil }
         guard !rows.isEmpty else {
             throw BackupError("备份里没找到 \(descriptorUUID) 的载荷文件，可能尚未安装或已被清理。")
         }
 
-        // 5. 按包内路径重打 zip。
         let zip = ZipFoundationAdapter()
         var entries: [(path: String, data: Data)] = []
         for row in rows {
@@ -73,5 +104,27 @@ enum InstalledWallpaperExporter {
     private static func packagePath(of relativePath: String) -> String? {
         guard let range = relativePath.range(of: "descriptors/") else { return nil }
         return "descriptors/" + relativePath[range.upperBound...]
+    }
+}
+
+extension InstalledWallpaperExporter {
+    /// 从 relativePath 里抠出描述符 UUID（descriptors/ 后面那一段）。
+    fileprivate static func descriptorUUID(of relativePath: String) -> String? {
+        guard let range = relativePath.range(of: "descriptors/") else { return nil }
+        let rest = relativePath[range.upperBound...]
+        let first = rest.split(separator: "/").first.map(String.init) ?? ""
+        guard first.count == 36 else { return nil }
+        return first
+    }
+
+    /// 尽力而为：从 providerInfo.plist 里读展示名，读不出就返回 nil。
+    private static func providerInfoName(url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let dict = plist as? [String: Any] else { return nil }
+        for key in ["displayName", "name"] {
+            if let v = dict[key] as? String, !v.isEmpty { return v }
+        }
+        return nil
     }
 }
