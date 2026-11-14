@@ -43,7 +43,7 @@ struct ExportFlowView: View {
                     Text(scanning ? "扫描中…" : (scannedBackupDir == nil ? "扫描容器里的壁纸" : "重新扫描"))
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(GlassButtonStyle())
+                .buttonStyle(.bordered)
                 .disabled(scanning || exportingUUID != nil)
 
                 if !state.installHistory.isEmpty && descriptors.isEmpty && scannedBackupDir == nil {

@@ -16,6 +16,6 @@ struct GlassIconButton: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
         }
-        .buttonStyle(GlassButtonStyle())
+        .buttonStyle(.bordered)
     }
 }

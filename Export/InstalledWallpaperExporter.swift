@@ -29,7 +29,7 @@ enum InstalledWallpaperExporter {
     ///
     /// 备份覆盖整个 PosterBoard 容器，拿到目录后可反复用于扫描和导出。
     static func fetchBackup(pairingPath: String,
-                            log: BackupLog = { _ in }) async throws -> URL {
+                            log: @escaping BackupLog = { _ in }) async throws -> URL {
         let fm = FileManager.default
         let backupRoot = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("posterboard-export")
