@@ -5,7 +5,7 @@ import SwiftUI
 import UIKit
 
 /// 液态透明按钮样式：iOS 26+ 用透明系统玻璃，低版本回退半透明白胶囊。
-private struct GlassButtonStyle: ButtonStyle {
+struct GlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
@@ -490,7 +490,7 @@ private struct StatusVPNPage: View {
     }
 }
 
-private struct StatusPairingPage: View {
+struct StatusPairingPage: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.openURL) private var openURL
     @State private var showPairingPicker = false
