@@ -199,10 +199,18 @@ enum DirectStoreExporter {
 
     /// 直读一个描述符目录，按 .tendies 目录结构（descriptors/<UUID>/…）
     /// 重打。逃逸通行证覆盖读取全程，读完才释放。
+    /// V1.8 修：只读描述符目录不够。Wallive 装的壁纸内容可能不在描述符目录里，
+    /// 而是放在扩展目录下同名的 <UUID>.wallpaper/ 文件夹里，所以两个地方都翻，
+    /// 通行证也改吃扩展目录（两级都盖住）。打完包先验：包里必须有
+    /// .wallpaper/Wallpaper.plist，没有就报错，别静悄悄出一个只有描述符、
+    /// 装不了的 3KB 空包（V1.7 的毛病）。
     static func exportDescriptor(_ entry: DirectDescriptor,
                                  log: @escaping (String) -> Void = { _ in }) throws -> InstalledWallpaperExporter.ExportResult {
         let fm = FileManager.default
-        let escape = WorseQueryEscape.consume(target: entry.fullPath, requireWrite: false, log: log)
+        // 扩展目录：…/Extensions/<ext>（描述符目录往上两级），通行证吃这里，
+        // 描述符目录和同名 .wallpaper 文件夹都在它下面，都盖得住。
+        let extDir = ((entry.fullPath as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+        let escape = WorseQueryEscape.consume(target: extDir, requireWrite: false, log: log)
         guard let handle = escape.handle else {
             throw BackupError("直读导出没拿到通行证（\(escape.failReason ?? "原因见日志")）。")
         }
@@ -222,8 +230,31 @@ enum DirectStoreExporter {
             }
             items.append((path: "descriptors/\(entry.uuid)/" + sub, data: data))
         }
+        // 内容可能在扩展目录下同名的 <UUID>.wallpaper/ 里（不在描述符目录内），
+        // 翻出来一起打进包：包内按标准位置放
+        // descriptors/<UUID>/versions/1/contents/<UUID>.wallpaper/。
+        let siblingWallpaper = extDir + "/" + entry.uuid + ".wallpaper"
+        var sibIsDir: ObjCBool = false
+        if fm.fileExists(atPath: siblingWallpaper, isDirectory: &sibIsDir), sibIsDir.boolValue,
+           let sibEnum = fm.enumerator(atPath: siblingWallpaper) {
+            for case let sub as String in sibEnum {
+                let full = siblingWallpaper + "/" + sub
+                var subIsDir: ObjCBool = false
+                if fm.fileExists(atPath: full, isDirectory: &subIsDir), subIsDir.boolValue { continue }
+                guard let data = try? Data(contentsOf: URL(fileURLWithPath: full)) else {
+                    log("直读导出：读不了 \(entry.uuid).wallpaper/\(sub)，跳过。")
+                    continue
+                }
+                items.append((path: "descriptors/\(entry.uuid)/versions/1/contents/\(entry.uuid).wallpaper/" + sub, data: data))
+            }
+            log("直读导出：在扩展目录下找到同名内容文件夹 \(entry.uuid).wallpaper，已并进包。")
+        }
         guard !items.isEmpty else {
             throw BackupError("直读导出：这个描述符目录下读不到任何文件。")
+        }
+        // 验包：必须有壁纸内容，没有就别出空包。
+        guard items.contains(where: { $0.path.hasSuffix(".wallpaper/Wallpaper.plist") }) else {
+            throw BackupError("这个描述符下没有壁纸内容（可能是系统自带壁纸），导出的包只有描述符、装不了。")
         }
         let zip = ZipFoundationAdapter()
         let data = try zip.rebuild(entries: items)
