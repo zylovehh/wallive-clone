@@ -153,7 +153,7 @@ extension InstalledWallpaperExporter {
     }
 
     /// 尽力而为：从 providerInfo.plist 读展示名和环境类角色，读不到给默认值。
-    private static func providerInfoMeta(url: URL) -> (name: String?, isAmbient: Bool) {
+    fileprivate static func providerInfoMeta(url: URL) -> (name: String?, isAmbient: Bool) {
         guard let data = try? Data(contentsOf: url),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
               let dict = plist as? [String: Any] else { return (nil, false) }
