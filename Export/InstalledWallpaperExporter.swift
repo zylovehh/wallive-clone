@@ -303,6 +303,6 @@ enum DirectStoreExporter {
 
     /// 直读 providerInfo.plist 里的展示名和环境类角色（与备份路径口径一致）。
     private static func readDescriptorMeta(at descriptorDir: String) -> (name: String?, isAmbient: Bool) {
-        providerInfoMeta(url: URL(fileURLWithPath: descriptorDir + "/providerInfo.plist"))
+        InstalledWallpaperExporter.providerInfoMeta(url: URL(fileURLWithPath: descriptorDir + "/providerInfo.plist"))
     }
 }
