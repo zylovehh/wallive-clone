@@ -111,6 +111,7 @@ struct ExportFlowView: View {
             errorMessage = "还没导入配对记录，先去“配对记录”页导入。"
             return
         }
+        scanning = true
         exportingUUID = nil
         errorMessage = nil
         do {
