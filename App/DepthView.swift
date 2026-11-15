@@ -6,29 +6,6 @@ import Foundation
 import SwiftUI
 import UIKit
 
-/// 液态透明按钮样式：iOS 26+ 用透明系统玻璃，低版本回退半透明白胶囊。
-private struct GlassButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.subheadline.weight(.semibold))
-            // #02：玻璃胶囊是透明的，字色不写死就是系统默认色，浅色模式下黑字
-            // 在黑底上看不见（QQ 群“加入 QQ 群”按钮就是这么糊住的）。写死白字。
-            .foregroundStyle(.white)
-            .padding(.horizontal, 20).padding(.vertical, 10)
-            .background {
-                if #available(iOS 26.0, *) {
-                    Capsule().glassEffect(.clear)
-                } else {
-                    Capsule().fill(.white.opacity(0.06))
-                }
-            }
-            // 点动特效：点下缩一点、松开弹簧弹回，跟底部 dock 栏的点动一样。
-            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .animation(.spring(response: 0.35, dampingFraction: 0.55), value: configuration.isPressed)
-            .opacity(configuration.isPressed ? 0.7 : 1.0)
-    }
-}
-
 struct DepthView: View {
     @Environment(\.openURL) private var openURL
 
