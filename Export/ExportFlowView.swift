@@ -93,6 +93,27 @@ struct ExportFlowView: View {
                 if !descriptors.isEmpty {
                     Text("共扫到 \(descriptors.count) 个壁纸（含其他 App 装入容器的）。")
                         .font(.caption).foregroundStyle(.secondary)
+                    ForEach(descriptors, id: \.uuid) { info in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(info.name?.isEmpty == false ? info.name! : "未命名壁纸")
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                Text(info.uuid)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .textSelection(.enabled)
+                            }
+                            Spacer()
+                            GlassIconButton(title: "导出", systemImage: "square.and.arrow.up") {
+                                Task { await export(uuid: info.uuid) }
+                            }
+                            .disabled(exportingUUID != nil)
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
 
                 if let exportingUUID {
