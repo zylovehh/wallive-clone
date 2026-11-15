@@ -46,7 +46,13 @@ enum InstalledWallpaperExporter {
         let fetch = try await BackupFFI.fetchPosterBoard(
             pairingPath: pairingPath, backupRoot: backupRoot, log: log)
         guard fetch.keptFiles > 0 else {
-            throw BackupError("备份跑完了，但一个文件都没留下来（手机可能没发 PosterBoard 的文件）。")
+            if fetch.discardedFiles > 0 {
+                // 手机发了文件，但都被过滤规则丢掉：多半是备份内容结构与
+                // 预期的 PosterBoard 路径/命名对不上，需要诊断日志确认。
+                throw BackupError("备份收到了 \(fetch.discardedFiles) 个文件，但都不符合 PosterBoard 的识别规则，所以没保留下来。请到「状态 → 诊断日志」查看本次 install 日志，把日志发给我以便排查。")
+            }
+            // 手机一个文件都没发：多半是备份会话没真正建立或列表为空。
+            throw BackupError("备份跑完了，但手机一个文件都没发过来。请到「状态 → 诊断日志」查看本次 install 日志，把日志发给我以便排查。")
         }
         return fetch.backupDir
     }

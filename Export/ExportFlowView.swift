@@ -119,10 +119,26 @@ struct ExportFlowView: View {
         scanning = true
         exportingUUID = nil
         errorMessage = nil
+        // 优先直读商店（逃逸只读，27.0.1 备份 0 文件时的正路）；直读不成再退回备份兜底。
+        let (live, directFailReason) = DirectStoreExporter.scanStore(
+            log: { InstallLog.shared.append($0) })
+        if let live = live, !live.isEmpty {
+            directEntries = live
+            scannedBackupDir = nil
+            descriptors = live.map {
+                InstalledWallpaperExporter.DescriptorInfo(uuid: $0.uuid, name: $0.name)
+            }
+            scanning = false
+            return
+        }
+        if let note = directFailReason {
+            InstallLog.shared.append("直读导出不可用（\(note)），改走备份通道。")
+        }
         do {
             let dir = try await InstalledWallpaperExporter.fetchBackup(
                 pairingPath: state.pairingFileURL.path,
                 log: { InstallLog.shared.append($0) })
+            directEntries = nil
             scannedBackupDir = dir
             descriptors = try InstalledWallpaperExporter.listAllDescriptors(backupDir: dir)
         } catch {
