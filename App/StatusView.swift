@@ -38,6 +38,9 @@ struct StatusView: View {
     @State private var remoteVersion: RemoteVersion?
     /// 查完没新版时显示“已经是最新版了。”。
     @State private var updateCheckMessage: String?
+    /// 导出入口管理员门控：登录后才显示“导出已装壁纸”卡片。
+    @State private var adminUnlocked = false
+    @State private var showAdminLogin = false
     // QQ 卡渐变文字：细体，从左往右流动循环。
 
     var body: some View {
@@ -109,22 +112,48 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // 导出入口：进二级页后先过管理员验证，才出现每条记录的导出按钮。
-                    NavigationLink(destination: ExportFlowView()) {
-                        HStack {
-                            Image(systemName: "square.and.arrow.up.on.square").foregroundStyle(.blue).font(.title3)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("导出已装壁纸").font(.headline)
-                                Text("管理员登录后，把已装壁纸导出为 .tendies").font(.caption).foregroundStyle(.secondary)
+                    // 导出入口：管理员登录后才显示“导出已装壁纸”卡片，没登录只显示登录入口。
+                    if adminUnlocked {
+                        NavigationLink(destination: ExportFlowView(initiallyUnlocked: true)) {
+                            HStack {
+                                Image(systemName: "square.and.arrow.up.on.square").foregroundStyle(.blue).font(.title3)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("导出已装壁纸").font(.headline)
+                                    Text("把已装壁纸导出为 .tendies").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
+                            .padding()
+                            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                         }
-                        .padding()
-                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                        .buttonStyle(.plain)
+                    } else {
+                        Button {
+                            showAdminLogin = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "lock.shield").foregroundStyle(.blue).font(.title3)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("管理员登录").font(.headline)
+                                    Text("登录后才能看到并使用导出已装壁纸").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
+                            }
+                            .padding()
+                            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .sheet(isPresented: $showAdminLogin) {
+                            AdminLoginView {
+                                showAdminLogin = false
+                                adminUnlocked = true
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
                     NavigationLink(destination: StatusLogPage()) {
                         HStack {
                             Image(systemName: "doc.text.magnifyingglass").foregroundStyle(.blue).font(.title3)
