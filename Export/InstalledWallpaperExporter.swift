@@ -79,10 +79,14 @@ enum InstalledWallpaperExporter {
     }
 
     /// 重打指定描述符的 .tendies（明文 zip，调用方按需再加密）。
+    ///
+    /// V1.8 同口径修：不只查 descriptors 段——媒体可能以 UUID 命名放在
+    /// 扩展目录其他位置；打完包先验，没有壁纸内容就报错，别静默出一个
+    /// 只有描述符、装不了的空包（和直读路径一致）。
     static func exportWallpaper(descriptorUUID: String, backupDir: URL,
                                 log: BackupLog = { _ in }) throws -> ExportResult {
         let manifest = ManifestStore(deviceDir: backupDir)
-        let rows = try manifest.rows(relativePathLike: "%descriptors/\(descriptorUUID)%")
+        let rows = try manifest.rows(relativePathLike: "%\(descriptorUUID)%")
             .filter { $0.payload != nil }
         guard !rows.isEmpty else {
             throw BackupError("备份里没找到 \(descriptorUUID) 的载荷文件，可能尚未安装或已被清理。")
@@ -90,13 +94,26 @@ enum InstalledWallpaperExporter {
 
         let zip = ZipFoundationAdapter()
         var entries: [(path: String, data: Data)] = []
+        var outsideCount = 0
         for row in rows {
-            guard let pkgPath = packagePath(of: row.relativePath),
-                  let data = try? Data(contentsOf: row.payload!) else { continue }
-            entries.append((path: pkgPath, data: data))
+            guard let data = try? Data(contentsOf: row.payload!) else { continue }
+            if let pkgPath = packagePath(of: row.relativePath) {
+                entries.append((path: pkgPath, data: data))
+            } else if let mediaPath = mediaPackagePath(of: row.relativePath, uuid: descriptorUUID) {
+                // 描述符之外的媒体：按扩展根下的相对结构进包。
+                entries.append((path: mediaPath, data: data))
+                outsideCount += 1
+            }
+        }
+        if outsideCount > 0 {
+            log("export: 发现 \(outsideCount) 个描述符目录之外的关联文件，已按扩展根相对路径并入包。")
         }
         guard !entries.isEmpty else {
             throw BackupError("载荷文件都读不出来，导出失败。")
+        }
+        // 验包：必须有壁纸内容，没有就别出空包。
+        guard entries.contains(where: { $0.path.hasSuffix(".wallpaper/Wallpaper.plist") }) else {
+            throw BackupError("这个描述符下没有壁纸内容（可能是系统自带的环境壁纸），导出的包只有描述符、装不了。")
         }
         let data = try zip.rebuild(entries: entries)
         log("export: \(descriptorUUID) 导出完成，\(entries.count) 个文件，\(data.count) 字节。")
@@ -110,6 +127,15 @@ enum InstalledWallpaperExporter {
     private static func packagePath(of relativePath: String) -> String? {
         guard let range = relativePath.range(of: "descriptors/") else { return nil }
         return "descriptors/" + relativePath[range.upperBound...]
+    }
+
+    /// 描述符之外的媒体路径：`…/Extensions/<ext>/Assets/<UUID>/x` →
+    /// `Assets/<UUID>/x`（从 UUID 所在段的上一级起取相对路径）。
+    /// UUID 不作为独立路径段出现的行不进包，避免误收同名巧合文件。
+    private static func mediaPackagePath(of relativePath: String, uuid: String) -> String? {
+        let parts = relativePath.split(separator: "/").map(String.init)
+        guard let idx = parts.firstIndex(of: uuid), idx > 0 else { return nil }
+        return parts[(idx - 1)...].joined(separator: "/")
     }
 }
 
