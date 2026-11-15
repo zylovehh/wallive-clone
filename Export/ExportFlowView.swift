@@ -14,6 +14,8 @@ struct ExportFlowView: View {
     @State private var scanning = false
     @State private var scannedBackupDir: URL?
     @State private var descriptors: [InstalledWallpaperExporter.DescriptorInfo] = []
+    /// 直读扫到的描述符（scanStore 的结果）；导出时优先直读，不用备份。
+    @State private var directEntries: [DirectStoreExporter.DirectDescriptor]?
     @State private var exportingUUID: String?
     @State private var exportedFileURL: URL?
     @State private var showShareSheet = false
@@ -155,19 +157,26 @@ struct ExportFlowView: View {
         exportingUUID = uuid
         errorMessage = nil
         do {
-            let dir: URL
-            if let cached = scannedBackupDir {
-                dir = cached
+            let result: InstalledWallpaperExporter.ExportResult
+            if let entry = directEntries?.first(where: { $0.uuid == uuid }) {
+                // 直读导出：直接读容器，不走备份。
+                result = try DirectStoreExporter.exportDescriptor(
+                    entry, log: { InstallLog.shared.append($0) })
             } else {
-                dir = try await InstalledWallpaperExporter.fetchBackup(
-                    pairingPath: state.pairingFileURL.path,
+                let dir: URL
+                if let cached = scannedBackupDir {
+                    dir = cached
+                } else {
+                    dir = try await InstalledWallpaperExporter.fetchBackup(
+                        pairingPath: state.pairingFileURL.path,
+                        log: { InstallLog.shared.append($0) })
+                    scannedBackupDir = dir
+                }
+                result = try InstalledWallpaperExporter.exportWallpaper(
+                    descriptorUUID: uuid,
+                    backupDir: dir,
                     log: { InstallLog.shared.append($0) })
-                scannedBackupDir = dir
             }
-            let result = try InstalledWallpaperExporter.exportWallpaper(
-                descriptorUUID: uuid,
-                backupDir: dir,
-                log: { InstallLog.shared.append($0) })
             let url = try Self.writeToExports(result: result)
             exportedFileURL = url
             showShareSheet = true
