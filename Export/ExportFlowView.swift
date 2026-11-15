@@ -5,7 +5,12 @@ import UIKit
 /// 支持扫描容器里全部壁纸（不限本 App 安装记录）。
 struct ExportFlowView: View {
     @EnvironmentObject private var state: AppState
-    @State private var unlocked = false
+    @State private var unlocked: Bool
+
+    /// 状态页已通过管理员验证时直接进列表，不用再登一次；默认仍先过管理员验证。
+    init(initiallyUnlocked: Bool = false) {
+        _unlocked = State(initialValue: initiallyUnlocked)
+    }
     @State private var scanning = false
     @State private var scannedBackupDir: URL?
     @State private var descriptors: [InstalledWallpaperExporter.DescriptorInfo] = []
