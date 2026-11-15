@@ -23,6 +23,9 @@ enum InstalledWallpaperExporter {
         let uuid: String
         /// 尽力而为的显示名（来自 providerInfo.plist），读不到为 nil。
         let name: String?
+        /// providerInfo 的 role 标明是环境类壁纸（如世界时钟）时为 true，
+        /// 这类壁纸容器里本来就没有独立媒体，界面上单独标「系统」。
+        let isAmbient: Bool
     }
 
     /// 取一份新的 PosterBoard 备份，返回备份目录。
@@ -66,16 +69,16 @@ enum InstalledWallpaperExporter {
         let rows = try manifest.rows(relativePathLike: "%descriptors/%")
 
         var order: [String] = []
-        var names: [String: String] = [:]
+        var metas: [String: (name: String?, isAmbient: Bool)] = [:]
         for row in rows {
             guard let uuid = descriptorUUID(of: row.relativePath) else { continue }
             if !order.contains(uuid) { order.append(uuid) }
             if row.relativePath.lowercased().hasSuffix("descriptors/\(uuid)/providerinfo.plist"),
-               let url = row.payload, names[uuid] == nil {
-                names[uuid] = providerInfoName(url: url)
+               let url = row.payload, metas[uuid] == nil {
+                metas[uuid] = providerInfoMeta(url: url)
             }
         }
-        return order.map { DescriptorInfo(uuid: $0, name: names[$0]) }
+        return order.map { DescriptorInfo(uuid: $0, name: metas[$0]?.name, isAmbient: metas[$0]?.isAmbient ?? false) }
     }
 
     /// 重打指定描述符的 .tendies（明文 zip，调用方按需再加密）。
@@ -149,15 +152,18 @@ extension InstalledWallpaperExporter {
         return first
     }
 
-    /// 尽力而为：从 providerInfo.plist 里读展示名，读不出就返回 nil。
-    private static func providerInfoName(url: URL) -> String? {
+    /// 尽力而为：从 providerInfo.plist 读展示名和环境类角色，读不到给默认值。
+    private static func providerInfoMeta(url: URL) -> (name: String?, isAmbient: Bool) {
         guard let data = try? Data(contentsOf: url),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-              let dict = plist as? [String: Any] else { return nil }
+              let dict = plist as? [String: Any] else { return (nil, false) }
+        var name: String?
         for key in ["displayName", "name"] {
-            if let v = dict[key] as? String, !v.isEmpty { return v }
+            if let v = dict[key] as? String, !v.isEmpty { name = v; break }
         }
-        return nil
+        var isAmbient = false
+        if let role = dict["role"] as? String, role.contains("Ambient") { isAmbient = true }
+        return (name, isAmbient)
     }
 }
 
@@ -181,6 +187,8 @@ enum DirectStoreExporter {
         let fullPath: String
         /// providerInfo.plist 里读到的展示名，读不到为 nil。
         let name: String?
+        /// providerInfo 的 role 标明是环境类壁纸时为 true（如世界时钟）。
+        let isAmbient: Bool
     }
 
     /// 直读枚举商店全部版本/扩展下的描述符目录（只读逃逸）。
@@ -213,9 +221,10 @@ enum DirectStoreExporter {
                     let full = descRoot + "/" + d
                     var isDir: ObjCBool = false
                     guard fm.fileExists(atPath: full, isDirectory: &isDir), isDir.boolValue else { continue }
+                    let meta = readDescriptorMeta(at: full)
                     results.append(DirectDescriptor(uuid: d, extensionID: ext,
                                                     structureVersion: v, fullPath: full,
-                                                    name: readDescriptorName(at: full)))
+                                                    name: meta.name, isAmbient: meta.isAmbient))
                 }
             }
         }
@@ -292,15 +301,8 @@ enum DirectStoreExporter {
             fileCount: items.count)
     }
 
-    /// 直读 providerInfo.plist 里的展示名，读不出返回 nil（和备份路径口径一致）。
-    private static func readDescriptorName(at descriptorDir: String) -> String? {
-        let url = URL(fileURLWithPath: descriptorDir + "/providerInfo.plist")
-        guard let data = try? Data(contentsOf: url),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-              let dict = plist as? [String: Any] else { return nil }
-        for key in ["displayName", "name"] {
-            if let v = dict[key] as? String, !v.isEmpty { return v }
-        }
-        return nil
+    /// 直读 providerInfo.plist 里的展示名和环境类角色（与备份路径口径一致）。
+    private static func readDescriptorMeta(at descriptorDir: String) -> (name: String?, isAmbient: Bool) {
+        providerInfoMeta(url: URL(fileURLWithPath: descriptorDir + "/providerInfo.plist"))
     }
 }

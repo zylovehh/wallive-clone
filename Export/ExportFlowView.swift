@@ -3,6 +3,10 @@ import UIKit
 
 /// 导出流程页：管理员门控 + 已装壁纸列表 + 逐条导出 + 系统分享。
 /// 支持扫描容器里全部壁纸（不限本 App 安装记录）。
+///
+/// 命名口径（封面识别优先）：每行最前放封面缩略图，名称解析按
+/// 「用户备注 → 目录表匹配（按描述符编号）→ providerInfo 名称 → 未识别」，
+/// 环境类壁纸单独标「系统」。封面只用于识别，不影响导出包内容。
 struct ExportFlowView: View {
     @EnvironmentObject private var state: AppState
     @State private var unlocked: Bool
@@ -20,6 +24,16 @@ struct ExportFlowView: View {
     @State private var exportedFileURL: URL?
     @State private var showShareSheet = false
     @State private var errorMessage: String?
+    /// 用户备注：描述符 UUID → 名称，记在 UserDefaults，重启还在。
+    @State private var notes: [String: String] = [:]
+    @State private var editingUUID: String?
+    @State private var editingText = ""
+    @State private var showRename = false
+    @StateObject private var catalog = CatalogStore()
+    /// 本轮已拉过目录表的标志，防止重复拉取。
+    @State private var catalogFetched = false
+
+    private static let notesKey = "wallive-clone-wallpaper-notes"
 
     var body: some View {
         Group {
@@ -33,6 +47,23 @@ struct ExportFlowView: View {
             }
         }
         .navigationTitle("导出已装壁纸")
+        .task(id: unlocked) {
+            // 进列表后拉一次目录表：按描述符编号匹配封面和标题。
+            guard unlocked, !catalogFetched else { return }
+            catalogFetched = true
+            loadNotes()
+            await catalog.fetch()
+        }
+        .alert("重命名壁纸", isPresented: $showRename) {
+            TextField("名称", text: $editingText)
+            Button("保存") {
+                guard let uuid = editingUUID else { return }
+                setNote(editingText.isEmpty ? nil : editingText, for: uuid)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("留空并保存即清除手动命名。")
+        }
         .sheet(isPresented: $showShareSheet) {
             if let url = exportedFileURL {
                 ActivityShareSheet(items: [url])
@@ -74,19 +105,8 @@ struct ExportFlowView: View {
                     Text("共 \(state.installHistory.count) 条本 App 安装记录，点“导出”生成 .tendies 文件。")
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(state.installHistory, id: \.self) { uuid in
-                        HStack(spacing: 10) {
-                            Text(uuid)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                            Spacer()
-                            GlassIconButton(title: "导出", systemImage: "square.and.arrow.up") {
-                                Task { await export(uuid: uuid) }
-                            }
-                            .disabled(exportingUUID != nil)
-                        }
-                        .padding(.vertical, 4)
+                        descriptorRow(InstalledWallpaperExporter.DescriptorInfo(
+                            uuid: uuid, name: nil, isAmbient: false))
                     }
                 }
 
@@ -94,25 +114,7 @@ struct ExportFlowView: View {
                     Text("共扫到 \(descriptors.count) 个壁纸（含其他 App 装入容器的）。")
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(descriptors, id: \.uuid) { info in
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(info.name?.isEmpty == false ? info.name! : "未命名壁纸")
-                                    .font(.callout)
-                                    .lineLimit(1)
-                                Text(info.uuid)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .textSelection(.enabled)
-                            }
-                            Spacer()
-                            GlassIconButton(title: "导出", systemImage: "square.and.arrow.up") {
-                                Task { await export(uuid: info.uuid) }
-                            }
-                            .disabled(exportingUUID != nil)
-                        }
-                        .padding(.vertical, 4)
+                        descriptorRow(info)
                     }
                 }
 
@@ -129,10 +131,144 @@ struct ExportFlowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
+
+                Text("命名优先级：你的备注 → 目录匹配（封面+标题）→ 类型兜底。封面只用于识别，不影响导出包内容。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding()
         }
     }
+
+    // MARK: - 行渲染（封面识别优先）
+
+    private var placeholderThumb: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.06))
+            Image(systemName: "photo")
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 60, height: 60)
+    }
+
+    @ViewBuilder
+    private func thumbnail(for urlString: String?) -> some View {
+        if let urlString, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    placeholderThumb
+                }
+            }
+            .frame(width: 60, height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        } else {
+            placeholderThumb
+        }
+    }
+
+    /// 行渲染：封面在最前，名称按「备注 → 目录 → providerInfo → 未识别」解析。
+    private func descriptorRow(_ info: InstalledWallpaperExporter.DescriptorInfo) -> some View {
+        let resolved = resolvedName(for: info.uuid, providerName: info.name, isAmbient: info.isAmbient)
+        return HStack(spacing: 10) {
+            thumbnail(for: resolved.thumbURL)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text(resolved.name)
+                        .font(.callout)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                    if resolved.isSystem {
+                        Text("系统")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.yellow.opacity(0.5), lineWidth: 1))
+                    }
+                    // 改名降为辅助操作：小铅笔入口。
+                    Button {
+                        editingUUID = info.uuid
+                        editingText = notes[info.uuid] ?? ""
+                        showRename = true
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("重命名")
+                }
+                Text(resolved.source)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(info.uuid)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            GlassIconButton(title: "导出", systemImage: "square.and.arrow.up") {
+                Task { await export(uuid: info.uuid) }
+            }
+            .disabled(exportingUUID != nil)
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - 名称解析与备注
+
+    private struct ResolvedName {
+        let name: String
+        let source: String
+        let thumbURL: String?
+        let isSystem: Bool
+    }
+
+    /// 名称解析：你的备注 → 目录表匹配（按描述符编号）→ providerInfo 名称 → 未识别。
+    private func resolvedName(for uuid: String, providerName: String?, isAmbient: Bool) -> ResolvedName {
+        let note = notes[uuid]
+        let catalogItem = catalog.item(withUUID: uuid)
+        if let note, !note.isEmpty {
+            return ResolvedName(name: note, source: "你手动起的名字 · 目录未匹配",
+                                thumbURL: catalogItem?.thumbnailURL, isSystem: false)
+        }
+        if let item = catalogItem {
+            return ResolvedName(name: item.title, source: "目录匹配 · 封面已对应",
+                                thumbURL: item.thumbnailURL, isSystem: false)
+        }
+        if isAmbient {
+            return ResolvedName(name: "未识别 · 疑似系统壁纸", source: "环境类壁纸 · 容器中无独立媒体",
+                                thumbURL: nil, isSystem: true)
+        }
+        if let providerName, !providerName.isEmpty {
+            return ResolvedName(name: providerName, source: "来自壁纸自带信息", thumbURL: nil, isSystem: false)
+        }
+        return ResolvedName(name: "未识别壁纸", source: "暂无封面来源 · 可手动起名",
+                            thumbURL: nil, isSystem: false)
+    }
+
+    private func loadNotes() {
+        notes = UserDefaults.standard.dictionary(forKey: Self.notesKey) as? [String: String] ?? [:]
+    }
+
+    private func setNote(_ note: String?, for uuid: String) {
+        var all = notes
+        if let note, !note.isEmpty {
+            all[uuid] = note
+        } else {
+            all.removeValue(forKey: uuid)
+        }
+        notes = all
+        UserDefaults.standard.set(all, forKey: Self.notesKey)
+    }
+
+    // MARK: - 扫描与导出
 
     private func scan() async {
         guard state.hasPairingFile else {
@@ -149,7 +285,7 @@ struct ExportFlowView: View {
             directEntries = live
             scannedBackupDir = nil
             descriptors = live.map {
-                InstalledWallpaperExporter.DescriptorInfo(uuid: $0.uuid, name: $0.name)
+                InstalledWallpaperExporter.DescriptorInfo(uuid: $0.uuid, name: $0.name, isAmbient: $0.isAmbient)
             }
             scanning = false
             return
