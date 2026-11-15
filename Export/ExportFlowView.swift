@@ -46,6 +46,23 @@ struct ExportFlowView: View {
                 .buttonStyle(.bordered)
                 .disabled(scanning || exportingUUID != nil)
 
+                // 没配对时给出明确的下一步指引，别让用户卡在报错里。
+                if !state.hasPairingFile {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("导出前需要配对记录：先去「回环 VPN」页确认 VPN 已连接，再到「配对记录」页点“生成配对文件”或导入一份。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        NavigationLink(destination: StatusPairingPage()) {
+                            Text("去配对记录页").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(GlassButtonStyle())
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                }
+
                 if !state.installHistory.isEmpty && descriptors.isEmpty && scannedBackupDir == nil {
                     Text("共 \(state.installHistory.count) 条本 App 安装记录，点“导出”生成 .tendies 文件。")
                         .font(.caption).foregroundStyle(.secondary)
