@@ -2586,8 +2586,10 @@ struct BatchImportView: View {
                     thumbnailURL = previewURL
                 } else {
                     // 没视频：用行里生成的封面图，没有就现抠一张。
-                    let thumb = item.thumbData
-                        ?? await Task.detached { ImportThumbnailMaker.make(from: item.data) }.value
+                    var thumb = item.thumbData
+                    if thumb == nil {
+                        thumb = await Task.detached { ImportThumbnailMaker.make(from: item.data) }.value
+                    }
                     if let thumb {
                         try await store.uploadWallpaperFile(name: "\(id)-thumb.jpg", data: thumb, token: token,
                                                             progress: { value in Task { @MainActor in uploadProgress = value } })
