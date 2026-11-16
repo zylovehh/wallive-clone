@@ -1,6 +1,6 @@
 # 复刻版 App 壳：macOS runner 编译未签名 IPA（用户自己签名安装）。
-# 要求：把 wallive-clone/ 目录内容作为仓库根推送（本文件位于仓库根 .github/workflows/ 下）。
-# 产物：WalliveClone-unsigned-ipa（未签名 IPA），不含任何证书/签名步骤。
+# 要求：把 win97/ 目录内容作为仓库根推送（本文件位于仓库根 .github/workflows/ 下）。
+# 产物：Win97-unsigned-ipa（未签名 IPA），不含任何证书/签名步骤。
 
 name: 编译未签名 IPA
 
@@ -27,30 +27,30 @@ jobs:
       - name: Resolve package dependencies
         run: >
           xcodebuild -resolvePackageDependencies
-          -project WalliveClone.xcodeproj
-          -scheme WalliveClone
+          -project Win97.xcodeproj
+          -scheme Win97
 
       - name: Archive (unsigned)
         run: >
           xcodebuild archive
-          -project WalliveClone.xcodeproj
-          -scheme WalliveClone
+          -project Win97.xcodeproj
+          -scheme Win97
           -configuration Release
           -destination "generic/platform=iOS"
-          -archivePath build/WalliveClone.xcarchive
+          -archivePath build/Win97.xcarchive
           CODE_SIGNING_ALLOWED=NO
 
       - name: Package unsigned IPA
         run: |
-          APP_PATH="build/WalliveClone.xcarchive/Products/Applications/WalliveClone.app"
+          APP_PATH="build/Win97.xcarchive/Products/Applications/Win97.app"
           rm -rf Payload
           mkdir Payload
           cp -R "$APP_PATH" Payload/
-          ditto -c -k --sequesterRsrc --keepParent Payload WalliveClone-unsigned.ipa
-          ls -l WalliveClone-unsigned.ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload Win97-unsigned.ipa
+          ls -l Win97-unsigned.ipa
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WalliveClone-unsigned-ipa
-          path: WalliveClone-unsigned.ipa
+          name: Win97-unsigned-ipa
+          path: Win97-unsigned.ipa
