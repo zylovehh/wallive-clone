@@ -119,7 +119,7 @@ enum WorseQueryEscape {
     /// 连续失败这么多次就自动停用备用招，防止反复折腾系统
     private static let class2FuseLimit = 3
 
-    /// 备用招开关（默认关，和 Vellum 一个思路：有风险的功能要用户点头）。
+    /// 备用招开关（默认关，和描述符直写一个思路：有风险的功能要用户点头）。
     static var class2OptIn: Bool {
         get { UserDefaults.standard.bool(forKey: class2OptInKey) }
         set {

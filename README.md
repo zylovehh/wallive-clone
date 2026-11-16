@@ -1,4 +1,4 @@
-# wallive-clone（无广告复刻版 · 干净重写）
+# win97（无广告复刻版 · 干净重写）
 
 目标：复刻交互壁纸 App 的核心功能（包导入、深景包制作、安装），
 **不含任何广告 SDK、不含会员/解锁逻辑**。用户原话：“广告不用往里加”——
@@ -84,7 +84,7 @@
 | `PrivilegedLockdownTransport.swift` | PrivilegedTransport 的具体实现 + 工厂（运行时加载配对记录） | 已实现（代码层面；待真机验证） |
 | `InstallFlow.swift` | 端到端入口：inspect → stage → 建通道 → install → 返回 UUID | 已实现（代码层面走通） |
 | `App/`（8 个 SwiftUI 文件） | App 壳：入口、共享状态、ZIPFoundation 适配、文件选择器、导入/安装/深景/状态四页 | 已写出（未编译，见下） |
-| `WalliveClone.xcodeproj/` | Xcode 工程 + 共享 scheme（iOS 17+，SPM 接 ZIPFoundation） | 已写出（未编译） |
+| `Win97.xcodeproj/` | Xcode 工程 + 共享 scheme（iOS 17+，SPM 接 ZIPFoundation） | 已写出（未编译） |
 | `.github/workflows/build-unsigned-ipa.yml` | macOS runner 编译未签名 IPA 的工作流（仓库根推送后自动跑） | 已写出（未跑过） |
 | `Info.plist` | 手写清单：UTI com.mutually.wallpaper.tendies（.tendies/.wallive）、文档类型、方向 | 已写出 |
 
@@ -131,7 +131,7 @@
 - **zip 层**：`App/ZipFoundationAdapter.swift`，SPM 接 ZIPFoundation
   0.9+（读用内存 Archive + consumer 抽取；写用临时目录 + STORE），
   拒绝包外路径（防 Zip Slip）。
-- **包名**：工程里是占位 `com.example.walliveclone`，签名时用户自己定。
+- **包名**：工程里是占位 `com.example.win97`，签名时用户自己定。
   注意：若用户用固定 App ID wb.uniusc8301.tool7 的证书签，会与
   TendiesEditor 撞包名、装一个盖掉另一个。
 - **签名**：工程与工作流一律不签名（CODE_SIGNING_ALLOWED=NO），
@@ -139,7 +139,7 @@
 - **编译**：把本目录内容作为仓库根推送到 GitHub，
   `.github/workflows/build-unsigned-ipa.yml` 在 macOS runner 上
   跑 `xcodebuild archive`（未签名）→ 打包 IPA → 上传产物
-  WalliveClone-unsigned-ipa。runner 上若报 SPM 拉取失败，
+  Win97-unsigned-ipa。runner 上若报 SPM 拉取失败，
   先查网络/ZIPFoundation 版本，再动工程。
 - **结构校验（本机已做，Linux 无 Xcode）**：Info.plist 合法、UTI 与
   文档类型齐全；工作流 YAML 合法且无签名步骤；工程文件引用与磁盘

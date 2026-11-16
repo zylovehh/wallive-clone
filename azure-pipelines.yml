@@ -1,4 +1,4 @@
-# 壁纸匣（WalliveClone）未签名 IPA：Azure DevOps 免费管线。
+# 壁纸匣（Win97）未签名 IPA：Azure DevOps 免费管线。
 # 与 codemagic.yaml 同步骤：解 rust-core 包 → 装 Rust → 编 AirliftFFI →
 # 解包依赖 → 写版本号 → xcodebuild 归档（不签名）→ 打未签名 IPA。
 # 触发方式：手动跑（trigger: none），不随推送自动编，省免费分钟。
@@ -26,7 +26,7 @@ steps:
   - script: bash build-airlift.sh
     displayName: 'Build AirliftFFI (device only)'
 
-  - script: xcodebuild -resolvePackageDependencies -project WalliveClone.xcodeproj -scheme WalliveClone
+  - script: xcodebuild -resolvePackageDependencies -project Win97.xcodeproj -scheme Win97
     displayName: 'Resolve package dependencies'
 
   - script: |
@@ -37,20 +37,20 @@ steps:
       cat App/BuildInfo.swift
     displayName: 'Stamp build number into version tag'
 
-  - script: xcodebuild archive -project WalliveClone.xcodeproj -scheme WalliveClone -configuration Release -destination "generic/platform=iOS" -archivePath build/WalliveClone.xcarchive CODE_SIGNING_ALLOWED=NO
+  - script: xcodebuild archive -project Win97.xcodeproj -scheme Win97 -configuration Release -destination "generic/platform=iOS" -archivePath build/Win97.xcarchive CODE_SIGNING_ALLOWED=NO
     displayName: 'Archive (unsigned)'
 
   - script: |
-      APP_PATH="build/WalliveClone.xcarchive/Products/Applications/WalliveClone.app"
+      APP_PATH="build/Win97.xcarchive/Products/Applications/Win97.app"
       rm -rf Payload
       mkdir Payload
       cp -R "$APP_PATH" Payload/
-      ditto -c -k --sequesterRsrc --keepParent Payload WalliveClone-unsigned.ipa
-      ls -l WalliveClone-unsigned.ipa
+      ditto -c -k --sequesterRsrc --keepParent Payload Win97-unsigned.ipa
+      ls -l Win97-unsigned.ipa
     displayName: 'Package unsigned IPA'
 
   - task: PublishPipelineArtifact@1
     inputs:
-      targetPath: 'WalliveClone-unsigned.ipa'
-      artifact: 'WalliveClone-unsigned'
+      targetPath: 'Win97-unsigned.ipa'
+      artifact: 'Win97-unsigned'
     displayName: 'Publish unsigned IPA'

@@ -7,7 +7,10 @@ import SwiftUI
 import UIKit
 
 struct DepthView: View {
-    @Environment(\.openURL) private var openURL
+    /// 管理员门控：导出已装壁纸和批量导入都要先登录，登录后才显示入口。
+    @State private var adminUnlocked = false
+    @State private var showAdminLogin = false
+    @State private var showBatchImport = false
 
     var body: some View {
         NavigationStack {
@@ -32,46 +35,75 @@ struct DepthView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Spacer()
-                // QQ 群：收成一条细的——左边渐变文字、右边加入按钮，点哪边都进群领视频教程。
-                HStack(spacing: 10) {
-                    Button {
-                        if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                            openURL(url)
+                // 管理员区：导出已装壁纸 + 批量导入壁纸包（都从状态页搬过来 / 新加）。
+                if adminUnlocked {
+                    NavigationLink(destination: ExportFlowView(initiallyUnlocked: true)) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up.on.square").foregroundStyle(.blue).font(.title3)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("导出已装壁纸").font(.headline)
+                                Text("把已装壁纸导出为 .tendies").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
                         }
-                    } label: {
-                        TimelineView(.animation) { timeline in
-                            let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
-                            Text("进群领取视频教程")
-                                .font(.subheadline.weight(.light))
-                                .foregroundStyle(
-                                    // 无缝循环渐变：色序首尾是同一个青色、渐变正好跨一个字宽，
-                                    // phase 从 1 回到 0 时颜色完全接上，没有跳变；色阶排密一点，过渡更柔。
-                                    LinearGradient(
-                                        colors: [.cyan, .teal, .blue, .indigo, .purple, .pink, .red, .orange, .yellow, .green, .cyan],
-                                        startPoint: UnitPoint(x: phase, y: 0.5),
-                                        endPoint: UnitPoint(x: phase + 1, y: 0.5)
-                                    )
-                                )
-                        }
+                        .padding()
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    Spacer()
-                    Button("加入 QQ 群") {
-                        if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                            openURL(url)
+                    Button {
+                        showBatchImport = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.down.on.square").foregroundStyle(.blue).font(.title3)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("导入壁纸包").font(.headline)
+                                Text("选一个 ZIP，一次导入很多张壁纸包").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        showAdminLogin = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "lock.shield").foregroundStyle(.blue).font(.title3)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("管理员登录").font(.headline)
+                                Text("登录后才能用导出已装壁纸和批量导入").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showAdminLogin) {
+                        AdminLoginView {
+                            showAdminLogin = false
+                            adminUnlocked = true
                         }
                     }
-                    .buttonStyle(GlassButtonStyle())
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
+                Spacer()
+                // QQ 群：企鹅图标 + “壁纸交流群”流光字，点整条都进群。
+                QQGroupBar()
             }
             .padding()
             .background(AppBackgroundView())
             .navigationTitle("管理")
+            .sheet(isPresented: $showBatchImport) {
+                BatchImportView()
+            }
         }
     }
 }
@@ -135,11 +167,21 @@ private struct LiveDescriptor: Identifiable {
     var displayName: String {
         if let pkg = receipt?.packageName { return pkg }
         switch extensionID {
-        case PosterBoard.collectionsExtension: return "合集壁纸（未记账）"
-        case PosterBoard.mercuryExtension: return "Mercury 海报（未记账）"
-        case PosterBoard.photosExtension: return "照片海报（未记账）"
-        default: return "\(extensionID)（未记账）"
+        case PosterBoard.collectionsExtension: return "系统合集海报（未记账）"
+        case PosterBoard.mercuryExtension: return "系统环境海报（未记账）"
+        case PosterBoard.photosExtension: return "系统照片海报（未记账）"
+        default:
+            if extensionID.hasPrefix("com.apple.ClockPoster") { return "系统时钟海报（未记账）" }
+            return "\(extensionID)（未记账）"
         }
+    }
+
+    /// 系统自带扩展：时钟、环境（Mercury）、照片、合集。
+    var isSystemExtension: Bool {
+        extensionID.hasPrefix("com.apple.ClockPoster")
+            || extensionID == PosterBoard.mercuryExtension
+            || extensionID == PosterBoard.photosExtension
+            || extensionID == PosterBoard.collectionsExtension
     }
 }
 
@@ -253,7 +295,8 @@ private struct ReceiptManageView: View {
     @State private var detailEntry: LiveDescriptor?
     @State private var resultOK: Bool?
     // 折叠状态：收起哪组记哪组，退出本页自动全展开。
-    @State private var foldedGroups: Set<String> = []
+    // 系统组默认收起来：那组全是系统自带的，平时不用看，点标题再展开。
+    @State private var foldedGroups: Set<String> = ["systemish"]
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -519,9 +562,19 @@ private struct ReceiptManageView: View {
         SwipeToDelete(onDelete: { deleteTarget = entry }) {
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(entry.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        if entry.isSystemExtension {
+                            Text("系统")
+                                .font(.caption2)
+                                .foregroundStyle(.yellow)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.yellow.opacity(0.5), lineWidth: 1))
+                        }
+                    }
                     Text("\(String(entry.uuid.prefix(8)))… · 版本 \(entry.structureVersion)")
                         .font(.caption2).foregroundStyle(.secondary)
                 }

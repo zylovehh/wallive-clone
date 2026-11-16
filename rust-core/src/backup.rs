@@ -44,7 +44,7 @@ pub const POSTERBOARD_BUNDLE: &str = "com.apple.PosterBoard";
 /// list (see `fetch_posterboard_inner`); its files are never kept — the
 /// upload filter (`pb_should_preserve`) only keeps PosterBoard + backup
 /// metadata, so the companion entry carries its path only, no files.
-pub const INSTALLER_BUNDLE: &str = "com.example.walliveclone";
+pub const INSTALLER_BUNDLE: &str = "com.example.win97";
 
 /// Progress callback: percent in [0, 100], or -1 when unknown.
 /// `bytes_done`/`files_done` are cumulative across DL batches (the device

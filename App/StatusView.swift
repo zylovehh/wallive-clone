@@ -27,6 +27,54 @@ struct GlassButtonStyle: ButtonStyle {
     }
 }
 
+/// 流光渐变文字：彩虹色从左往右流动循环（原来 QQ 群条那套效果）。
+/// 色序首尾是同一个青色、渐变正好跨一个字宽，phase 从 1 回到 0 时颜色完全接上，没有跳变。
+struct FlowingGradientText: View {
+    let text: String
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
+            Text(text)
+                .font(.subheadline.weight(.light))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.cyan, .teal, .blue, .indigo, .purple, .pink, .red, .orange, .yellow, .green, .cyan],
+                        startPoint: UnitPoint(x: phase, y: 0.5),
+                        endPoint: UnitPoint(x: phase + 1, y: 0.5)
+                    )
+                )
+        }
+    }
+}
+
+/// QQ 群条：左边企鹅图标 + 右边“壁纸交流群”流光字，点整条都进群。
+struct QQGroupBar: View {
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Button {
+            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
+                openURL(url)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image("QqPenguin")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 28, height: 28)
+                Spacer()
+                FlowingGradientText(text: "壁纸交流群")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct StatusView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.openURL) private var openURL
@@ -38,9 +86,6 @@ struct StatusView: View {
     @State private var remoteVersion: RemoteVersion?
     /// 查完没新版时显示“已经是最新版了。”。
     @State private var updateCheckMessage: String?
-    /// 导出入口管理员门控：登录后才显示“导出已装壁纸”卡片。
-    @State private var adminUnlocked = false
-    @State private var showAdminLogin = false
     // QQ 卡渐变文字：细体，从左往右流动循环。
 
     var body: some View {
@@ -112,48 +157,7 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // 导出入口：管理员登录后才显示“导出已装壁纸”卡片，没登录只显示登录入口。
-                    if adminUnlocked {
-                        NavigationLink(destination: ExportFlowView(initiallyUnlocked: true)) {
-                            HStack {
-                                Image(systemName: "square.and.arrow.up.on.square").foregroundStyle(.blue).font(.title3)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("导出已装壁纸").font(.headline)
-                                    Text("把已装壁纸导出为 .tendies").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
-                            }
-                            .padding()
-                            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Button {
-                            showAdminLogin = true
-                        } label: {
-                            HStack {
-                                Image(systemName: "lock.shield").foregroundStyle(.blue).font(.title3)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("管理员登录").font(.headline)
-                                    Text("登录后才能看到并使用导出已装壁纸").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").foregroundStyle(.secondary).font(.caption)
-                            }
-                            .padding()
-                            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                        .sheet(isPresented: $showAdminLogin) {
-                            AdminLoginView {
-                                showAdminLogin = false
-                                adminUnlocked = true
-                            }
-                        }
-                    }
+                    // 导出已装壁纸已搬到管理页，这里不再放入口。
                     NavigationLink(destination: StatusLogPage()) {
                         HStack {
                             Image(systemName: "doc.text.magnifyingglass").foregroundStyle(.blue).font(.title3)
@@ -169,41 +173,8 @@ struct StatusView: View {
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    // QQ 群：收成一条细的——左边渐变文字、右边加入按钮，点哪边都进群领视频教程。
-                    HStack(spacing: 10) {
-                        Button {
-                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                openURL(url)
-                            }
-                        } label: {
-                            TimelineView(.animation) { timeline in
-                                let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
-                                Text("进群领取视频教程")
-                                    .font(.subheadline.weight(.light))
-                                    .foregroundStyle(
-                                        // 无缝循环渐变：色序首尾是同一个青色、渐变正好跨一个字宽，
-                                        // phase 从 1 回到 0 时颜色完全接上，没有跳变；色阶排密一点，过渡更柔。
-                                        LinearGradient(
-                                            colors: [.cyan, .teal, .blue, .indigo, .purple, .pink, .red, .orange, .yellow, .green, .cyan],
-                                            startPoint: UnitPoint(x: phase, y: 0.5),
-                                            endPoint: UnitPoint(x: phase + 1, y: 0.5)
-                                        )
-                                    )
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        Spacer()
-                        Button("加入 QQ 群") {
-                            if let url = URL(string: "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=153226955&card_type=group&source=qrcode") {
-                                openURL(url)
-                            }
-                        }
-                        .buttonStyle(GlassButtonStyle())
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
+                    // QQ 群：企鹅图标 + “壁纸交流群”流光字，点整条都进群。
+                    QQGroupBar()
                     Text("说明：本 App 不含广告、不含会员与解锁逻辑；配对记录文件只存在 App 沙盒内，不会发给任何人。")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -238,9 +209,7 @@ struct StatusView: View {
                 .navigationTitle("状态")
                 .onAppear {
                     state.refreshPairingStatus()
-                    // 进状态页自动连内置 VPN：第一次会弹系统提示点“允许”，
-                    // 允许后直接连上，不用再手动点开启。
-                    vpn.autoConnectIfNeeded()
+                    // 进状态页不再自动连内置 VPN：需要时去“回环 VPN”页手动点“开启内置 VPN”。
                 }
             }
             .updateAlert(remote: $remoteVersion)

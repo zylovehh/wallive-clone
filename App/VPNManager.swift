@@ -11,7 +11,7 @@ import NetworkExtension
 final class VPNManager: ObservableObject {
     /// 扩展包名 = 主程序包名 + .WalliveTunnel，重签后自动跟上，不写死。
     static var tunnelBundleID: String {
-        (Bundle.main.bundleIdentifier ?? "com.example.walliveclone") + ".WalliveTunnel"
+        (Bundle.main.bundleIdentifier ?? "com.example.win97") + ".WalliveTunnel"
     }
     static let tunnelServerAddress = "10.7.0.1"
 
@@ -65,7 +65,7 @@ final class VPNManager: ObservableObject {
                 manager = existing
             } else {
                 let fresh = NETunnelProviderManager()
-                fresh.localizedDescription = "WalliveClone 内置回环 VPN"
+                fresh.localizedDescription = "Win97 内置回环 VPN"
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = Self.tunnelBundleID
                 proto.serverAddress = Self.tunnelServerAddress

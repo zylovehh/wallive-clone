@@ -317,9 +317,9 @@ enum PosterBoardStore {
 
         // 角色行：归属和属性的外键都指着 posterRoles，空表里必须先有
         // 锁屏角色这一行，PosterBoard 查角色时才能找到，图库才认这张
-        // 壁纸。displayName 和 metadata 的值抄自 Vellum PC 自带的空白
-        // 底座表 builtin_base.sqlite3（证据：~/workspace/vellum-pc-re/
-        // analysis/builtin_base_rows.txt）：锁屏角色显示名是 "Lock Screen"，
+        // 壁纸。displayName 和 metadata 的值抄自 PC 备份工具自带的空白
+        // 底座表 builtin_base.sqlite3（证据：PC 备份工具的逆向记录
+        // builtin_base_rows.txt）：锁屏角色显示名是 "Lock Screen"，
         // posterMetadata 是 version=2、deviceClass=0。
         try run(db, "UPDATE posterRoles SET displayName = ? WHERE roleIdentifier = ?",
                 [.text("Lock Screen"), .text("PRPosterRoleLockScreen")])
@@ -328,7 +328,7 @@ enum PosterBoardStore {
                     [.text("PRPosterRoleLockScreen"), .text("Lock Screen")])
         }
 
-        // 元数据行：真表里有 version=2、deviceClass=0 两行（同上，Vellum PC
+        // 元数据行：真表里有 version=2、deviceClass=0 两行（同上，PC 备份工具的
         // builtin_base.sqlite3）。空表里没有这两行时也补上。
         try run(db, "UPDATE posterMetadata SET value = ? WHERE key = ?",
                 [.text("2"), .text("version")])

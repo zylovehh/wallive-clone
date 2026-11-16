@@ -103,7 +103,7 @@ public enum DepthPackageBuilder {
     /// 给已解包的描述符目录补深景结构（V1.13，无配对装包路用）。
     /// 1. Floating .ca 目录加 Clownfish_ 前缀（有 Floating 层才改），同步 Wallpaper.plist；
     /// 2. versions/1/ 补 renderingConfiguration.plist（总是写，已存在则覆盖）——
-    ///    系统渲染壁纸前要读这份配置，缺了就是黑卡片。Vellum 装包时同样补：
+    ///    系统渲染壁纸前要读这份配置，缺了就是黑卡片。描述符直写装包时同样补：
     ///    静态包没有浮动层也照补 282B 声明，所以配置永远写。
     /// 调用时机：装包路的改 id/改名都做完之后（保证清单值和目录名一致）。
     public static func applyingDepthConfiguration(toDescriptorDir dir: URL,

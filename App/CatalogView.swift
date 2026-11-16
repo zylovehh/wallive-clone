@@ -6,7 +6,9 @@
 // 管理员登入后卡片上有置顶图钉；点卡片进详情页，管理区里有加视频/换视频、换壁纸、换名字、换标签、删除壁纸（推到公开目录仓库，靠本机钥匙串里的 GitHub 钥匙）。
 
 import SwiftUI
+import AVFoundation
 import AVKit
+import CryptoKit
 import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
@@ -17,6 +19,222 @@ private func isSharedPlaceholderDescriptorUUID(_ uuid: String) -> Bool {
     let u = uuid.uppercased()
     return u == "09E9B685-7456-4856-9C10-47DF26B76C33"
         || u == "99990000-0000-0000-0000-000000000000"
+}
+
+/// 兆字节文案：上传压完告诉用户“从 X MB 到 Y MB”用。
+private func formatMB(_ bytes: Int) -> String {
+    String(format: "%.1f MB", Double(bytes) / 1_000_000.0)
+}
+
+/// 预览视频压缩：上传前先压到 1-2M 码率，8M 的视频压完明显变小。
+/// 用 AVAssetExportSession 的中画质（约 1-2M 码率），输出 MP4；
+/// 压完没变小或失败就返回 nil，调用方用原视频。
+/// 输入是视频数据（相册读出来的），先写临时文件再压，压完读回数据。
+enum VideoCompressor {
+    static func compressToPreview(_ data: Data) async -> Data? {
+        // 已经很小的视频不用压。
+        guard data.count > 1_000_000 else { return nil }
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+        let src = tmp.appendingPathComponent("preview-src-\(UUID().uuidString).mp4")
+        let dst = tmp.appendingPathComponent("preview-compressed-\(UUID().uuidString).mp4")
+        defer {
+            try? fm.removeItem(at: src)
+            try? fm.removeItem(at: dst)
+        }
+        do {
+            try data.write(to: src)
+        } catch { return nil }
+        let asset = AVURLAsset(url: src)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else { return nil }
+        session.outputURL = dst
+        session.outputFileType = .mp4
+        session.shouldOptimizeForNetworkUse = true
+        await session.export()
+        guard session.status == .completed,
+              let out = try? Data(contentsOf: dst),
+              out.count < data.count else { return nil }
+        return out
+    }
+}
+
+/// 上传包自动压小：包超过 20M 时，把包里的 PNG 图无损重压一遍
+/// （像素和尺寸不变、文件名不变，.ca 引用不断），压到 20M 以内再传。
+/// ZIP 重压省 0MB（PNG 本来就压过），只重压 PNG 才有效。
+/// WALLIVE1 加密包先解密、压完再加密回去，格式不变。
+/// 返回（压后的包，提示文案）；不用压或压不动时返回原包、提示为 nil。
+enum PackageCompressor {
+    static let limitBytes = 20 * 1_000_000
+
+    static func compressIfOversized(_ data: Data) -> (data: Data, note: String?) {
+        guard data.count > limitBytes else { return (data, nil) }
+        let zip = ZipFoundationAdapter()
+        let wasEncrypted = Wallive1Crypto.isWallive1(data)
+        let plain: Data
+        if wasEncrypted {
+            guard let decrypted = try? Wallive1Crypto.decrypt(data) else { return (data, nil) }
+            plain = decrypted
+        } else {
+            plain = data
+        }
+        guard let entries = try? zip.listEntries(in: plain) else { return (data, nil) }
+        var out: [(path: String, data: Data)] = []
+        var changed = false
+        for path in entries {
+            guard let entryData = try? zip.readEntry(path, in: plain) else { continue }
+            // 只重压 PNG：每张只留更小的那份，万一重压反而变大就留原图。
+            if (path as NSString).pathExtension.lowercased() == "png",
+               let image = UIImage(data: entryData),
+               let reencoded = image.pngData(),
+               reencoded.count < entryData.count {
+                out.append((path, reencoded))
+                changed = true
+            } else {
+                out.append((path, entryData))
+            }
+        }
+        guard changed, let rebuilt = try? zip.rebuild(entries: out) else { return (data, nil) }
+        let final: Data
+        if wasEncrypted {
+            guard let encrypted = try? Wallive1Crypto.encrypt(rebuilt) else { return (data, nil) }
+            final = encrypted
+        } else {
+            final = rebuilt
+        }
+        guard final.count < data.count else { return (data, nil) }
+        let note = "包已自动压小：从 \(formatMB(data.count)) 压到 \(formatMB(final.count))。"
+        return (final, note)
+    }
+}
+
+/// 读包里 .ca 画布尺寸：给 iPad 上传检查用。
+/// 从 main.caml 里找根图层的 bounds="x y w h"（根图层是文件里第一个图层，
+/// 它的 bounds 就是画布尺寸）；读不到（老包没 .ca、解析失败）返回 nil，调用方不拦。
+enum PackageCanvas {
+    static func size(of packageData: Data) -> CGSize? {
+        let zip = ZipFoundationAdapter()
+        let plain: Data
+        if Wallive1Crypto.isWallive1(packageData) {
+            guard let decrypted = try? Wallive1Crypto.decrypt(packageData) else { return nil }
+            plain = decrypted
+        } else {
+            plain = packageData
+        }
+        guard let entries = try? zip.listEntries(in: plain) else { return nil }
+        // main.caml 优先 versions/1，其次 versions/0，再退全包。
+        let main = entries.first { $0.lowercased().contains("versions/1") && $0.lowercased().hasSuffix("main.caml") }
+            ?? entries.first { $0.lowercased().contains("versions/0") && $0.lowercased().hasSuffix("main.caml") }
+            ?? entries.first { $0.lowercased().hasSuffix("main.caml") }
+        guard let main, let data = try? zip.readEntry(main, in: plain),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        let pattern = "bounds=\"([0-9.]+) ([0-9.]+) ([0-9.]+) ([0-9.]+)\""
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges == 5,
+              let wRange = Range(match.range(at: 3), in: text),
+              let hRange = Range(match.range(at: 4), in: text),
+              let w = Double(text[wRange]), let h = Double(text[hRange]),
+              w > 0, h > 0 else { return nil }
+        return CGSize(width: w, height: h)
+    }
+
+    /// 是不是 iPhone 细长尺寸（宽高比 < 0.7，如 428×926、720×1280）。
+    static func isIPhoneTall(_ size: CGSize) -> Bool {
+        size.height > 0 && size.width / size.height < 0.7
+    }
+}
+
+/// 封面图本地缓存：只缓存 JPG 静态封面，上限 50MB，满了删最旧的；视频不缓存。
+/// 键是封面地址的 SHA256，文件名与地址一一对应。
+final class ThumbnailDiskCache {
+    static let shared = ThumbnailDiskCache()
+    private let dir: URL
+    private let queue = DispatchQueue(label: "thumbnail-disk-cache")
+    private let maxBytes: Int64 = 50 * 1024 * 1024
+
+    private init() {
+        dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("cover-thumbs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    private func fileURL(for urlString: String) -> URL {
+        let digest = SHA256.hash(data: Data(urlString.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined()
+        return dir.appendingPathComponent(name + ".jpg")
+    }
+
+    /// 读缓存：命中返回数据（并刷新修改时间，最近用过的最后删），没命中返回 nil。
+    func data(for urlString: String) -> Data? {
+        queue.sync {
+            let url = fileURL(for: urlString)
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+            return data
+        }
+    }
+
+    /// 写缓存并清超量：写完后按修改时间从旧到新删，直到 50MB 以内。
+    func store(_ data: Data, for urlString: String) {
+        queue.async {
+            let url = self.fileURL(for: urlString)
+            try? data.write(to: url, options: .atomic)
+            self.enforceLimit()
+        }
+    }
+
+    private func enforceLimit() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
+        var total: Int64 = 0
+        var sized: [(url: URL, size: Int64, date: Date)] = []
+        for url in files {
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+                  let size = values.fileSize, let date = values.contentModificationDate else { continue }
+            total += Int64(size)
+            sized.append((url, Int64(size), date))
+        }
+        guard total > maxBytes else { return }
+        // 最旧的先删。
+        for item in sized.sorted(by: { $0.date < $1.date }) {
+            try? fm.removeItem(at: item.url)
+            total -= item.size
+            if total <= maxBytes { break }
+        }
+    }
+}
+
+/// 封面图：先读本地磁盘缓存，命中直接显示；没命中下载后存缓存再显示。
+/// 只给 JPG 静态封面用，视频封面不走这里。
+private struct CachedCoverImage: View {
+    let urlString: String
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(.quaternary)
+                    .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+            }
+        }
+        .task(id: urlString) {
+            if let data = ThumbnailDiskCache.shared.data(for: urlString),
+               let img = UIImage(data: data) {
+                image = img
+                return
+            }
+            guard let url = URL(string: urlString),
+                  let (data, response) = try? await URLSession.shared.data(from: url),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let img = UIImage(data: data) else { return }
+            ThumbnailDiskCache.shared.store(data, for: urlString)
+            image = img
+        }
+    }
 }
 
 /// 发版角标：用于一眼确认手机上装的是哪个版本。tag 来自 BuildInfo，
@@ -348,7 +566,6 @@ struct CatalogView: View {
                                     favorites: favorites,
                                     isAdmin: accountStore.currentUser != nil,
                                     adminBusy: adminBusy,
-                                    onPreview: { previewItem = item },
                                     onDownload: { await downloadAndInstall(item) },
                                     onTogglePin: { Task { await adminTogglePin(item) } }
                                 )
@@ -473,7 +690,6 @@ struct CatalogView: View {
                                     favorites: favorites,
                                     isAdmin: accountStore.currentUser != nil,
                                     adminBusy: adminBusy,
-                                    onPreview: { previewItem = item },
                                     onDownload: { await downloadAndInstall(item) },
                                     onTogglePin: { Task { await adminTogglePin(item) } }
                                 )
@@ -526,11 +742,12 @@ private struct CatalogCard: View {
     @ObservedObject var favorites: FavoritesStore
     let isAdmin: Bool
     let adminBusy: Bool
-    let onPreview: () -> Void
     let onDownload: () async -> Void
     let onTogglePin: () -> Void
+    /// 卡片里点播状态：默认只显示静态封面，点了播放键才播视频。
+    @State private var playingVideo = false
 
-    /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封��播。
+    /// 封面视频：封面地址本身是视频就用它；否则预览是视频的也直接拿预览当封面播。
     private var coverVideoURL: URL? {
         if Self.isVideoPath(item.thumbnailURL), let url = URL(string: item.thumbnailURL) {
             return url
@@ -549,18 +766,15 @@ private struct CatalogCard: View {
             .aspectRatio(9 / 19.5, contentMode: .fit)
             .overlay {
                 ZStack {
-                    if let url = coverVideoURL {
-                        // 有视频的：卡片里静音循环播放当封面，对齐原版样式。
+                    if playingVideo, let url = coverVideoURL {
+                        // 点了播放键：卡片里静音循环播预览视频。
                         InlineVideoCover(url: url)
-                    } else if let url = URL(string: item.thumbnailURL) {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().scaledToFill()
-                            default:
-                                placeholder
-                            }
-                        }
+                    } else if !Self.isVideoPath(item.thumbnailURL), !item.thumbnailURL.isEmpty {
+                        // 默认显示 JPG 静态封面（走本地磁盘缓存），不自动播视频。
+                        CachedCoverImage(urlString: item.thumbnailURL)
+                    } else if let url = coverVideoURL {
+                        // 封面本身就是视频、没有静态 JPG 可显示时，照旧播视频当封面。
+                        InlineVideoCover(url: url)
                     } else {
                         placeholder
                     }
@@ -577,10 +791,12 @@ private struct CatalogCard: View {
         }
         .overlay(alignment: .top) {
             HStack {
-                // 没给视频的静态壁纸不显示播放键（静态预览图就是缩略图本身）。
-                if !item.previewURL.isEmpty, URL(string: item.previewURL) != nil {
-                    Button(action: onPreview) {
-                        Image(systemName: "play.fill")
+                // 有视频的显示播放键：点一下在卡片里播，再点停住（默认只显示静态封面）。
+                if coverVideoURL != nil {
+                    Button {
+                        playingVideo.toggle()
+                    } label: {
+                        Image(systemName: playingVideo ? "pause.fill" : "play.fill")
                             .foregroundStyle(.white)
                     }
                     .buttonStyle(RoundGlassButtonStyle())
@@ -828,6 +1044,8 @@ private struct AddWallpaperView: View {
     @State private var busy = false
     // 上传进度（0~1）；nil 表示当前不在上传（读文件/推表阶段可能暂时没有）。
     @State private var uploadProgress: Double?
+    // 自动压缩提示：包/视频压完告诉用户“从 X MB 到 Y MB”，上传时显示在进度下面。
+    @State private var compressNote = ""
 
     var body: some View {
         NavigationStack {
@@ -881,6 +1099,11 @@ private struct AddWallpaperView: View {
                             .progressViewStyle(.linear)
                         Text("正在上传 \(Int((uploadProgress * 100).rounded()))%，大文件传得慢是正常的")
                             .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !compressNote.isEmpty {
+                        Text(compressNote)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else if (thumbItem != nil && thumbData == nil) || (videoItem != nil && videoData == nil) {
                     // 图/视频还在从相册读取：转圈动画提示，读完自动消失并放开上传按钮。
@@ -992,7 +1215,8 @@ private struct AddWallpaperView: View {
     /// 视频读取（视频当预览用，绝不跳过）：先走文件导出，系统把视频拷到临时文件再读，
     /// 不整段往内存里塞，本地小视频这条路最稳；导出文件读不到再回数据直读。
     /// 两通道都不行就抛超时，绝不让界面无限转圈。
-    private static func loadVideoData(from item: PhotosPickerItem) async throws -> Data {
+    /// 批量导入页复用同一套读取逻辑。
+    static func loadVideoData(from item: PhotosPickerItem) async throws -> Data {
         if let url = try await withReadTimeout(seconds: 30, work: {
             try await item.loadTransferable(type: URL.self)
         }) {
@@ -1077,10 +1301,19 @@ private struct AddWallpaperView: View {
             return
         }
         guard let packageData = tendiesData else { return }
+        // iPad 页尺寸检查：iPhone 细长的包不让传到 iPad 页（画布读不到时不拦）。
+        if device == "ipad", let canvas = PackageCanvas.size(of: packageData),
+           PackageCanvas.isIPhoneTall(canvas) {
+            fail("这是 iPhone 尺寸，不能传到 iPad 页。", code: "E-306 增加壁纸-iPad 尺寸不对")
+            return
+        }
+        // 包太大自动压小（超过 20M 才压，无损，只压包里的 PNG 图）。
+        let (uploadPackageData, packageNote) = PackageCompressor.compressIfOversized(packageData)
+        compressNote = packageNote ?? ""
         // 封面优先级：选了视频 → 视频直接当封面（不抽帧）；没视频才找图（选的图 > 包里的图）。
         var imageData: Data?
         if videoData == nil {
-            imageData = thumbData ?? Self.autoThumbnail(from: packageData)
+            imageData = thumbData ?? Self.autoThumbnail(from: uploadPackageData)
         }
         guard videoData != nil || imageData != nil else {
             fail("封面没着落：这个包里没找到图，点上方\"选缩略图\"手动选一张。", code: "E-302 增加壁纸-无封面来源")
@@ -1090,7 +1323,7 @@ private struct AddWallpaperView: View {
         // 按包去重：同名可能是不同包、不同名可能是同一个包，只比名字会认错。
         // 包的描述符 UUID 才是包本身的身份，目录里已有同样 UUID 的就别再传。
         // （共用/占位 UUID 除外：多张老包共用一个，单凭它认不出，跳过这道。）
-        let descriptorUUID = (try? TendiesPackage.inspect(packageData, zip: ZipFoundationAdapter()))?.descriptorUUID
+        let descriptorUUID = (try? TendiesPackage.inspect(uploadPackageData, zip: ZipFoundationAdapter()))?.descriptorUUID
         if let descriptorUUID, !isSharedPlaceholderDescriptorUUID(descriptorUUID),
            let dup = store.item(withUUID: descriptorUUID) {
             fail("目录里已有这张壁纸「\(dup.title)」（包一样），不用再传。", code: "E-305 增加壁纸-包已重复")
@@ -1108,14 +1341,21 @@ private struct AddWallpaperView: View {
             .filter { !$0.isEmpty }
         let finalTags = parsedTags.isEmpty ? ["动漫"] : parsedTags
         do {
-            try await store.uploadWallpaperFile(name: "\(id).tendies", data: packageData, token: token,
+            try await store.uploadWallpaperFile(name: "\(id).tendies", data: uploadPackageData, token: token,
                                                 progress: { value in Task { @MainActor in uploadProgress = value } })
             // 视频优先：选了视频就不传静态封面图，thumbnail 和 preview 都指这个视频。
             var thumbnailURL = ""
             var previewURL = ""
             if let videoData {
+                // 预览视频上传前先压到 1-2M 码率，8M 的视频压完明显变小；压不动就用原视频。
+                var uploadVideoData = videoData
+                if let compressed = await VideoCompressor.compressToPreview(videoData) {
+                    let videoNote = "视频已自动压小：从 \(formatMB(videoData.count)) 压到 \(formatMB(compressed.count))。"
+                    compressNote = compressNote.isEmpty ? videoNote : compressNote + " " + videoNote
+                    uploadVideoData = compressed
+                }
                 let videoName = "\(id)-preview.\(Self.videoExtension(for: videoItem))"
-                try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token,
+                try await store.uploadWallpaperFile(name: videoName, data: uploadVideoData, token: token,
                                                     progress: { value in Task { @MainActor in uploadProgress = value } })
                 previewURL = CatalogStore.wallpapersRawBase + videoName
                 thumbnailURL = previewURL
@@ -1482,7 +1722,10 @@ private struct CatalogDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                // iPad 上封面不再铺满全屏：限宽 420 居中放，周围留出页面底色；iPhone 不变。
                 coverSection
+                    .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 420 : .infinity)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 HStack(spacing: 6) {
                     Text(live.title)
                         .font(.title3).bold()
@@ -2058,4 +2301,393 @@ private struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - 批量导入（管理员）
+
+/// 批量导入里的一张包：ZIP 里扫出来的一个 .tendies。
+private struct BatchImportItem: Identifiable {
+    let id = UUID()
+    /// ZIP 里的文件名（去后缀），上传时当 id 用。
+    let fileName: String
+    /// 显示名：点名字能改，上传时当标题用。
+    var displayName: String
+    let data: Data
+    var descriptorUUID: String?
+    /// 封面小图：锁屏全貌，行里后台生成。
+    var thumbData: Data?
+    /// 预览视频：点“加视频”选，上传前压到 1-2M 码率。
+    var videoData: Data?
+    var status: BatchImportStatus = .pending
+}
+
+/// 批量导入里一张包的状态。
+private enum BatchImportStatus: Equatable {
+    case pending
+    case uploading
+    case done
+    case skipped(String)
+    case failed(String)
+    /// 还能不能传：没传过的、失败的都能再传（失败的修好问题后重试）；
+    /// 已传完的、已在目录里跳过的，不再传。
+    var isRetryable: Bool {
+        switch self {
+        case .pending, .failed: return true
+        case .uploading, .done, .skipped: return false
+        }
+    }
+}
+
+/// 管理页批量导入：选一个 ZIP（里面装很多 .tendies 包），一次全导进来，
+/// 每张可改名、可加预览视频，最后“一键上传”把所有包+视频传到目录仓库并更新 catalog.json。
+/// 只有管理员能进（入口在管理页，管理员登录后才显示）。
+/// 性能：列表只渲染看得见的行，封面后台生成；解包+检查后台做、显示进度；
+/// 上传后台一个一个传、每张显示进度，界面不冻住。
+struct BatchImportView: View {
+    @EnvironmentObject private var accountStore: AccountStore
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var store = CatalogStore()
+
+    @State private var items: [BatchImportItem] = []
+    /// 壁纸给哪个设备：iphone 或 ipad，整批通用；选 ipad 的进 iPad 页。
+    @State private var device = "iphone"
+    /// 标签：整批通用，逗号或顿号分隔。
+    @State private var tags = "动漫"
+    @State private var pickingZIP = false
+    @State private var scanning = false
+    @State private var scanNote = ""
+    @State private var uploading = false
+    @State private var currentUpload = ""
+    @State private var uploadProgress: Double?
+    @State private var uploadSummary = ""
+    @State private var message = ""
+    // 加视频：一次只给一张包选，记下目标行再弹相册。
+    @State private var videoItem: PhotosPickerItem?
+    @State private var videoPickVersion = 0
+    @State private var videoTargetID: UUID?
+    @State private var showingVideoPicker = false
+
+    private var busy: Bool { scanning || uploading }
+    private var retryableCount: Int { items.filter { $0.status.isRetryable }.count }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("给哪个设备", selection: $device) {
+                    Text("iPhone").tag("iphone")
+                    Text("iPad").tag("ipad")
+                }
+                .pickerStyle(.segmented)
+                .disabled(busy)
+                TextField("标签（逗号或顿号分隔，整批通用）", text: $tags)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(busy)
+                if items.isEmpty {
+                    Button(scanning ? "正在解包…" : "选 ZIP 文件") { pickingZIP = true }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(busy)
+                    Text("选一个 ZIP，里面装很多 .tendies 包，一次全导进来。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Text(scanNote).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("换一个 ZIP") { pickingZIP = true }
+                            .buttonStyle(.bordered)
+                            .disabled(busy)
+                    }
+                }
+                if scanning {
+                    ProgressView()
+                }
+                // 列表只渲染看得见的行（LazyVStack），封面每行后台生成。
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach($items) { $item in
+                            BatchImportRow(item: $item, onAddVideo: {
+                                videoTargetID = item.id
+                                showingVideoPicker = true
+                            })
+                            .disabled(busy)
+                        }
+                    }
+                }
+                if uploading {
+                    if !currentUpload.isEmpty {
+                        Text(currentUpload).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let uploadProgress {
+                        ProgressView(value: uploadProgress).progressViewStyle(.linear)
+                    } else {
+                        ProgressView()
+                    }
+                }
+                if !uploadSummary.isEmpty {
+                    Text(uploadSummary).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !message.isEmpty {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("一键上传（\(retryableCount) 张）") { Task { await uploadAll() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || items.isEmpty || retryableCount == 0)
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("批量导入壁纸包")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .sheet(isPresented: $pickingZIP) {
+                DocumentPicker(contentTypes: [.zip]) { url in
+                    pickingZIP = false
+                    guard let data = try? Data(contentsOf: url) else {
+                        message = "没读到文件，重新选一次。"
+                        return
+                    }
+                    message = ""
+                    uploadSummary = ""
+                    scanZIP(data)
+                }
+            }
+            .photosPicker(isPresented: $showingVideoPicker, selection: Binding(
+                get: { videoItem },
+                set: { newValue in
+                    videoItem = newValue
+                    if newValue != nil { videoPickVersion += 1 }
+                }
+            ), matching: .videos)
+            .task(id: videoPickVersion) {
+                guard let item = videoItem, let target = videoTargetID else { return }
+                do {
+                    let data = try await AddWallpaperView.loadVideoData(from: item)
+                    if let idx = items.firstIndex(where: { $0.id == target }) {
+                        items[idx].videoData = data
+                    }
+                } catch {
+                    message = "视频没读到，重新选一次。"
+                }
+                videoItem = nil
+                videoTargetID = nil
+            }
+            .task {
+                // 拉一次目录表：去重（按描述符 UUID）要用到。
+                await store.fetch()
+            }
+        }
+    }
+
+    /// 解 ZIP：列出里面的 .tendies，一个一个读出来放进列表；
+    /// 解包+检查在后台做，读完一张显示一张，界面不卡。
+    private func scanZIP(_ zipData: Data) {
+        scanning = true
+        scanNote = "正在解包…"
+        items = []
+        Task.detached {
+            let zip = ZipFoundationAdapter()
+            guard let entries = try? zip.listEntries(in: zipData) else {
+                await MainActor.run {
+                    self.scanning = false
+                    self.message = "这个 ZIP 打不开，重新选一次。"
+                }
+                return
+            }
+            let tendiesEntries = entries.filter {
+                ($0 as NSString).pathExtension.lowercased() == "tendies"
+            }
+            var found: [BatchImportItem] = []
+            for (index, path) in tendiesEntries.enumerated() {
+                guard let data = try? zip.readEntry(path, in: zipData) else { continue }
+                let baseName = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+                let uuid = (try? TendiesPackage.inspect(data, zip: zip))?.descriptorUUID
+                found.append(BatchImportItem(fileName: baseName, displayName: baseName,
+                                            data: data, descriptorUUID: uuid))
+                let note = "正在检查 \(index + 1)/\(tendiesEntries.count)…"
+                let snapshot = found
+                await MainActor.run {
+                    self.items = snapshot
+                    self.scanNote = note
+                }
+            }
+            await MainActor.run {
+                self.scanning = false
+                self.scanNote = "共扫到 \(found.count) 个壁纸包。"
+            }
+        }
+    }
+
+    /// 一键上传：后台一个一个传、每张显示进度；传完一次推表。
+    /// 包超过 20M 自动压小（无损，只压 PNG 图）；视频压到 1-2M 码率。
+    @MainActor
+    private func uploadAll() async {
+        guard let token = accountStore.loadToken() else {
+            message = "先在管理员页保存 GitHub 钥匙。"
+            return
+        }
+        let pending = items.indices.filter { items[$0].status.isRetryable }
+        guard !pending.isEmpty else {
+            message = "没有待上传的包了。"
+            return
+        }
+        uploading = true
+        defer { uploading = false; currentUpload = ""; uploadProgress = nil }
+        var newItems: [CatalogItem] = []
+        var doneCount = 0, skippedCount = 0, failedCount = 0
+        let total = pending.count
+        for (n, index) in pending.enumerated() {
+            let item = items[index]
+            currentUpload = "正在传第 \(n + 1)/\(total) 张：\(item.displayName)"
+            uploadProgress = nil
+            // iPad 尺寸检查：iPhone 细长的包不让传到 iPad 页（画布读不到时不拦）。
+            if device == "ipad" {
+                let canvas = await Task.detached { PackageCanvas.size(of: item.data) }.value
+                if let canvas, PackageCanvas.isIPhoneTall(canvas) {
+                    items[index].status = .failed("这是 iPhone 尺寸，不能传到 iPad 页")
+                    failedCount += 1
+                    continue
+                }
+            }
+            // 去重：目录里已有同样 UUID 的就跳过（共用/占位 UUID 除外）。
+            if let uuid = item.descriptorUUID, !isSharedPlaceholderDescriptorUUID(uuid),
+               store.item(withUUID: uuid) != nil {
+                items[index].status = .skipped("目录里已有这张，跳过")
+                skippedCount += 1
+                continue
+            }
+            items[index].status = .uploading
+            do {
+                // 包太大自动压小（后台做，PNG 重压可能花几秒）。
+                let (uploadData, _) = await Task.detached {
+                    PackageCompressor.compressIfOversized(item.data)
+                }.value
+                // 视频压到 1-2M 码率；压不动就用原视频。
+                var uploadVideo = item.videoData
+                if let video = item.videoData,
+                   let compressed = await VideoCompressor.compressToPreview(video) {
+                    uploadVideo = compressed
+                }
+                // 文件名：同名加后缀，避免覆盖。
+                let baseID = CatalogStore.safeID(from: item.fileName)
+                let id = uniqueID(baseID, existing: newItems)
+                try await store.uploadWallpaperFile(name: "\(id).tendies", data: uploadData, token: token,
+                                                    progress: { value in Task { @MainActor in uploadProgress = value } })
+                var thumbnailURL = ""
+                var previewURL = ""
+                if let video = uploadVideo {
+                    let videoName = "\(id)-preview.mp4"
+                    try await store.uploadWallpaperFile(name: videoName, data: video, token: token,
+                                                        progress: { value in Task { @MainActor in uploadProgress = value } })
+                    previewURL = CatalogStore.wallpapersRawBase + videoName
+                    thumbnailURL = previewURL
+                } else {
+                    // 没视频：用行里生成的封面图，没有就现抠一张。
+                    let thumb = item.thumbData
+                        ?? await Task.detached { ImportThumbnailMaker.make(from: item.data) }.value
+                    if let thumb {
+                        try await store.uploadWallpaperFile(name: "\(id)-thumb.jpg", data: thumb, token: token,
+                                                            progress: { value in Task { @MainActor in uploadProgress = value } })
+                        thumbnailURL = CatalogStore.wallpapersRawBase + "\(id)-thumb.jpg"
+                    }
+                }
+                let parsedTags = tags.components(separatedBy: CharacterSet(charactersIn: ",，、"))
+                    .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                let finalTags = parsedTags.isEmpty ? ["动漫"] : parsedTags
+                let title = item.displayName.trimmingCharacters(in: .whitespaces)
+                newItems.append(CatalogItem(
+                    id: id, title: title.isEmpty ? item.fileName : title, tags: finalTags,
+                    thumbnailURL: thumbnailURL, previewURL: previewURL,
+                    packageURL: CatalogStore.wallpapersRawBase + "\(id).tendies",
+                    pinned: false, downloads: 0, device: device, uuid: item.descriptorUUID))
+                items[index].status = .done
+                doneCount += 1
+            } catch {
+                items[index].status = .failed("没推上去：\(error.localizedDescription)")
+                failedCount += 1
+            }
+        }
+        // 一次推表：新传的放第一个非置顶位置。
+        if !newItems.isEmpty {
+            var updated = store.items
+            let insertAt = updated.firstIndex(where: { !$0.pinned }) ?? updated.endIndex
+            updated.insert(contentsOf: newItems, at: insertAt)
+            do {
+                try await store.pushCatalog(updated, token: token)
+            } catch {
+                message = "文件传上去了，但目录表没推上去：\(error.localizedDescription)"
+                return
+            }
+        }
+        uploadSummary = "传完：成功 \(doneCount) 张，跳过 \(skippedCount) 张，失败 \(failedCount) 张。"
+    }
+
+    /// 文件名去重：目录里已有同名 id、或本批里已用过，就加 -2、-3 后缀。
+    private func uniqueID(_ base: String, existing: [CatalogItem]) -> String {
+        var id = base
+        var n = 2
+        while store.items.contains(where: { $0.id == id })
+                || existing.contains(where: { $0.id == id }) {
+            id = "\(base)-\(n)"
+            n += 1
+        }
+        return id
+    }
+}
+
+/// 批量导入里的一行：封面、名字（点名字能改）、大小、“加视频”按钮。
+private struct BatchImportRow: View {
+    @Binding var item: BatchImportItem
+    let onAddVideo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // 封面：锁屏全貌小图，后台生成。
+            Group {
+                if let thumbData = item.thumbData, let image = UIImage(data: thumbData) {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(.quaternary)
+                        .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+                }
+            }
+            .frame(width: 44, height: 88)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("名字", text: $item.displayName)
+                    .font(.subheadline.weight(.semibold))
+                Text("\(formatMB(item.data.count)) · \(item.fileName)")
+                    .font(.caption2).foregroundStyle(.secondary)
+                switch item.status {
+                case .pending:
+                    EmptyView()
+                case .uploading:
+                    Text("正在上传…").font(.caption2).foregroundStyle(.blue)
+                case .done:
+                    Text("✓ 已上传").font(.caption2).foregroundStyle(.green)
+                case .skipped(let reason):
+                    Text(reason).font(.caption2).foregroundStyle(.secondary)
+                case .failed(let reason):
+                    Text(reason).font(.caption2).foregroundStyle(.red)
+                }
+            }
+            Spacer()
+            Button(item.videoData == nil ? "加视频" : "✓ 已加视频") { onAddVideo() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
+        .task(id: item.id) {
+            // 封面后台生成：只生成一次，生成完再显示（只渲染看得见的行，并发有限）。
+            guard item.thumbData == nil else { return }
+            let thumb = await Task.detached { ImportThumbnailMaker.make(from: item.data) }.value
+            if let thumb { item.thumbData = thumb }
+        }
+    }
 }

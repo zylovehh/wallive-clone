@@ -636,7 +636,7 @@ public enum AirliftInstaller {
         containerPath: String, pairingPath: String
     ) async throws {
         let stageDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wallive-clone-prefs-\(UUID().uuidString)")
+            .appendingPathComponent("win97-prefs-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stageDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stageDir) }
 

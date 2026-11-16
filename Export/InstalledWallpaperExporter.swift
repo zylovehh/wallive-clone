@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// 导出已装壁纸：取一份 PosterBoard 备份，从备份清单里挑出指定
 /// 描述符 UUID 的载荷文件，按标准 .tendies 目录结构重打包。
@@ -21,6 +22,8 @@ enum InstalledWallpaperExporter {
     /// 容器里的一条描述符记录。
     struct DescriptorInfo {
         let uuid: String
+        /// 扩展标识（如 com.apple.ClockPoster…），系统壁纸翻成人话名字用；读不到为 nil。
+        let extensionID: String?
         /// 尽力而为的显示名（来自 providerInfo.plist），读不到为 nil。
         let name: String?
         /// providerInfo 的 role 标明是环境类壁纸（如世界时钟）时为 true，
@@ -69,16 +72,18 @@ enum InstalledWallpaperExporter {
         let rows = try manifest.rows(relativePathLike: "%descriptors/%")
 
         var order: [String] = []
-        var metas: [String: (name: String?, isAmbient: Bool)] = [:]
+        var metas: [String: (name: String?, isAmbient: Bool, extensionID: String?)] = [:]
         for row in rows {
             guard let uuid = descriptorUUID(of: row.relativePath) else { continue }
             if !order.contains(uuid) { order.append(uuid) }
             if row.relativePath.lowercased().hasSuffix("descriptors/\(uuid)/providerinfo.plist"),
                let url = row.payload, metas[uuid] == nil {
-                metas[uuid] = providerInfoMeta(url: url)
+                let meta = providerInfoMeta(url: url)
+                metas[uuid] = (meta.name, meta.isAmbient, extensionID(of: row.relativePath))
             }
         }
-        return order.map { DescriptorInfo(uuid: $0, name: metas[$0]?.name, isAmbient: metas[$0]?.isAmbient ?? false) }
+        return order.map { DescriptorInfo(uuid: $0, extensionID: metas[$0]?.extensionID,
+                                          name: metas[$0]?.name, isAmbient: metas[$0]?.isAmbient ?? false) }
     }
 
     /// 重打指定描述符的 .tendies（明文 zip，调用方按需再加密）。
@@ -150,6 +155,14 @@ extension InstalledWallpaperExporter {
         let first = rest.split(separator: "/").first.map(String.init) ?? ""
         guard first.count == 36 else { return nil }
         return first
+    }
+
+    /// 从 relativePath 里抠出扩展标识（Extensions/ 后面那一段）。
+    fileprivate static func extensionID(of relativePath: String) -> String? {
+        guard let range = relativePath.range(of: "Extensions/") else { return nil }
+        let rest = relativePath[range.upperBound...]
+        let first = rest.split(separator: "/").first.map(String.init) ?? ""
+        return first.isEmpty ? nil : first
     }
 
     /// 尽力而为：从 providerInfo.plist 读展示名和环境类角色，读不到给默认值。
@@ -299,6 +312,55 @@ enum DirectStoreExporter {
             fileName: "wallpaper-\(String(entry.uuid.prefix(8))).tendies",
             data: data,
             fileCount: items.count)
+    }
+
+    /// 直读一张封面：从描述符目录 + 扩展目录下同名 .wallpaper 文件夹里挑一张图，
+    /// 压成小图（最长边 240）当封面，只用于列表识别。系统自带的没有独立媒体，
+    /// 调用方跳过这类条目、只给名字不给封面。
+    static func coverData(for entry: DirectDescriptor,
+                          log: @escaping (String) -> Void = { _ in }) -> Data? {
+        let fm = FileManager.default
+        // 扩展目录：…/Extensions/<ext>（描述符目录往上两级），通行证吃这里。
+        let extDir = ((entry.fullPath as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+        let escape = WorseQueryEscape.consume(target: extDir, requireWrite: false, log: log)
+        guard let handle = escape.handle else { return nil }
+        defer { WorseQueryEscape.release(handle) }
+
+        // 收集图片：优先路径里带 background 的背景图，没有就挑文件最大的。
+        let imageExts = ["png", "jpg", "jpeg", "heic", "heif", "webp"]
+        var candidates: [(path: String, size: Int)] = []
+        func collect(dir: String) {
+            guard let enumerator = fm.enumerator(atPath: dir) else { return }
+            for case let sub as String in enumerator {
+                guard imageExts.contains((sub as NSString).pathExtension.lowercased()) else { continue }
+                let full = dir + "/" + sub
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: full, isDirectory: &isDir), !isDir.boolValue,
+                      let size = try? fm.attributesOfItem(atPath: full)[.size] as? Int else { continue }
+                candidates.append((full, size))
+            }
+        }
+        collect(dir: entry.fullPath)
+        let siblingWallpaper = extDir + "/" + entry.uuid + ".wallpaper"
+        var sibIsDir: ObjCBool = false
+        if fm.fileExists(atPath: siblingWallpaper, isDirectory: &sibIsDir), sibIsDir.boolValue {
+            collect(dir: siblingWallpaper)
+        }
+        let best = candidates.first { $0.path.lowercased().contains("background") }
+            ?? candidates.max { $0.size < $1.size }
+        guard let best,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: best.path)),
+              let image = UIImage(data: data) else { return nil }
+        // 压成小图：最长边 240，JPEG 0.8，列表里只存小图。
+        let maxSide: CGFloat = 240
+        let longest = max(image.size.width, image.size.height)
+        let scale = min(1, maxSide / max(longest, 1))
+        let scaled = UIGraphicsImageRenderer(
+            size: CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        ).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: image.size.width * scale, height: image.size.height * scale))
+        }
+        return scaled.jpegData(compressionQuality: 0.8)
     }
 
     /// 直读 providerInfo.plist 里的展示名和环境类角色（与备份路径口径一致）。

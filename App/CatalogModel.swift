@@ -121,7 +121,7 @@ final class CatalogStore: ObservableObject {
     @Published var errorMessage = ""
     @Published private(set) var loading = false
 
-    private let downloadedDefaultsKey = "wallive-clone-downloaded"
+    private let downloadedDefaultsKey = "win97-downloaded"
 
     init() {
         loadDownloaded()
@@ -185,6 +185,8 @@ final class CatalogStore: ObservableObject {
     /// 直接拿去下会失败（没域名），这里先拼成 Fastly 加速的完整地址再下。
     /// 注意 wallpapersRawBase 末尾已经是 wallpapers/，相对路径开头的 wallpapers/ 要去掉再拼，
     /// 不然会拼出两层 wallpapers。
+    /// jsDelivr 403/404 时自动换源：超 20M 的包它直接 403、缓存过期会 404，
+    /// 换 raw.githubusercontent.com 直链再下一次（直链没 20M 限制，能下 100M 以内的文件）。
     func download(_ item: CatalogItem) async -> Data? {
         let packageAddress: String
         if item.packageURL.hasPrefix("http") {
@@ -201,9 +203,48 @@ final class CatalogStore: ObservableObject {
         defer { downloadingIDs.remove(item.id) }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw CatalogError.fileNotFound
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 200 {
+                return saveDownload(data, for: item)
             }
+            // 403/404 才换源重试：别的错（断网、超时）换源也一样失败，不多跑一次。
+            if (status == 403 || status == 404),
+               let fallback = Self.rawGitHubURL(from: packageAddress) {
+                let (retryData, retryResponse) = try await URLSession.shared.data(from: fallback)
+                guard (retryResponse as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw CatalogError.fileNotFound
+                }
+                return saveDownload(retryData, for: item)
+            }
+            throw CatalogError.fileNotFound
+        } catch {
+            errorMessage = "下载失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// jsDelivr 地址换成 GitHub 直链：
+    /// https://fastly.jsdelivr.net/gh/<用户>/<仓库>@<分支>/<路径>
+    /// → https://raw.githubusercontent.com/<用户>/<仓库>/<分支>/<路径>。
+    /// 不是 jsDelivr 的地址返回 nil（不用换源）。
+    static func rawGitHubURL(from address: String) -> URL? {
+        for host in ["https://fastly.jsdelivr.net/gh/", "https://cdn.jsdelivr.net/gh/"] {
+            guard address.hasPrefix(host) else { continue }
+            let rest = String(address.dropFirst(host.count))
+            guard let at = rest.firstIndex(of: "@") else { return nil }
+            let repoPart = String(rest[..<at])
+            let afterAt = String(rest[rest.index(after: at)...])
+            guard let slash = afterAt.firstIndex(of: "/") else { return nil }
+            let branch = String(afterAt[..<slash])
+            let path = String(afterAt[afterAt.index(after: slash)...])
+            return URL(string: "https://raw.githubusercontent.com/\(repoPart)/\(branch)/\(path)")
+        }
+        return nil
+    }
+
+    /// 下载成功后的落盘 + 记账（主源和换源共用）。
+    private func saveDownload(_ data: Data, for item: CatalogItem) -> Data? {
+        do {
             try FileManager.default.createDirectory(
                 at: downloadedDirectory, withIntermediateDirectories: true)
             try data.write(to: localURL(for: item), options: .atomic)
@@ -331,7 +372,7 @@ final class CatalogStore: ObservableObject {
         var request = URLRequest(url: githubContentsURL(path: Self.catalogPath))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
+        request.setValue("Win97", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 404 { return ([], nil) }
@@ -378,7 +419,7 @@ final class CatalogStore: ObservableObject {
         var request = URLRequest(url: githubContentsURL(path: path))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
+        request.setValue("Win97", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 404 { return nil }
@@ -412,7 +453,7 @@ final class CatalogStore: ObservableObject {
             request.httpMethod = "PUT"
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            request.setValue("WalliveClone", forHTTPHeaderField: "User-Agent")
+            request.setValue("Win97", forHTTPHeaderField: "User-Agent")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = bodyData
             let (data, response): (Data, URLResponse)

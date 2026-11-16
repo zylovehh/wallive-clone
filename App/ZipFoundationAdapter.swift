@@ -30,7 +30,7 @@ public struct ZipFoundationAdapter: ZipEditing {
 
     public func rebuild(entries: [(path: String, data: Data)]) throws -> Data {
         let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wallive-clone-rebuild-\(UUID().uuidString)")
+            .appendingPathComponent("win97-rebuild-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmpDir) }
         let zipURL = tmpDir.appendingPathComponent("out.zip")

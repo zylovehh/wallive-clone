@@ -1,6 +1,6 @@
 //
 //  WorseQueryShim.m
-//  WalliveClone
+//  Win97
 //
 //  纯 C 小包装：把 worse_query 的 ObjC 接口包成 const char* 进出，
 //  Swift 侧用 @_silgen_name 声明同名符号就能直接调（本项目不设桥接头，

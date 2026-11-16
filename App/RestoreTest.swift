@@ -381,7 +381,7 @@ enum RestoreTest {
         try checkCancelled(isCancelled)
         let fm = FileManager.default
         let stamp = timeStamp()
-        let workDir = fm.temporaryDirectory.appendingPathComponent("wallive-clone-probe-\(stamp)")
+        let workDir = fm.temporaryDirectory.appendingPathComponent("win97-probe-\(stamp)")
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
 
@@ -534,7 +534,7 @@ enum RestoreTest {
                                 displayName: String? = nil,
                                 preparedStage: PreparedStage? = nil) throws -> RestoreOutcome {
         try checkCancelled(isCancelled)
-        // V1.19：不分系统版本、不看配对记录，一律走 Vellum 同款路
+        // V1.19：不分系统版本、不看配对记录，一律走描述符直写路
         // （直读找库 + 逃逸直写，只写一个描述符目录，不碰表和偏好）。
         // 人家真机跑通的就是这条；备份路多出来的改表工序全停用，
         // 配对隧道一个字不碰——27.2 上不连 VPN 也装。
@@ -571,7 +571,7 @@ enum RestoreTest {
         let numericId = Int.random(in: 9_999...99_999)
         log("备料：新编号 \(numericId)（装包时包里所有编号统一换成它）。")
         let copyDir = fm.temporaryDirectory
-            .appendingPathComponent("wallive-clone-vellum-desc-\(UUID().uuidString)")
+            .appendingPathComponent("win97-desc-\(UUID().uuidString)")
         do {
             try fm.copyItem(at: source, to: copyDir)
         } catch {
@@ -590,7 +590,7 @@ enum RestoreTest {
         // 文件，找不着，图库卡片就一直转圈（V1.10 真机黑块卡加载）。
         syncDescriptorInnerIdentifier(in: copyDir, id: numericId)
         // V1.13：补渲染配置（深景总开关）。系统渲染壁纸前要读这份配置，缺了
-        // 就是黑卡片——Vellum 装包时同样补（静态包也照补），朋友包原样走我们
+        // 就是黑卡片——描述符直写装包时同样补（静态包也照补），朋友包原样走我们
         // 这条路仍黑，拆人家程序发现它装包时补配置 + 浮动层加 Clownfish_ 前缀。
         // 有浮动层才改前缀；调用放在改 id/改名之后，保证清单值和目录名一致。
         DepthPackageBuilder.applyingDepthConfiguration(
@@ -604,20 +604,20 @@ enum RestoreTest {
         return PreparedStage(dir: copyDir, uuid: descriptorUUID, numericId: numericId)
     }
 
-    // MARK: - 无配对安装（Vellum 同款，只写描述符目录）
+    // MARK: - 无配对安装（描述符直写，只写描述符目录）
 
-    /// 无配对安装（V1.8 起，Vellum 同款）：
+    /// 无配对安装（V1.8 起，描述符直写）：
     /// 1. 逃逸进应用数据总目录，翻出壁纸库，读一次表确认是系统正在读的那份库；
-    /// 2. 包里的描述符目录（descriptors/<UUID>/，跟 Vellum 装好的实物同款形状：
+    /// 2. 包里的描述符目录（descriptors/<UUID>/，跟描述符直写装好的实物同款形状：
     ///    侧标文件 + providerInfo.plist + versions/1）拷副本，三个身份字段
     ///    （描述符 sidecar、userInfo、Wallpaper.plist）对齐同一个新数字 id；
     /// 3. 只写一个目录：Extensions/com.apple.WallpaperKit.CollectionsPoster/
     ///    descriptors/<新UUID>；
     /// 4. 完事提示重启手机。不写偏好、不写 configurations、不插行、不写回表、
-    ///    不清 wal/shm——Vellum 日志里数据库只读不写，行是系统重扫时自己补的。
+    ///    不清 wal/shm——描述符直写日志里数据库只读不写，行是系统重扫时自己补的。
     /// 旧路（configurations + 插表行 + 写回表）在 27.0 上重启后壁纸消失
     ///（表行还在、图库没有），就是多了那几步：系统重启按描述符重建库，
-    /// 只认描述符长出来的形状。这条新路整个照 Vellum 抄。
+    /// 只认描述符长出来的形状。这条新路整个按描述符直写做。
     private static func restoreNoPairing(packageData: Data, report: inout [String: Any],
                                          onProgress: ((String, Double) -> Void)?,
                                          isCancelled: @escaping () -> Bool,
@@ -628,7 +628,7 @@ enum RestoreTest {
         let stamp = timeStamp()
         let restoreStart = Date()
         let elapsed: () -> String = { String(format: "%.1fs", Date().timeIntervalSince(restoreStart)) }
-        let workDir = fm.temporaryDirectory.appendingPathComponent("wallive-clone-vellum-\(stamp)")
+        let workDir = fm.temporaryDirectory.appendingPathComponent("win97-\(stamp)")
         try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: workDir) }
 
@@ -771,11 +771,11 @@ enum RestoreTest {
             verified: verified, date: Date(),
             packageName: displayName, buildNumber: systemBuildNumber()))
 
-        // 4. 完事：没有配对记录，隧道重启做不了（Vellum 同样跳过），直接报
+        // 4. 完事：没有配对记录，隧道重启做不了（描述符直写同样跳过），直接报
         //    重启手机。描述符已落盘，重启后系统重扫自己补行。
         onProgress?("写完了", 1.0)
         report["mode"] = "backup"
-        report["method"] = "vellum-descriptor-only"
+        report["method"] = "descriptor-only"
         report["elapsed_seconds"] = Date().timeIntervalSince(restoreStart)
         let summary: String
         if verified {
@@ -1051,7 +1051,7 @@ enum RestoreTest {
         return gens.first ?? storeVersion
     }
 
-    /// 第 0 步：问系统要 PosterBoard 的容器路径（Vellum 的第一条路）。
+    /// 第 0 步：问系统要 PosterBoard 的容器路径（直读的第一条路）。
     /// 走 LaunchServices 私有接口直接拿精确路径，拿到就不用几百个挨个扫。
     /// 拿不到（私有框架没载入、类或方法不在）返回 nil，走后面的扫描。
     private static func posterBoardContainerViaLaunchServices() -> String? {
@@ -1229,7 +1229,7 @@ enum RestoreTest {
         -> (db: URL, wal: URL?, container: String, handle: Int64, restore: (() -> Void)?)? {
         let fm = FileManager.default
 
-        // 第 0 步：LaunchServices 直接指路（Vellum 的第一条路，拿到就不用扫）。
+        // 第 0 步：LaunchServices 直接指路（直读的第一条路，拿到就不用扫）。
         if let lsPath = posterBoardContainerViaLaunchServices() {
             InstallLog.shared.append("LaunchServices 指到壁纸库容器：\(lsPath)。")
             let esc = WorseQueryEscape.consume(target: lsPath, requireWrite: false) {
@@ -1312,7 +1312,7 @@ enum RestoreTest {
                 }
             }
             // 第二步：逐个容器单独吃扩展，探到库就读表。整段限 25 秒，
-            // 超时就放弃本机枚举（Vellum 同款规矩）。
+            // 超时就放弃本机枚举（描述符直写的规矩）。
             let scanDeadline = Date().addingTimeInterval(25)
             var scanned = 0
             var consecutiveFails = 0
@@ -1804,7 +1804,7 @@ enum RestoreTest {
         var written = 0
         for (parent, files) in groups.sorted(by: { $0.key < $1.key }) {
             let groupDir = fm.temporaryDirectory
-                .appendingPathComponent("wallive-clone-restore-group-\(UUID().uuidString)")
+                .appendingPathComponent("win97-restore-group-\(UUID().uuidString)")
             do {
                 try fm.createDirectory(at: groupDir, withIntermediateDirectories: true)
                 for file in files {
@@ -2049,7 +2049,7 @@ enum RestoreTest {
         }
         // 拷一份副本再改 id，不动暂存原树。
         let copyDir = fm.temporaryDirectory
-            .appendingPathComponent("wallive-clone-restore-desc-\(UUID().uuidString)")
+            .appendingPathComponent("win97-restore-desc-\(UUID().uuidString)")
         do {
             try fm.copyItem(at: source, to: copyDir)
         } catch {
@@ -2065,7 +2065,7 @@ enum RestoreTest {
         let allTargets = AirliftInstaller.dualExtensions(for: config.extensionID).map {
             "\(storeBase)/Extensions/\($0)/descriptors"
         }
-        // 没配对：学 Vellum 只写主扩展一个描述符目录（真机对比 Vellum 不卡、
+        // 没配对：只写主扩展一个描述符目录（真机对比不卡、
         // 我们卡，两处结构差异之一就是多写了 CollectionsPosterApp 那份）。
         // 配对路保持双扩展不变（配对装没出过卡死）。
         let targets = pairingPath.isEmpty ? [allTargets[0]] : allTargets
@@ -2171,7 +2171,7 @@ enum RestoreTest {
         }
     }
 
-    /// 把描述符里所有带旧 id 前缀的名字整体换成新 id（Vellum 同款：装出来的
+    /// 把描述符里所有带旧 id 前缀的名字整体换成新 id（描述符直写：装出来的
     /// 描述符里，id 和文件名从头到尾一致）。V1.8 只改三个身份字段、文件名
     /// 留着旧 id，系统重扫时对不上号、图库不认——这是重启后不出现的最大
     /// 嫌疑（人家参照树和朋友的可用包里，id 和文件名前缀都是同一个数）。
@@ -2250,7 +2250,7 @@ enum RestoreTest {
     }
 
     /// 把 userInfo 挪到 versions/1/contents 根层（V1.12）。系统标准位置是
-    /// contents 根层（朋友可用包、Vellum 参照树都在根层）；一部分 -static 包
+    /// contents 根层（朋友可用包、参照树都在根层）；一部分 -static 包
     /// 把它塞在壁纸目录里，系统可能因此认不出描述符。塞错位置的挪到根层；
     /// 哪儿都没有就照朋友的包补一份（posterEnvironmentOverrides 空 JSON、
     /// 壁纸目录名；代表编号随后由 rewriteDescriptorIdentity 补齐）。
@@ -2337,7 +2337,7 @@ enum RestoreTest {
                                                     escapeHandle: Int64? = nil) throws {
         let fm = FileManager.default
         let stageDir = fm.temporaryDirectory
-            .appendingPathComponent("wallive-clone-restore-prefs-\(UUID().uuidString)")
+            .appendingPathComponent("win97-restore-prefs-\(UUID().uuidString)")
         try fm.createDirectory(at: stageDir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: stageDir) }
         let prefURL = stageDir.appendingPathComponent("com.apple.PosterBoard.unprotectedUserDefaults.plist")
@@ -2364,7 +2364,7 @@ enum RestoreTest {
             fromPropertyList: prefDict, format: .binary, options: 0)
         try plistData.write(to: prefURL)
         if pairingPath.isEmpty {
-            // 没配对：学 Vellum 一个字偏好都不写（Vellum 日志里没有写偏好的动作，
+            // 没配对：一个字偏好都不写（描述符直写日志里没有写偏好的动作，
             // 真机对比它不卡、我们卡，这是第二处结构差异）。系统自己会重扫，
             // 不需要这颗重载开关。
             InstallLog.shared.append(
@@ -2647,7 +2647,7 @@ enum RestoreTest {
         }
         if db == nil {
             let copy = fm.temporaryDirectory
-                .appendingPathComponent("wallive-clone-list-\(UUID().uuidString).sqlite3")
+                .appendingPathComponent("win97-list-\(UUID().uuidString).sqlite3")
             do {
                 try fm.copyItem(at: dbURL, to: copy)
             } catch {

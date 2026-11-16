@@ -32,8 +32,12 @@ struct ExportFlowView: View {
     @StateObject private var catalog = CatalogStore()
     /// 本轮已拉过目录表的标志，防止重复拉取。
     @State private var catalogFetched = false
+    /// 本地封面：描述符 UUID → 压好的小图（从包里挑图压成，系统自带的没有）。
+    @State private var covers: [String: Data] = [:]
+    /// 系统组默认收起来：那组全是系统自带的，平时不用看，点标题再展开。
+    @State private var foldedSystem = true
 
-    private static let notesKey = "wallive-clone-wallpaper-notes"
+    private static let notesKey = "win97-wallpaper-notes"
 
     var body: some View {
         Group {
@@ -106,15 +110,35 @@ struct ExportFlowView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(state.installHistory, id: \.self) { uuid in
                         descriptorRow(InstalledWallpaperExporter.DescriptorInfo(
-                            uuid: uuid, name: nil, isAmbient: false))
+                            uuid: uuid, extensionID: nil, name: nil, isAmbient: false))
                     }
                 }
 
                 if !descriptors.isEmpty {
                     Text("共扫到 \(descriptors.count) 个壁纸（含其他 App 装入容器的）。")
                         .font(.caption).foregroundStyle(.secondary)
-                    ForEach(descriptors, id: \.uuid) { info in
+                    // 两组：别的 App / 自己装的在前，系统自带的收进一组、默认折叠。
+                    let systemEntries = descriptors.filter { Self.isSystemEntry($0) }
+                    let otherEntries = descriptors.filter { !Self.isSystemEntry($0) }
+                    ForEach(otherEntries, id: \.uuid) { info in
                         descriptorRow(info)
+                    }
+                    if !systemEntries.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { foldedSystem.toggle() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("系统壁纸（\(systemEntries.count)）").font(.headline).foregroundStyle(.blue)
+                                Text(foldedSystem ? "▶" : "▼").font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        if !foldedSystem {
+                            ForEach(systemEntries, id: \.uuid) { info in
+                                descriptorRow(info)
+                            }
+                        }
                     }
                 }
 
@@ -132,7 +156,7 @@ struct ExportFlowView: View {
                         .textSelection(.enabled)
                 }
 
-                Text("命名优先级：你的备注 → 目录匹配（封面+标题）→ 类型兜底。封面只用于识别，不影响导出包内容。")
+                Text("命名优先级：你的备注 → 目录匹配（封面+标题）→ 系统自带名字 → 壁纸自带信息。封面只用于识别，不影响导出包内容。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -170,11 +194,25 @@ struct ExportFlowView: View {
         }
     }
 
-    /// 行渲染：封面在最前，名称按「备注 → 目录 → providerInfo → 未识别」解析。
-    private func descriptorRow(_ info: InstalledWallpaperExporter.DescriptorInfo) -> some View {
-        let resolved = resolvedName(for: info.uuid, providerName: info.name, isAmbient: info.isAmbient)
-        return HStack(spacing: 10) {
+    /// 行封面：优先用刚从包里取的本地小图，没有再用目录表里的封面；
+    /// 系统自带的没有本地封面、目录里也没有，走占位图（只有名字、没封面）。
+    @ViewBuilder
+    private func coverThumbnail(for info: InstalledWallpaperExporter.DescriptorInfo, resolved: ResolvedName) -> some View {
+        if let data = covers[info.uuid], let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable().scaledToFill()
+                .frame(width: 60, height: 60)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        } else {
             thumbnail(for: resolved.thumbURL)
+        }
+    }
+
+    /// 行渲染：封面在最前，名称按「备注 → 目录 → 系统自带 → providerInfo → 未识别」解析。
+    private func descriptorRow(_ info: InstalledWallpaperExporter.DescriptorInfo) -> some View {
+        let resolved = resolvedName(for: info.uuid, providerName: info.name, isAmbient: info.isAmbient, extensionID: info.extensionID)
+        return HStack(spacing: 10) {
+            coverThumbnail(for: info, resolved: resolved)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(resolved.name)
@@ -230,8 +268,23 @@ struct ExportFlowView: View {
         let isSystem: Bool
     }
 
-    /// 名称解析：你的备注 → 目录表匹配（按描述符编号）→ providerInfo 名称 → 未识别。
-    private func resolvedName(for uuid: String, providerName: String?, isAmbient: Bool) -> ResolvedName {
+    /// 系统自带扩展的人话名字：时钟 / 环境 / 照片 / 合集；不是系统的返回 nil。
+    static func systemName(for extensionID: String?) -> String? {
+        guard let ext = extensionID else { return nil }
+        if ext.hasPrefix("com.apple.ClockPoster") { return "系统时钟海报" }
+        if ext == PosterBoard.mercuryExtension { return "系统环境海报" }
+        if ext == PosterBoard.photosExtension { return "系统照片海报" }
+        if ext == PosterBoard.collectionsExtension { return "系统合集海报" }
+        return nil
+    }
+
+    /// 是不是系统自带的：扩展是系统扩展，或 providerInfo 标了环境类。
+    static func isSystemEntry(_ info: InstalledWallpaperExporter.DescriptorInfo) -> Bool {
+        systemName(for: info.extensionID) != nil || info.isAmbient
+    }
+
+    /// 名称解析：你的备注 → 目录表匹配（按描述符编号）→ 系统自带名字 → providerInfo 名称 → 未识别。
+    private func resolvedName(for uuid: String, providerName: String?, isAmbient: Bool, extensionID: String?) -> ResolvedName {
         let note = notes[uuid]
         let catalogItem = catalog.item(withUUID: uuid)
         if let note, !note.isEmpty {
@@ -241,6 +294,10 @@ struct ExportFlowView: View {
         if let item = catalogItem {
             return ResolvedName(name: item.title, source: "目录匹配 · 封面已对应",
                                 thumbURL: item.thumbnailURL, isSystem: false)
+        }
+        if let system = Self.systemName(for: extensionID) {
+            return ResolvedName(name: system, source: "系统自带壁纸",
+                                thumbURL: nil, isSystem: true)
         }
         if isAmbient {
             return ResolvedName(name: "未识别 · 疑似系统壁纸", source: "环境类壁纸 · 容器中无独立媒体",
@@ -285,9 +342,19 @@ struct ExportFlowView: View {
             directEntries = live
             scannedBackupDir = nil
             descriptors = live.map {
-                InstalledWallpaperExporter.DescriptorInfo(uuid: $0.uuid, name: $0.name, isAmbient: $0.isAmbient)
+                InstalledWallpaperExporter.DescriptorInfo(uuid: $0.uuid, extensionID: $0.extensionID, name: $0.name, isAmbient: $0.isAmbient)
             }
             scanning = false
+            // 封面后台取：逐条在后台读包里的图，读完一条显示一条，界面不卡；
+            // 系统自带的跳过（只有名字、没封面）。
+            Task {
+                for entry in live where Self.systemName(for: entry.extensionID) == nil && !entry.isAmbient {
+                    let data = await Task.detached { DirectStoreExporter.coverData(for: entry) }.value
+                    if let data {
+                        await MainActor.run { covers[entry.uuid] = data }
+                    }
+                }
+            }
             return
         }
         if let note = directFailReason {

@@ -47,81 +47,85 @@ struct ImportView: View {
     @State private var showDetail = false
     @State private var pkgToDelete: ImportedPackage?
 
-    /// iPad 上列数：iPad 屏宽大，两列卡片会撑得满屏都是（实测 1366 宽横屏每张 659pt）。
-    /// iPad 用 4 列，卡片回到手机上差不多的大小，一屏能看多张。
-    private var columnCount: Int {
-        UIDevice.current.userInterfaceIdiom == .pad ? 4 : 2
+    /// 列数：跟目录页一样的逻辑——iPad 横屏 6 列、竖屏 4 列，iPhone 2 列。
+    /// 横竖屏按容器宽度判断（宽 > 900 算横屏），转屏时自动重算。
+    private func columnCount(for width: CGFloat) -> Int {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return 2 }
+        return width > 900 ? 6 : 4
     }
 
-    /// 卡片每张的宽：屏幕宽 − 左右各 16 边距 − 列间 16 间距，再按列数平分。
+    /// 卡片每张的宽：容器宽 − 左右各 16 边距 − 列间 12 间距，再按列数平分。
     /// 直接算死宽度，不靠 flexible 分（实测 flexible 在这页会分出宽窄不一的两列，
-    /// 左边贴边、右边出边）。iPhone 两列 196 + 16 + 196 正好等于内容宽。
-    private var importCardWidth: CGFloat {
-        (UIScreen.main.bounds.width - 32 - CGFloat(columnCount - 1) * 16) / CGFloat(columnCount)
+    /// 左边贴边、右边出边）。iPad 横屏 6 列约 181pt、竖屏 4 列约 188pt，跟目录卡一样大。
+    private func cardWidth(for width: CGFloat) -> CGFloat {
+        let cols = columnCount(for: width)
+        return (width - 32 - CGFloat(cols - 1) * 12) / CGFloat(cols)
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        // 26 系统用：配对文件下载/导入入口，只在 iOS 26 的手机上显示。
-                        if isIOS26 {
-                            pairingSection
-                        }
-                        if state.importedPackages.isEmpty {
-                            Text("还没导入包。点下面“导入壁纸”选本地 .tendies / .wallive，没加密的包导入时会自动转成 WALLIVE1 加密版（只有本 App 能装），加密包会自动解密后再检查。导过的包都存在这一页，随时能看、随时能装。")
-                                .foregroundStyle(.secondary).font(.caption)
-                        } else {
-                            LazyVGrid(columns: Array(repeating: GridItem(.fixed(importCardWidth), spacing: 16), count: columnCount), spacing: 16) {
-                                ForEach(state.importedPackages) { pkg in
-                                    ImportedPackageCard(
-                                        pkg: pkg,
-                                        thumbURL: state.importedThumbURL(pkg),
-                                        cardWidth: importCardWidth,
-                                        onApply: { applyPackage(pkg) },
-                                        onDelete: { pkgToDelete = pkg }
-                                    )
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            // 26 系统用：配对文件下载/导入入口，只在 iOS 26 的手机上显示。
+                            if isIOS26 {
+                                pairingSection
+                            }
+                            if state.importedPackages.isEmpty {
+                                Text("还没导入包。点下面“导入壁纸”选本地 .tendies / .wallive，没加密的包导入时会自动转成 WALLIVE1 加密版（只有本 App 能装），加密包会自动解密后再检查。导过的包都存在这一页，随时能看、随时能装。")
+                                    .foregroundStyle(.secondary).font(.caption)
+                            } else {
+                                LazyVGrid(columns: Array(repeating: GridItem(.fixed(cardWidth(for: geo.size.width)), spacing: 12), count: columnCount(for: geo.size.width)), spacing: 12) {
+                                    ForEach(state.importedPackages) { pkg in
+                                        ImportedPackageCard(
+                                            pkg: pkg,
+                                            thumbURL: state.importedThumbURL(pkg),
+                                            cardWidth: cardWidth(for: geo.size.width),
+                                            onApply: { applyPackage(pkg) },
+                                            onDelete: { pkgToDelete = pkg }
+                                        )
+                                    }
                                 }
                             }
+                            if !clearResult.isEmpty {
+                                Text(clearResult).font(.caption)
+                            }
+                            if let err = state.packageError {
+                                Text(err).foregroundStyle(.red).font(.caption)
+                            }
+                            // 远端旧导入页底部的署名，合并页保留，不丢。
+                            Text("王炸奓制作")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                            if !message.isEmpty {
+                                Text(message).foregroundStyle(.red).font(.caption)
+                            }
                         }
-                        if !clearResult.isEmpty {
-                            Text(clearResult).font(.caption)
-                        }
-                        if let err = state.packageError {
-                            Text(err).foregroundStyle(.red).font(.caption)
-                        }
-                        // 远端旧导入页底部的署名，合并页保留，不丢。
-                        Text("王炸奓制作")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                        if !message.isEmpty {
-                            Text(message).foregroundStyle(.red).font(.caption)
-                        }
+                        .padding()
                     }
-                    .padding()
+                    // 底部两个按钮：导入新的、去目录找更多。
+                    HStack(spacing: 12) {
+                        Button("＋ 导入壁纸") { showPicker = true }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(.blue)
+                            .clipShape(Capsule())
+                            .buttonStyle(PressBounceButtonStyle())
+                        Button("获取更多壁纸") { state.selectedTab = 0 }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .glassCapsule()
+                            .buttonStyle(PressBounceButtonStyle())
+                    }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
                 }
-                // 底部两个按钮：导入新的、去目录找更多。
-                HStack(spacing: 12) {
-                    Button("＋ 导入壁纸") { showPicker = true }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.blue)
-                        .clipShape(Capsule())
-                        .buttonStyle(PressBounceButtonStyle())
-                    Button("获取更多壁纸") { state.selectedTab = 0 }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .glassCapsule()
-                        .buttonStyle(PressBounceButtonStyle())
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
             }
             .background(AppBackgroundView())
             .navigationTitle("已导入壁纸包")
@@ -815,6 +819,8 @@ private struct ImportDetailView: View {
     /// 旧格式转换询问：第一次装旧格式包时弹，问转还是按原样；答案记住后不再问。
     @State private var showConvertPrompt = false
     @State private var convertPromptDescriptor = ""
+    /// iPad 预览图：当前包的锁屏全貌小图（手机竖屏比例），后台生成；iPhone 不用。
+    @State private var previewImage: UIImage?
 
     /// 安装方式（Drift 同款分段控件）：自动=没配对走直刷、有配对走隧道；
     /// 直刷=逃逸直写；隧道=配对隧道写盘（27.2 上要先开好回环 VPN）。
@@ -879,6 +885,22 @@ private struct ImportDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if let info = state.packageInfo {
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        // iPad 预览：手机竖屏比例的小图居中放，不再铺满全屏。
+                        Group {
+                            if let previewImage {
+                                Image(uiImage: previewImage)
+                                    .resizable().scaledToFill()
+                            } else {
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(.quaternary)
+                                    .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+                            }
+                        }
+                        .frame(width: 200, height: 200 * 19.5 / 9)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("壁纸包信息").font(.headline)
                         row("名称", value(info))
@@ -1095,9 +1117,21 @@ private struct ImportDetailView: View {
                 }
             }
             .padding()
+            // iPad 上内容收进 560 宽居中列；iPhone 不变。
+            .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 560 : .infinity)
+            .frame(maxWidth: .infinity)
         }
         .background(AppBackgroundView())
         .navigationTitle("壁纸包详情")
+        .task(id: state.packageInfo?.descriptorUUID) {
+            // iPad 预览图后台生成：只在 iPad 上生成，iPhone 不用。
+            guard UIDevice.current.userInterfaceIdiom == .pad,
+                  let data = state.packageData else { return }
+            let thumb = await Task.detached { ImportThumbnailMaker.make(from: data) }.value
+            if let thumb, let image = UIImage(data: thumb) {
+                previewImage = image
+            }
+        }
         .overlay {
             if installing {
                 ZStack {

@@ -33,7 +33,7 @@ public struct DescriptorInstaller {
             plainData = packageData
         }
         let stage = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wallive-clone-stage-\(info.descriptorUUID)")
+            .appendingPathComponent("win97-stage-\(info.descriptorUUID)")
         try? FileManager.default.removeItem(at: stage)
         try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
         // 把包内条目原样解到暂存目录（zip 层由 ZipEditing 提供）。

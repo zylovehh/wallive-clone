@@ -20,7 +20,7 @@ struct ImportedPackage: Identifiable, Codable, Equatable {
 }
 
 /// 安装方式（安装页分段控件用）：
-/// 直刷 = 逃逸直写（Vellum 同款，全程不碰配对隧道，也不需要 VPN）；
+/// 直刷 = 逃逸直写（描述符直写，全程不碰配对隧道，也不需要 VPN）；
 /// 隧道 = 配对隧道写盘（AirliftInstaller，27.2 上必须先开好回环 VPN）。
 enum InstallChannel {
     case direct
@@ -64,7 +64,7 @@ final class AppState: ObservableObject {
     private let sharePairWindow: TimeInterval = 2.5
     /// 导入库：所有导过的壁纸包（新的导进来不顶掉旧的），存在沙盒里，重启还在。
     @Published var importedPackages: [ImportedPackage] = []
-    private let importedDefaultsKey = "wallive-clone-imported-packages"
+    private let importedDefaultsKey = "win97-imported-packages"
     private let importedDirName = "imported-packages"
     @Published var pairingLoaded = false
     @Published var pairingDescription = "未导入"
@@ -75,10 +75,10 @@ final class AppState: ObservableObject {
     /// 每个包第一次装时会问转还是按原样，答案会记住。关掉后一律按原样装、不转换。
     /// iOS 26 能直接读旧包，不用转、也不会弹询问；iOS 27 起全系列都需要转。
     @Published var autoConvertOldFormat = true {
-        didSet { UserDefaults.standard.set(autoConvertOldFormat, forKey: "wallive-clone-auto-convert-old-format") }
+        didSet { UserDefaults.standard.set(autoConvertOldFormat, forKey: "win97-auto-convert-old-format") }
     }
     /// 每个包记住的转换选择：描述符 UUID → true 转、false 按原样。记在 UserDefaults。
-    private let convertChoiceKey = "wallive-clone-convert-choices"
+    private let convertChoiceKey = "win97-convert-choices"
     /// 这台设备的身份（UDID、iOS 版本、build）。读不到时为 nil，
     /// 界面显示"设备版本读不到"，安装按 fail closed 走备份路。
     @Published var deviceInfo: BackupFFI.DeviceInfo?
@@ -97,7 +97,7 @@ final class AppState: ObservableObject {
         // 启动自愈：上次逃逸中途崩溃会把 App Group 的 Library/Caches 留成
         // 指向壁纸库的软链，不收拾会污染其他走 App Group 的读写。
         WorseQueryEscape.recoverStaleSymlink()
-        autoConvertOldFormat = UserDefaults.standard.object(forKey: "wallive-clone-auto-convert-old-format") as? Bool ?? true
+        autoConvertOldFormat = UserDefaults.standard.object(forKey: "win97-auto-convert-old-format") as? Bool ?? true
         loadImportedPackages()
     }
 
@@ -434,7 +434,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 安装当前包：统一走 Vellum 同款那条路（直读找库 + 逃逸直写，
+    /// 安装当前包：统一走描述符直写那条路（直读找库 + 逃逸直写，
     /// 只写一个描述符目录，不碰表和偏好，全程不碰配对隧道）。
     /// V1.19：不分系统版本、不看配对记录，一律这条路；直写隧道那条
     /// 停用，host / forceRefresh 留着签名兼容，不再使用。
@@ -454,7 +454,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 诊断版安装：统一走 Vellum 同款那条路（只写描述符、不碰表和偏好、
+    /// 诊断版安装：统一走描述符直写那条路（只写描述符、不碰表和偏好、
     /// 全程不碰配对隧道），返回完整报告。
     /// 与旧 install() 的区别：逐目录结果记进 installReports，诊断页可显示；
     /// 暂存步骤与旧入口相同（DescriptorInstaller.stage），不改写盘逻辑、
@@ -506,11 +506,11 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 备份路安装（V1.19 起是唯一安装路）：走 Vellum 同款那条（直读找库 +
+    /// 备份路安装（V1.19 起是唯一安装路）：走描述符直写那条（直读找库 +
     /// 逃逸直写，只写描述符目录）。结果记进 installReports，报告里
     /// `mode` 是 `.backup`。装完界面补本地桌面刷新，重启手机只作后备按钮。
     /// V1.19：配对路径恒传空串——这条路全程不碰配对隧道，绝不拿着配对
-    /// 文件路径去碰隧道（27.2 上隧道必须回环 VPN）。走没走成 Vellum 同款
+    /// 文件路径去碰隧道（27.2 上隧道必须回环 VPN）。走没走成描述符直写
     /// 用结果的 `preferencesWritten` 判断：这条路从不写偏好，为 false；
     /// 老的改表路才为 true。
     private func installWithReportBackup(data: Data,
@@ -529,11 +529,11 @@ final class AppState: ObservableObject {
                 preparedStage: preparedStage)
             let configurationsDir = "Library/Application Support/PRBPosterExtensionDataStore/"
                 + "Extensions/\(outcome.extensionID)/configurations"
-            // 走没走成 Vellum 同款看结果：这条路从不写偏好，preferencesWritten
+            // 走没走成描述符直写看结果：这条路从不写偏好，preferencesWritten
             // 一定是 false；老的改表路才写偏好（true）。没写偏好的报告里
             // 不凑 configurations 那行。
-            let isVellumPath = !outcome.preferencesWritten
-            let injectResults = isVellumPath
+            let isDescriptorOnlyPath = !outcome.preferencesWritten
+            let injectResults = isDescriptorOnlyPath
                 ? outcome.injectResults
                 : [InjectResult(targetParentDir: configurationsDir, ok: true, error: nil)]
                     + outcome.injectResults
@@ -558,7 +558,7 @@ final class AppState: ObservableObject {
                 // 就由界面补一次本地网页法只重启桌面。
                 refresh: RefreshResult(confirmed: outcome.refreshConfirmed),
                 mode: .backup,
-                backupSummary: isVellumPath
+                backupSummary: isDescriptorOnlyPath
                     ? "壁纸已写好（只写描述符目录，表和偏好没碰）。" + verifyNote
                         + "正在刷新桌面，回来后锁屏长按进图库，出现后再设为墙纸组合。"
                     : "备份还原已完成（\(outcome.payloadCount) 个载荷，"
@@ -598,7 +598,7 @@ final class AppState: ObservableObject {
         guard port != 0, let endpointPort = NWEndpoint.Port(rawValue: port) else {
             return false
         }
-        let queue = DispatchQueue(label: "wallive-clone-vpn-check")
+        let queue = DispatchQueue(label: "win97-vpn-check")
         return await withCheckedContinuation { cont in
             var done = false
             let conn = NWConnection(
