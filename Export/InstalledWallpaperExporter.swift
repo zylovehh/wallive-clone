@@ -1,6 +1,25 @@
 import Foundation
 import UIKit
 
+/// 记住系统壁纸：第一次认出是系统自带的，就把描述符 UUID 存起来
+///（UserDefaults，键 win97-known-system-uuids），以后只看这份名单认系统，
+///不再只靠日期推断——日期推断已经错过两次了（火影四代目、11-17 两张新装的）。
+/// 名单只增不减：新 UUID 只有被日期规则判成系统时才会被记进来；
+/// 回执对上的（自己装的）永远不进名单。
+enum KnownSystemWallpapers {
+    private static let key = "win97-known-system-uuids"
+    static var uuids: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: key) }
+    }
+    static func remember(_ uuid: String) {
+        var s = uuids
+        s.insert(uuid)
+        uuids = s
+    }
+    static func contains(_ uuid: String) -> Bool { uuids.contains(uuid) }
+}
+
 /// 导出已装壁纸：取一份 PosterBoard 备份，从备份清单里挑出指定
 /// 描述符 UUID 的载荷文件，按标准 .tendies 目录结构重打包。
 ///

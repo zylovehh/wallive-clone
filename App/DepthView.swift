@@ -514,6 +514,8 @@ private struct ReceiptManageView: View {
     // 跟商店里最早一批差一天以内算「大概率是系统的」，更晚的算「别的工具装的」。
     // （原来是三天窗口，但系统那批是 11-16 一次建好的，用户 11-17 刚从别的 App
     // 装的两张只晚了一天多，全被三天窗口吞进系统组了；改成一天。）
+    // 名单优先：以前认出是系统的 UUID 记在 KnownSystemWallpapers 里，
+    // 再扫到直接进系统组；日期规则判成系统的，顺手记进名单。
     // 时间是推断依据不是官方标记；拿不到时间的进「别的工具装的」。
     private static func grouped(_ entries: [LiveDescriptor])
         -> (own: [LiveDescriptor], thirdParty: [LiveDescriptor], systemish: [LiveDescriptor]) {
@@ -524,7 +526,10 @@ private struct ReceiptManageView: View {
         var thirdParty: [LiveDescriptor] = []
         var systemish: [LiveDescriptor] = []
         for entry in unmatched {
-            if let t = entry.creationDate, let base = baseline, t <= base + window {
+            if KnownSystemWallpapers.contains(entry.uuid) {
+                systemish.append(entry)
+            } else if let t = entry.creationDate, let base = baseline, t <= base + window {
+                KnownSystemWallpapers.remember(entry.uuid)
                 systemish.append(entry)
             } else {
                 thirdParty.append(entry)

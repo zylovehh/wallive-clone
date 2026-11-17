@@ -319,6 +319,8 @@ struct ExportFlowView: View {
 
     /// 两组：系统自带的收进一组默认折叠，其余（自己装的、别的工具装的）在前。
     /// 自己装的（回执/日期新）不进系统组，哪怕走了系统扩展。
+    /// 名单优先：以前认出是系统的 UUID 记在 KnownSystemWallpapers 里，
+    /// 再扫到直接进系统组；日期规则判成系统的，顺手记进名单。
     static func grouped(_ entries: [InstalledWallpaperExporter.DescriptorInfo])
         -> (system: [InstalledWallpaperExporter.DescriptorInfo], other: [InstalledWallpaperExporter.DescriptorInfo]) {
         let baseline = systemBaseline(in: entries)
@@ -327,7 +329,10 @@ struct ExportFlowView: View {
         for e in entries {
             if isOwnEntry(e, baseline: baseline) {
                 other.append(e)
+            } else if KnownSystemWallpapers.contains(e.uuid) {
+                system.append(e)
             } else if systemName(for: e.extensionID) != nil || e.isAmbient {
+                KnownSystemWallpapers.remember(e.uuid)
                 system.append(e)
             } else {
                 other.append(e)
