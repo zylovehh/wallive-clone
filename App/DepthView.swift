@@ -511,14 +511,16 @@ private struct ReceiptManageView: View {
     }
 
     // 三档分组：账本对上=自己装的；没对上的按文件创建时间划线——
-    // 跟商店里最早一批差三天以内算「大概率是系统的」，更晚的算「别的工具装的」。
+    // 跟商店里最早一批差一天以内算「大概率是系统的」，更晚的算「别的工具装的」。
+    // （原来是三天窗口，但系统那批是 11-16 一次建好的，用户 11-17 刚从别的 App
+    // 装的两张只晚了一天多，全被三天窗口吞进系统组了；改成一天。）
     // 时间是推断依据不是官方标记；拿不到时间的进「别的工具装的」。
     private static func grouped(_ entries: [LiveDescriptor])
         -> (own: [LiveDescriptor], thirdParty: [LiveDescriptor], systemish: [LiveDescriptor]) {
         let own = entries.filter { $0.receipt != nil }
         let unmatched = entries.filter { $0.receipt == nil }
         let baseline = unmatched.compactMap(\.creationDate).min()
-        let window: TimeInterval = 3 * 24 * 3600
+        let window: TimeInterval = 24 * 3600
         var thirdParty: [LiveDescriptor] = []
         var systemish: [LiveDescriptor] = []
         for entry in unmatched {

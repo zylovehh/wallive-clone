@@ -83,6 +83,15 @@ struct InstallView: View {
                 Text("装完自动刷新：不用注销，锁屏长按进图库就能看到。").font(.caption)
                     .foregroundStyle(.secondary)
 
+                // 手动刷新海报：装完海报卡片有时候不出来，点这个把海报界面拉起来。
+                Button("手动刷新海报") {
+                    refreshPoster()
+                }
+                .buttonStyle(.bordered)
+                .disabled(installing)
+                Text("装完海报没出来就点这个，把海报界面拉起来再看。").font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if installing { ProgressView("正在安装…") }
                 if !result.isEmpty { Text(result).font(.caption) }
                 if !state.statusMessage.isEmpty {
@@ -179,6 +188,31 @@ struct InstallView: View {
         } else {
             result = "安装完成（直刷路），描述符 UUID：\(uuid)。\(verify)海报没叫动——锁屏长按进图库看看装没装上，日志里有调用结果。"
             installLog = InstallLog.shared.tail(200)
+        }
+    }
+
+    /// 手动刷新海报：装完海报卡片有时候不出来，点“手动刷新海报”把 PosterBoard 拉起来。
+    /// 跟直刷装完那步同一套：私有接口打头，posterboard:// 暗号作退路。
+    private func refreshPoster() {
+        if PosterBoardLauncher.launch() {
+            result = "海报界面拉起来了——上滑关掉卡片，锁屏长按进图库查看。"
+            return
+        }
+        InstallLog.shared.append("restore: 手动刷新海报，私有接口没叫动，退 posterboard:// 暗号。")
+        guard let posterBoardURL = URL(string: "posterboard://") else {
+            result = "海报没叫动——锁屏长按进图库看看装没装上。"
+            return
+        }
+        UIApplication.shared.open(posterBoardURL) { ok in
+            // open 的回调不保证主线程；result 是界面状态，必须回主线程改。
+            DispatchQueue.main.async {
+                if ok {
+                    result = "海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
+                } else {
+                    InstallLog.shared.append("restore: 手动刷新海报，暗号也没叫动。")
+                    result = "海报没叫动——锁屏长按进图库看看装没装上。"
+                }
+            }
         }
     }
 }

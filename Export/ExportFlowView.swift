@@ -119,7 +119,7 @@ struct ExportFlowView: View {
                     Text("共扫到 \(descriptors.count) 个壁纸（含其他 App 装入容器的）。")
                         .font(.caption).foregroundStyle(.secondary)
                     // 两组：别的 App / 自己装的在前，系统自带的收进一组、默认折叠。
-                    // 自己装的按回执和日期认（回执对上，或比系统最早一批晚三天以上），
+                    // 自己装的按回执和日期认（回执对上，或比系统最早一批晚一天以上），
                     // 不只看扩展名——自己装的 .tendies 也走系统扩展。
                     let baseline = Self.systemBaseline(in: descriptors)
                     let grouped = Self.grouped(descriptors)
@@ -302,16 +302,16 @@ struct ExportFlowView: View {
     }
 
     /// 系统最早一批的基准日期：没回执的条目里最早的创建日期；没有日期返回 nil。
-    /// 管理页同口径（三天窗口）。
+    /// 管理页同口径（一天窗口：原来三天，11-17 刚装的两张只晚了一天多就被吞进系统组了）。
     static func systemBaseline(in entries: [InstalledWallpaperExporter.DescriptorInfo]) -> Date? {
         entries.filter { $0.receiptPackageName == nil }.compactMap(\.creationDate).min()
     }
 
-    /// 自己装的：回执对上，或没回执但日期比系统最早一批晚三天以上。
+    /// 自己装的：回执对上，或没回执但日期比系统最早一批晚一天以上。
     /// 日期拿不到的按扩展名兜底（不算自己装的）。
     static func isOwnEntry(_ info: InstalledWallpaperExporter.DescriptorInfo, baseline: Date?) -> Bool {
         if info.receiptPackageName != nil { return true }
-        if let t = info.creationDate, let base = baseline, t > base + 3 * 24 * 3600 {
+        if let t = info.creationDate, let base = baseline, t > base + 24 * 3600 {
             return true
         }
         return false
@@ -420,7 +420,7 @@ struct ExportFlowView: View {
             // 也要取封面（回执对上 / 日期新都算自己装的）。
             let receiptUUIDs = Set(receiptNames.keys)
             let baseline = live.filter { !receiptUUIDs.contains($0.uuid) }.compactMap(\.creationDate).min()
-            let window: TimeInterval = 3 * 24 * 3600
+            let window: TimeInterval = 24 * 3600
             let isNew: (DirectStoreExporter.DirectDescriptor) -> Bool = { entry in
                 guard let t = entry.creationDate, let base = baseline else { return false }
                 return t > base + window
