@@ -110,7 +110,8 @@ struct ExportFlowView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(state.installHistory, id: \.self) { uuid in
                         descriptorRow(InstalledWallpaperExporter.DescriptorInfo(
-                            uuid: uuid, extensionID: nil, name: nil, isAmbient: false))
+                            uuid: uuid, extensionID: nil, name: nil, isAmbient: false,
+                            receiptPackageName: InstalledWallpaperExporter.DescriptorInfo.receiptNameByUUID()[uuid]), isOwn: true)
                     }
                 }
 
@@ -118,10 +119,14 @@ struct ExportFlowView: View {
                     Text("共扫到 \(descriptors.count) 个壁纸（含其他 App 装入容器的）。")
                         .font(.caption).foregroundStyle(.secondary)
                     // 两组：别的 App / 自己装的在前，系统自带的收进一组、默认折叠。
-                    let systemEntries = descriptors.filter { Self.isSystemEntry($0) }
-                    let otherEntries = descriptors.filter { !Self.isSystemEntry($0) }
+                    // 自己装的按回执和日期认（回执对上，或比系统最早一批晚三天以上），
+                    // 不只看扩展名——自己装的 .tendies 也走系统扩展。
+                    let baseline = Self.systemBaseline(in: descriptors)
+                    let grouped = Self.grouped(descriptors)
+                    let systemEntries = grouped.system
+                    let otherEntries = grouped.other
                     ForEach(otherEntries, id: \.uuid) { info in
-                        descriptorRow(info)
+                        descriptorRow(info, isOwn: Self.isOwnEntry(info, baseline: baseline))
                     }
                     if !systemEntries.isEmpty {
                         Button {
@@ -136,7 +141,7 @@ struct ExportFlowView: View {
                         .buttonStyle(.plain)
                         if !foldedSystem {
                             ForEach(systemEntries, id: \.uuid) { info in
-                                descriptorRow(info)
+                                descriptorRow(info, isOwn: false)
                             }
                         }
                     }
@@ -179,16 +184,11 @@ struct ExportFlowView: View {
 
     @ViewBuilder
     private func thumbnail(for urlString: String?) -> some View {
-        if let urlString, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    placeholderThumb
-                }
-            }
-            .frame(width: 60, height: 60)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+        if let urlString, !urlString.isEmpty {
+            // 目录封面和目录卡片走同一份带备用链的加载：主链拉不到换 raw 直链再试。
+            CachedCoverImage(urlString: urlString)
+                .frame(width: 60, height: 60)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
         } else {
             placeholderThumb
         }
@@ -208,9 +208,11 @@ struct ExportFlowView: View {
         }
     }
 
-    /// 行渲染：封面在最前，名称按「备注 → 目录 → 系统自带 → providerInfo → 未识别」解析。
-    private func descriptorRow(_ info: InstalledWallpaperExporter.DescriptorInfo) -> some View {
-        let resolved = resolvedName(for: info.uuid, providerName: info.name, isAmbient: info.isAmbient, extensionID: info.extensionID)
+    /// 行渲染：封面在最前，名称按「备注 → 目录 → 回执 → 系统自带 → providerInfo → 未识别」解析。
+    /// 自己装的（回执/日期新）不标系统、显示真名和导入时间。
+    private func descriptorRow(_ info: InstalledWallpaperExporter.DescriptorInfo, isOwn: Bool) -> some View {
+        let resolved = resolvedName(for: info.uuid, providerName: info.name, isAmbient: info.isAmbient, extensionID: info.extensionID,
+                                    receiptName: info.receiptPackageName, isOwn: isOwn)
         return HStack(spacing: 10) {
             coverThumbnail(for: info, resolved: resolved)
             VStack(alignment: .leading, spacing: 2) {
@@ -249,6 +251,11 @@ struct ExportFlowView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
+                if let t = info.creationDate {
+                    Text("导入时间：\(Self.shortTime.string(from: t))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
             GlassIconButton(title: "导出", systemImage: "square.and.arrow.up") {
@@ -258,6 +265,13 @@ struct ExportFlowView: View {
         }
         .padding(.vertical, 4)
     }
+
+    /// 导入时间：跟管理页同一格式（月-日 时:分）。
+    private static let shortTime: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f
+    }()
 
     // MARK: - 名称解析与备注
 
@@ -275,16 +289,58 @@ struct ExportFlowView: View {
         if ext == PosterBoard.mercuryExtension { return "系统环境海报" }
         if ext == PosterBoard.photosExtension { return "系统照片海报" }
         if ext == PosterBoard.collectionsExtension { return "系统合集海报" }
+        // 别的苹果自带扩展（天文、天气这类没单列名字的）：一律算系统壁纸，别再掉进“未识别”。
+        if ext.hasPrefix("com.apple.") { return "系统壁纸" }
         return nil
     }
 
     /// 是不是系统自带的：扩展是系统扩展，或 providerInfo 标了环境类。
+    /// 注意：只看扩展会错标——自己装的 .tendies 也走系统扩展（时钟/合集），
+    /// 所以分组不用这个单条判断，改用下面的 isOwnEntry + baseline（回执/日期优先）。
     static func isSystemEntry(_ info: InstalledWallpaperExporter.DescriptorInfo) -> Bool {
         systemName(for: info.extensionID) != nil || info.isAmbient
     }
 
-    /// 名称解析：你的备注 → 目录表匹配（按描述符编号）→ 系统自带名字 → providerInfo 名称 → 未识别。
-    private func resolvedName(for uuid: String, providerName: String?, isAmbient: Bool, extensionID: String?) -> ResolvedName {
+    /// 系统最早一批的基准日期：没回执的条目里最早的创建日期；没有日期返回 nil。
+    /// 管理页同口径（三天窗口）。
+    static func systemBaseline(in entries: [InstalledWallpaperExporter.DescriptorInfo]) -> Date? {
+        entries.filter { $0.receiptPackageName == nil }.compactMap(\.creationDate).min()
+    }
+
+    /// 自己装的：回执对上，或没回执但日期比系统最早一批晚三天以上。
+    /// 日期拿不到的按扩展名兜底（不算自己装的）。
+    static func isOwnEntry(_ info: InstalledWallpaperExporter.DescriptorInfo, baseline: Date?) -> Bool {
+        if info.receiptPackageName != nil { return true }
+        if let t = info.creationDate, let base = baseline, t > base + 3 * 24 * 3600 {
+            return true
+        }
+        return false
+    }
+
+    /// 两组：系统自带的收进一组默认折叠，其余（自己装的、别的工具装的）在前。
+    /// 自己装的（回执/日期新）不进系统组，哪怕走了系统扩展。
+    static func grouped(_ entries: [InstalledWallpaperExporter.DescriptorInfo])
+        -> (system: [InstalledWallpaperExporter.DescriptorInfo], other: [InstalledWallpaperExporter.DescriptorInfo]) {
+        let baseline = systemBaseline(in: entries)
+        var system: [InstalledWallpaperExporter.DescriptorInfo] = []
+        var other: [InstalledWallpaperExporter.DescriptorInfo] = []
+        for e in entries {
+            if isOwnEntry(e, baseline: baseline) {
+                other.append(e)
+            } else if systemName(for: e.extensionID) != nil || e.isAmbient {
+                system.append(e)
+            } else {
+                other.append(e)
+            }
+        }
+        return (system, other)
+    }
+
+    /// 名称解析：你的备注 → 目录表匹配（按描述符编号）→ 回执包名 → 系统自带名字 → providerInfo 名称 → 未识别。
+    /// 回执对上的就是自己装的，显示真名、不标系统；没回执但日期新的也一样
+    /// （isOwn），不标系统。系统名只给真正系统自带的。
+    private func resolvedName(for uuid: String, providerName: String?, isAmbient: Bool, extensionID: String?,
+                              receiptName: String?, isOwn: Bool) -> ResolvedName {
         let note = notes[uuid]
         let catalogItem = catalog.item(withUUID: uuid)
         if let note, !note.isEmpty {
@@ -294,6 +350,18 @@ struct ExportFlowView: View {
         if let item = catalogItem {
             return ResolvedName(name: item.title, source: "目录匹配 · 封面已对应",
                                 thumbURL: item.thumbnailURL, isSystem: false)
+        }
+        if let receiptName, !receiptName.isEmpty {
+            return ResolvedName(name: receiptName, source: "本 App 装的 · 回执对上",
+                                thumbURL: catalogItem?.thumbnailURL, isSystem: false)
+        }
+        if isOwn {
+            if let providerName, !providerName.isEmpty {
+                return ResolvedName(name: providerName, source: "来自壁纸自带信息",
+                                    thumbURL: nil, isSystem: false)
+            }
+            return ResolvedName(name: "未识别壁纸", source: "暂无封面来源 · 可手动起名",
+                                thumbURL: nil, isSystem: false)
         }
         if let system = Self.systemName(for: extensionID) {
             return ResolvedName(name: system, source: "系统自带壁纸",
@@ -341,14 +409,24 @@ struct ExportFlowView: View {
         if let live = live, !live.isEmpty {
             directEntries = live
             scannedBackupDir = nil
+            let receiptNames = InstalledWallpaperExporter.DescriptorInfo.receiptNameByUUID()
             descriptors = live.map {
-                InstalledWallpaperExporter.DescriptorInfo(uuid: $0.uuid, extensionID: $0.extensionID, name: $0.name, isAmbient: $0.isAmbient)
+                InstalledWallpaperExporter.DescriptorInfo(uuid: $0.uuid, extensionID: $0.extensionID, name: $0.name, isAmbient: $0.isAmbient,
+                                                          receiptPackageName: receiptNames[$0.uuid], creationDate: $0.creationDate)
             }
             scanning = false
             // 封面后台取：逐条在后台读包里的图，读完一条显示一条，界面不卡；
-            // 系统自带的跳过（只有名字、没封面）。
+            // 系统自带的跳过（只有名字、没封面）。自己装的就算走了系统扩展
+            // 也要取封面（回执对上 / 日期新都算自己装的）。
+            let receiptUUIDs = Set(receiptNames.keys)
+            let baseline = live.filter { !receiptUUIDs.contains($0.uuid) }.compactMap(\.creationDate).min()
+            let window: TimeInterval = 3 * 24 * 3600
+            let isNew: (DirectStoreExporter.DirectDescriptor) -> Bool = { entry in
+                guard let t = entry.creationDate, let base = baseline else { return false }
+                return t > base + window
+            }
             Task {
-                for entry in live where Self.systemName(for: entry.extensionID) == nil && !entry.isAmbient {
+                for entry in live where !entry.isAmbient && (receiptUUIDs.contains(entry.uuid) || Self.systemName(for: entry.extensionID) == nil || isNew(entry)) {
                     let data = await Task.detached { DirectStoreExporter.coverData(for: entry) }.value
                     if let data {
                         await MainActor.run { covers[entry.uuid] = data }

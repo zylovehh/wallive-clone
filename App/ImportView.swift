@@ -336,7 +336,7 @@ private struct ImportedPackageCard: View {
 
     private func dateText(_ date: Date) -> String {
         let f = DateFormatter()
-        f.dateFormat = "M/d"
+        f.dateFormat = "M/d H:mm"
         return f.string(from: date)
     }
 }

@@ -11,6 +11,9 @@ struct AdminLoginView: View {
     @State private var username = AccountStore.ownerUsername
     @State private var password = ""
     @State private var error: String?
+    @State private var token = ""
+    @State private var tokenSaved = false
+    @State private var tokenNote = ""
 
     var body: some View {
         VStack(spacing: 24) {
@@ -51,9 +54,39 @@ struct AdminLoginView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            Divider()
+            // GitHub 钥匙：跟“我的账号”页是同一把（同一钥匙串），这边也能贴、也能存，
+            // 导出要推目录时直接用，不用再回账号页填。标题和说明不写，只留输入框。
+            VStack(alignment: .leading, spacing: 8) {
+                SecureField("贴入钥匙", text: $token)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                HStack {
+                    Button("保存钥匙") {
+                        store.saveToken(token)
+                        token = ""
+                        tokenSaved = true
+                        tokenNote = "钥匙已保存。"
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(token.isEmpty)
+                    if tokenSaved {
+                        Button("清除钥匙", role: .destructive) {
+                            store.clearToken()
+                            tokenSaved = false
+                            tokenNote = "钥匙已清除。"
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                if !tokenNote.isEmpty { Text(tokenNote).font(.caption).foregroundStyle(.secondary) }
+                Text(tokenSaved ? "钥匙状态：已保存" : "钥匙状态：未保存")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Spacer(minLength: 0)
         }
         .padding(32)
+        .onAppear { tokenSaved = store.hasToken }
     }
 
     private func login() {

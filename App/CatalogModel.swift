@@ -185,8 +185,9 @@ final class CatalogStore: ObservableObject {
     /// 直接拿去下会失败（没域名），这里先拼成 Fastly 加速的完整地址再下。
     /// 注意 wallpapersRawBase 末尾已经是 wallpapers/，相对路径开头的 wallpapers/ 要去掉再拼，
     /// 不然会拼出两层 wallpapers。
-    /// jsDelivr 403/404 时自动换源：超 20M 的包它直接 403、缓存过期会 404，
-    /// 换 raw.githubusercontent.com 直链再下一次（直链没 20M 限制，能下 100M 以内的文件）。
+    /// jsDelivr 拉不到时自动换源：超 20M 的包它直接 403、缓存过期会 404，
+    /// 有的手机网络还根本到不了 jsDelivr（断网、超时、连不上，连状态码都没有），
+    /// 这几种都换 raw.githubusercontent.com 直链再下一次（直链没 20M 限制，能下 100M 以内的文件）。
     func download(_ item: CatalogItem) async -> Data? {
         let packageAddress: String
         if item.packageURL.hasPrefix("http") {
@@ -201,26 +202,25 @@ final class CatalogStore: ObservableObject {
               !downloadingIDs.contains(item.id) else { return nil }
         downloadingIDs.insert(item.id)
         defer { downloadingIDs.remove(item.id) }
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 200 {
-                return saveDownload(data, for: item)
-            }
-            // 403/404 才换源重试：别的错（断网、超时）换源也一样失败，不多跑一次。
-            if (status == 403 || status == 404),
-               let fallback = Self.rawGitHubURL(from: packageAddress) {
-                let (retryData, retryResponse) = try await URLSession.shared.data(from: fallback)
-                guard (retryResponse as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw CatalogError.fileNotFound
-                }
-                return saveDownload(retryData, for: item)
-            }
-            throw CatalogError.fileNotFound
-        } catch {
-            errorMessage = "下载失败：\(error.localizedDescription)"
-            return nil
+        // 主链（Fastly）先下；拉不到就换 raw 直链再下一次。
+        // 换源不只看 403/404：有的手机网络根本到不了 jsDelivr（断网、超时、连不上），
+        // 那时连状态码都没有，不换源就永远下不来。raw 是目录表同款地址，手机上已证能通。
+        if let data = await Self.fetchData(from: url) {
+            return saveDownload(data, for: item)
         }
+        if let fallbackURL = Self.rawGitHubURL(from: packageAddress),
+           let data = await Self.fetchData(from: fallbackURL) {
+            return saveDownload(data, for: item)
+        }
+        errorMessage = "下载失败：主链和备用链都拉不到，请检查网络后重试"
+        return nil
+    }
+
+    /// 拉一次：200 且拿到数据才返回，否则 nil（断网、超时、403/404 都算拉不到）。
+    private static func fetchData(from url: URL) async -> Data? {
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return data
     }
 
     /// jsDelivr 地址换成 GitHub 直链：

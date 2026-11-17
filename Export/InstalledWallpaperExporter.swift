@@ -29,6 +29,34 @@ enum InstalledWallpaperExporter {
         /// providerInfo 的 role 标明是环境类壁纸（如世界时钟）时为 true，
         /// 这类壁纸容器里本来就没有独立媒体，界面上单独标「系统」。
         let isAmbient: Bool
+        /// 本 App 安装回执里的包名（对得上就是自己装的）；没有回执为 nil。
+        /// 自己装的 .tendies 也走系统扩展，只看扩展会错标成系统，所以分组和
+        /// 取名都要先看这个。
+        let receiptPackageName: String?
+        /// 描述符目录的文件创建时间（直读才有；备份路径读不到为 nil）。
+        /// 导出页按新旧分“自己装的 / 系统”用，也直接显示成导入时间。
+        let creationDate: Date?
+
+        init(uuid: String, extensionID: String?, name: String?, isAmbient: Bool,
+             receiptPackageName: String? = nil, creationDate: Date? = nil) {
+            self.uuid = uuid
+            self.extensionID = extensionID
+            self.name = name
+            self.isAmbient = isAmbient
+            self.receiptPackageName = receiptPackageName
+            self.creationDate = creationDate
+        }
+
+        /// 回执包名表：UUID → 包名（只收有包名的回执）。直读和备份两路共用。
+        static func receiptNameByUUID() -> [String: String] {
+            var map: [String: String] = [:]
+            for r in InstallReceiptStore.receipts() {
+                if let name = r.packageName, !name.isEmpty {
+                    map[r.descriptorUUID] = name
+                }
+            }
+            return map
+        }
     }
 
     /// 取一份新的 PosterBoard 备份，返回备份目录。
@@ -70,6 +98,7 @@ enum InstalledWallpaperExporter {
     static func listAllDescriptors(backupDir: URL) throws -> [DescriptorInfo] {
         let manifest = ManifestStore(deviceDir: backupDir)
         let rows = try manifest.rows(relativePathLike: "%descriptors/%")
+        let receiptNames = DescriptorInfo.receiptNameByUUID()
 
         var order: [String] = []
         var metas: [String: (name: String?, isAmbient: Bool, extensionID: String?)] = [:]
@@ -83,7 +112,8 @@ enum InstalledWallpaperExporter {
             }
         }
         return order.map { DescriptorInfo(uuid: $0, extensionID: metas[$0]?.extensionID,
-                                          name: metas[$0]?.name, isAmbient: metas[$0]?.isAmbient ?? false) }
+                                          name: metas[$0]?.name, isAmbient: metas[$0]?.isAmbient ?? false,
+                                          receiptPackageName: receiptNames[$0]) }
     }
 
     /// 重打指定描述符的 .tendies（明文 zip，调用方按需再加密）。
@@ -202,6 +232,9 @@ enum DirectStoreExporter {
         let name: String?
         /// providerInfo 的 role 标明是环境类壁纸时为 true（如世界时钟）。
         let isAmbient: Bool
+        /// 描述符目录的文件创建时间：导出页按新旧分“自己装的 / 系统”用；
+        /// 拿不到就 nil，按扩展名兜底。
+        let creationDate: Date?
     }
 
     /// 直读枚举商店全部版本/扩展下的描述符目录（只读逃逸）。
@@ -235,9 +268,11 @@ enum DirectStoreExporter {
                     var isDir: ObjCBool = false
                     guard fm.fileExists(atPath: full, isDirectory: &isDir), isDir.boolValue else { continue }
                     let meta = readDescriptorMeta(at: full)
+                    let created = try? fm.attributesOfItem(atPath: full)[.creationDate] as? Date
                     results.append(DirectDescriptor(uuid: d, extensionID: ext,
                                                     structureVersion: v, fullPath: full,
-                                                    name: meta.name, isAmbient: meta.isAmbient))
+                                                    name: meta.name, isAmbient: meta.isAmbient,
+                                                    creationDate: created))
                 }
             }
         }

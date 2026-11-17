@@ -566,7 +566,9 @@ private struct ReceiptManageView: View {
                         Text(entry.displayName)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                        if entry.isSystemExtension {
+                        // “系统”标只看扩展会错标：自己装的 .tendies 也走系统扩展
+                        // （时钟/合集），回执对上了就是自己装的，别再标系统。
+                        if entry.isSystemExtension && entry.receipt == nil {
                             Text("系统")
                                 .font(.caption2)
                                 .foregroundStyle(.yellow)

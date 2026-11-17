@@ -207,9 +207,20 @@ final class ThumbnailDiskCache {
 
 /// 封面图：先读本地磁盘缓存，命中直接显示；没命中下载后存缓存再显示。
 /// 只给 JPG 静态封面用，视频封面不走这里。
-private struct CachedCoverImage: View {
+/// 主链（目录表里的 jsDelivr 地址）拉不到时，换同一文件的 raw 直链再试一次：
+/// 有的手机网络到不了 jsDelivr，但目录表和安装包走的 raw 直链是通的。
+/// 导出页的行封面也共用这里（所以不标 private）。
+struct CachedCoverImage: View {
     let urlString: String
     @State private var image: UIImage?
+
+    /// jsDelivr 地址换成同一文件的 raw 直链（目录表和安装包同款地址）。
+    private var fallbackURLString: String? {
+        let marker = "jsdelivr.net/gh/zylovehh/wallive-catalog@main/"
+        guard let range = urlString.range(of: marker) else { return nil }
+        return "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main/"
+            + String(urlString[range.upperBound...])
+    }
 
     var body: some View {
         Group {
@@ -227,13 +238,26 @@ private struct CachedCoverImage: View {
                 image = img
                 return
             }
-            guard let url = URL(string: urlString),
-                  let (data, response) = try? await URLSession.shared.data(from: url),
-                  (response as? HTTPURLResponse)?.statusCode == 200,
-                  let img = UIImage(data: data) else { return }
-            ThumbnailDiskCache.shared.store(data, for: urlString)
-            image = img
+            if let img = await Self.load(urlString, cacheKey: urlString) {
+                image = img
+                return
+            }
+            if let fallback = fallbackURLString,
+               let img = await Self.load(fallback, cacheKey: urlString) {
+                image = img
+            }
         }
+    }
+
+    /// 拉一幅封面：200 才算拉到，图能解开才存缓存、才显示；不成返回 nil。
+    /// cacheKey 固定用主链地址，备用链拉到的图也存在主链名下，下次直接命中缓存。
+    private static func load(_ urlString: String, cacheKey: String) async -> UIImage? {
+        guard let url = URL(string: urlString),
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let img = UIImage(data: data) else { return nil }
+        ThumbnailDiskCache.shared.store(data, for: cacheKey)
+        return img
     }
 }
 
@@ -890,6 +914,10 @@ private struct InlineVideoCover: UIViewRepresentable {
         let item = AVPlayerItem(url: url)
         context.coordinator.looper = AVPlayerLooper(player: queuePlayer, templateItem: item)
         context.coordinator.player = queuePlayer
+        // 主链（jsDelivr）播不起来就换同一文件的 raw 直链：有的手机网络到不了 jsDelivr，
+        // 封面视频会一直黑着。备用链由 Coordinator 在 status 变 failed 时换上。
+        context.coordinator.fallbackURL = CatalogStore.rawGitHubURL(from: url.absoluteString)
+        context.coordinator.observeItem(item, player: queuePlayer)
         // App 切到后台（锁屏也算）就停播，回来再播：封面视频不能在后台还占着播放器，
         // 不然锁屏上会冒出一个“未在播放”的播放器。
         context.coordinator.observeBackground(queuePlayer)
@@ -909,7 +937,27 @@ private struct InlineVideoCover: UIViewRepresentable {
     final class Coordinator {
         var looper: AVPlayerLooper?
         var player: AVQueuePlayer?
+        var fallbackURL: URL?
+        private var triedFallback = false
+        private var statusObservation: NSKeyValueObservation?
         private var observers: [NSObjectProtocol] = []
+
+        /// 主链播不起来（status 变 failed）就换备用链，只换一次。
+        /// 回调可能不在主线程，换播放器那步回到主线程做。
+        func observeItem(_ item: AVPlayerItem, player: AVQueuePlayer) {
+            statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+                guard item.status == .failed else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.triedFallback,
+                          let fallback = self.fallbackURL else { return }
+                    self.triedFallback = true
+                    let fallbackItem = AVPlayerItem(url: fallback)
+                    self.looper = AVPlayerLooper(player: player, templateItem: fallbackItem)
+                    self.observeItem(fallbackItem, player: player)
+                    player.play()
+                }
+            }
+        }
 
         /// 后台停播、回前台续播（只管自己的播放器）。
         func observeBackground(_ player: AVQueuePlayer) {
@@ -1451,6 +1499,7 @@ private struct AddWallpaperView: View {
 private struct PreviewPlayerView: View {
     let item: CatalogItem
     @State private var player: AVPlayer?
+    @State private var statusObservation: NSKeyValueObservation?
 
     var body: some View {
         VStack {
@@ -1466,11 +1515,27 @@ private struct PreviewPlayerView: View {
         .onDisappear {
             player?.pause()
             player?.replaceCurrentItem(with: nil)
+            statusObservation = nil
             player = nil
         }
         .onAppear {
-            if let url = URL(string: item.previewURL) {
-                player = AVPlayer(url: url)
+            guard let url = URL(string: item.previewURL) else { return }
+            let p = AVPlayer(url: url)
+            player = p
+            // 主链（jsDelivr）播不起来就换同一文件的 raw 直链，只换一次。
+            // 回调可能不在主线程，换播放器那步回到主线程做。
+            if let fallbackURL = CatalogStore.rawGitHubURL(from: item.previewURL),
+               let currentItem = p.currentItem {
+                var didFallback = false
+                statusObservation = currentItem.observe(\.status, options: [.new]) { [weak p] observed, _ in
+                    guard observed.status == .failed, !didFallback else { return }
+                    DispatchQueue.main.async { [weak p] in
+                        guard let p, !didFallback else { return }
+                        didFallback = true
+                        p.replaceCurrentItem(with: AVPlayerItem(url: fallbackURL))
+                        p.play()
+                    }
+                }
             }
         }
     }
@@ -1834,17 +1899,9 @@ private struct CatalogDetailView: View {
             Group {
                 if let url = coverVideoURL {
                     InlineVideoCover(url: url)
-                } else if let url = URL(string: live.thumbnailURL) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable().scaledToFill()
-                        default:
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(.quaternary)
-                                .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
-                        }
-                    }
+                } else if !live.thumbnailURL.isEmpty {
+                    // 大封面也走带备用链的加载：主链拉不到换 raw 直链再试。
+                    CachedCoverImage(urlString: live.thumbnailURL)
                 } else {
                     RoundedRectangle(cornerRadius: 20)
                         .fill(.quaternary)
