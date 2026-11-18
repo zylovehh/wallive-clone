@@ -1402,7 +1402,7 @@ private struct AddWallpaperView: View {
                     compressNote = compressNote.isEmpty ? videoNote : compressNote + " " + videoNote
                     uploadVideoData = compressed
                 }
-                let videoName = "\(id)-preview.\(Self.videoExtension(for: videoItem))"
+                let videoName = "\(id)-preview.mp4"
                 try await store.uploadWallpaperFile(name: videoName, data: uploadVideoData, token: token,
                                                     progress: { value in Task { @MainActor in uploadProgress = value } })
                 previewURL = CatalogStore.wallpapersRawBase + videoName
@@ -1427,14 +1427,6 @@ private struct AddWallpaperView: View {
         } catch {
             fail("没推上去，请点“复制错误代码”发给灵光。", code: "E-304 上传目录-失败", detail: String(describing: error))
         }
-    }
-
-    /// 预览视频扩展名：按所选视频的格式来，默认 mp4。
-    private static func videoExtension(for item: PhotosPickerItem?) -> String {
-        guard let item = item else { return "mp4" }
-        if item.supportedContentTypes.contains(.mpeg4Movie) { return "mp4" }
-        if item.supportedContentTypes.contains(.quickTimeMovie) { return "mov" }
-        return "mp4"
     }
 
     /// 没选缩略图时的兜底：从包里挑背景层的图自动压一张。
@@ -1662,8 +1654,14 @@ private struct ReplaceVideoView: View {
         busy = true
         defer { busy = false; uploadProgress = nil }
         do {
-            let videoName = "\(item.id)-preview.\(Self.videoExtension(for: videoItem))"
-            try await store.uploadWallpaperFile(name: videoName, data: videoData, token: token,
+            // 预览视频一律转成 mp4 再传：手机录的是 mov，不转就存成 .mov，
+            // 目录里挂不上、卡片也不播。压不动就原样传，但后缀照样写 mp4。
+            var uploadVideoData = videoData
+            if let compressed = await VideoCompressor.compressToPreview(videoData) {
+                uploadVideoData = compressed
+            }
+            let videoName = "\(item.id)-preview.mp4"
+            try await store.uploadWallpaperFile(name: videoName, data: uploadVideoData, token: token,
                                                 progress: { value in Task { @MainActor in uploadProgress = value } })
             let videoURL = CatalogStore.wallpapersRawBase + videoName
             let live = store.items.first { $0.id == item.id } ?? item
@@ -1678,14 +1676,6 @@ private struct ReplaceVideoView: View {
         } catch {
             fail("没换上去，请点“复制错误代码”发给灵光。", code: "E-305 换视频-上传失败", detail: String(describing: error))
         }
-    }
-
-    /// 预览视频扩展名：按所选视频的格式来，默认 mp4。
-    private static func videoExtension(for pickerItem: PhotosPickerItem?) -> String {
-        guard let pickerItem else { return "mp4" }
-        if pickerItem.supportedContentTypes.contains(.mpeg4Movie) { return "mp4" }
-        if pickerItem.supportedContentTypes.contains(.quickTimeMovie) { return "mov" }
-        return "mp4"
     }
 
     /// 视频读取（视频当预览用，绝不跳过）：先走文件导出，系统把视频拷到临时文件再读，
