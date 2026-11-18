@@ -1773,6 +1773,8 @@ private struct CatalogDetailView: View {
     @State private var showingReplacePackage = false
     @State private var showingRename = false
     @State private var showingRetag = false
+    /// 编辑壁纸入口：四个改动（换视频/换壁纸/换名字/换标签）收成一个按钮，点一下弹确认框选。
+    @State private var showingEditMenu = false
     @State private var adminMessage = ""
     @State private var adminMessageIsError = false
     /// 分享壁纸：下好的包写进临时文件后调系统分享单。
@@ -1805,6 +1807,18 @@ private struct CatalogDetailView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                 }
+                // 有预览视频的壁纸：标题下边挂个蓝色“▶ 视频”小按钮，点一下播预览视频。
+                if !live.previewURL.isEmpty, Self.isVideoPath(live.previewURL) {
+                    Button(action: onPreview) {
+                        Text("▶ 视频")
+                            .font(.caption).bold()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Color.blue)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(PressBounceButtonStyle())
+                }
                 Text(live.tags.map { "#\($0)" }.joined(separator: " ")
                     + (live.downloads > 0 ? " · 下载 \(live.downloads) 次" : ""))
                     .font(.subheadline).foregroundStyle(.white.opacity(0.85))
@@ -1829,13 +1843,10 @@ private struct CatalogDetailView: View {
                 .disabled(store.downloadingIDs.contains(live.id))
                 if isAdmin {
                     Text("管理").font(.caption).foregroundStyle(.secondary)
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                        adminButton(live.previewURL.isEmpty ? "加视频" : "换视频", action: onReplaceVideo)
-                        adminButton("换壁纸") { showingReplacePackage = true }
-                        adminButton("换名字") { showingRename = true }
-                        adminButton("换标签") { showingRetag = true }
-                        adminButton("分享壁纸") { shareWallpaper() }
-                    }
+                    // 四个改动（换视频/换壁纸/换名字/换标签）收成一个“编辑壁纸”按钮，
+                    // 点一下弹确认框选；分享、删除还是单独的按钮。
+                    adminButton("编辑壁纸") { showingEditMenu = true }
+                    adminButton("分享壁纸") { shareWallpaper() }
                     Button("删除壁纸", action: onDelete)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.red)
@@ -1887,6 +1898,13 @@ private struct CatalogDetailView: View {
             if let shareFileURL {
                 ShareSheet(activityItems: [shareFileURL])
             }
+        }
+        .confirmationDialog("编辑壁纸", isPresented: $showingEditMenu) {
+            Button(live.previewURL.isEmpty ? "加视频" : "换视频") { onReplaceVideo() }
+            Button("换壁纸") { showingReplacePackage = true }
+            Button("换名字") { showingRename = true }
+            Button("换标签") { showingRetag = true }
+            Button("取消", role: .cancel) { }
         }
         .onReceive(store.$items) { items in
             if !items.contains(where: { $0.id == item.id }) { dismiss() }

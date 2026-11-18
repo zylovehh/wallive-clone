@@ -807,6 +807,9 @@ private struct ImportDetailView: View {
     @State private var showFullVerify = false
     @State private var installStep = "正在安装…"
     @State private var desktopRefreshNote = ""
+    /// 手动刷新 PosterBoard：装完海报卡片没出来时点一下（跟管理页同款做法）。
+    @State private var refreshBusy = false
+    @State private var refreshNote = ""
     @State private var installProgress = 0.0
     /// 正在跑的安装任务，进度框里的"停止"按钮用它取消。
     @State private var installTask: Task<Void, Never>?
@@ -957,6 +960,22 @@ private struct ImportDetailView: View {
                             // 不配对也能装：按钮只看包和安装状态。
                             .disabled(state.packageData == nil || installing)
                         Spacer()
+                    }
+                    HStack {
+                        Spacer()
+                        Button("刷新 PosterBoard") { runManualRefresh() }
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.blue)
+                            .frame(width: buttonWidth).padding(.vertical, 12).glassCapsule()
+                            .overlay(Capsule().stroke(Color.blue, lineWidth: 1.5))
+                            .buttonStyle(PressBounceButtonStyle())
+                            .disabled(refreshBusy)
+                        Spacer()
+                    }
+                    if !refreshNote.isEmpty {
+                        Text(refreshNote)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Text("支持 iOS 27.0 – 27.2")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -1304,39 +1323,60 @@ private struct ImportDetailView: View {
                     note += "：读回核对没过，描述符缺了东西——把日志发来看。"
                 }
                 if report.refresh?.confirmed != true {
-                    note += "配对刷新没确认，重启手机后再去锁屏图库看。"
+                    // 隧道也试三步兜底：发通知、拉海报、退暗号；都失败才让重启。
+                    let sent = await Task.detached(priority: .userInitiated) {
+                        RestoreTest.notifyPosterBoardReread()
+                    }.value
+                    if PosterBoardLauncher.launch() {
+                        note += "海报界面拉起来了——上滑关掉卡片，锁屏长按进图库查看。"
+                    } else if let posterBoardURL = URL(string: "posterboard://") {
+                        InstallLog.shared.append("restore: 隧道装完，私有接口没叫动海报应用，退 posterboard:// 暗号。")
+                        note += "海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
+                        UIApplication.shared.open(posterBoardURL) { ok in
+                            guard !ok else { return }
+                            DispatchQueue.main.async {
+                                InstallLog.shared.append("restore: 隧道装完，暗号也没叫动，靠通知自己刷新。")
+                                installResult = note + "海报没叫动，靠通知刷新，没变化就重启手机再看。"
+                                installLogText = InstallLog.shared.tail(60)
+                            }
+                        }
+                    } else {
+                        note += sent ? "刷新没确认，靠通知刷新，没变化就重启手机再看。" : "刷新没确认，通知也没发出去，重启手机后再去锁屏图库看。"
+                    }
                 }
                 installResult = note
                 return
             }
             // 直刷统一一条路：成功只写四个字，载荷数、描述符这些长日志留在日志框里。
             installResult = "安装成功（直刷）"
-            // 装完本地刷新没成时：有配对让用户重启手机；没配对跟人家一样
-            // 自动刷新桌面，详情页另留手动按钮。
+            // 装完本地刷新没成时：不管有配对没配对，都先试三步——发通知、
+            // 拉海报、退暗号；三步都失败才让用户重启手机。
             if !(report.refresh?.confirmed ?? false) {
-                if state.hasPairingFile {
-                    installResult = "安装成功：刷新没确认。重启手机，然后锁屏长按进图库查看。"
-                } else {
-                    // Drift 同款私有接口打头，暗号退路用户拍板保留；压桌面
-                    // 不进自动链路（详情页的「刷新桌面」手动按钮还在）。
-                    if PosterBoardLauncher.launch() {
-                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报界面拉起来了——上滑关掉卡片，锁屏长按进图库查看。"
-                    } else if let posterBoardURL = URL(string: "posterboard://") {
-                        InstallLog.shared.append("restore: 私有接口没叫动海报应用，退 posterboard:// 暗号。")
-                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
-                        UIApplication.shared.open(posterBoardURL) { ok in
-                            guard !ok else { return }
-                            // open 的回调不保证主线程；这些是界面状态，必须回主线程改。
-                            DispatchQueue.main.async {
-                                InstallLog.shared.append("restore: 暗号也没叫动，去锁屏长按进图库看装没装上。")
-                                installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报没叫动——锁屏长按进图库看看装没装上；详情页的「刷新桌面」还能手动再来一下。"
-                                installLogText = InstallLog.shared.tail(60)
-                            }
+                let sent = await Task.detached(priority: .userInitiated) {
+                    RestoreTest.notifyPosterBoardReread()
+                }.value
+                let scopeNote = state.hasPairingFile ? "" : "只写了描述符目录，表和偏好没碰。"
+                if PosterBoardLauncher.launch() {
+                    installResult = "安装成功：\(scopeNote)海报界面拉起来了——上滑关掉卡片，锁屏长按进图库查看。"
+                } else if let posterBoardURL = URL(string: "posterboard://") {
+                    InstallLog.shared.append("restore: 私有接口没叫动海报应用，退 posterboard:// 暗号。")
+                    installResult = "安装成功：\(scopeNote)海报应用马上弹出来——上滑关掉它，锁屏长按进图库查看。"
+                    UIApplication.shared.open(posterBoardURL) { ok in
+                        guard !ok else { return }
+                        // open 的回调不保证主线程；这些是界面状态，必须回主线程改。
+                        DispatchQueue.main.async {
+                            InstallLog.shared.append("restore: 暗号也没叫动，靠通知自己刷新。")
+                            installResult = sent
+                                ? "安装成功：\(scopeNote)海报没叫动，靠通知刷新，卡片一般立刻对上。没变化就重启手机再看。"
+                                : "安装成功：\(scopeNote)海报没叫动，通知也没发出去。重启手机，然后锁屏长按进图库查看。"
+                            installLogText = InstallLog.shared.tail(60)
                         }
-                    } else {
-                        installResult = "安装成功：只写了描述符目录，表和偏好没碰。海报没叫动——锁屏长按进图库看看装没装上。"
-                        installLogText = InstallLog.shared.tail(60)
                     }
+                } else {
+                    installResult = sent
+                        ? "安装成功：\(scopeNote)海报没叫动，靠通知刷新，卡片一般立刻对上。没变化就重启手机再看。"
+                        : "安装成功：\(scopeNote)海报没叫动，通知也没发出去。重启手机，然后锁屏长按进图库查看。"
+                    installLogText = InstallLog.shared.tail(60)
                 }
             }
         } else if Task.isCancelled {
@@ -1350,6 +1390,43 @@ private struct ImportDetailView: View {
             installLogText = InstallLog.shared.tail(60)
         } else if state.statusMessage.isEmpty {
             installResult = "安装未完成：再试一次；还不行就看提示和下面日志框里的原因。"
+        }
+    }
+
+    /// 手动刷新 PosterBoard（详情页）：跟管理页同款做法——先发通知让图库重读，
+    /// 再拉海报应用，都不行退 posterboard:// 暗号；结果写进 refreshNote。
+    private func runManualRefresh() {
+        guard !refreshBusy else { return }
+        refreshBusy = true
+        refreshNote = "正在刷新…"
+        Task {
+            let sent = await Task.detached(priority: .userInitiated) {
+                RestoreTest.notifyPosterBoardReread()
+            }.value
+            if PosterBoardLauncher.launch() {
+                refreshNote = "海报界面拉起来了——上滑关掉它，锁屏长按进图库查看"
+                refreshBusy = false
+            } else if let posterBoardURL = URL(string: "posterboard://") {
+                InstallLog.shared.append("detail: 私有接口没叫动海报应用，退 posterboard:// 暗号。")
+                UIApplication.shared.open(posterBoardURL) { ok in
+                    DispatchQueue.main.async {
+                        if ok {
+                            refreshNote = "海报界面拉起来了——上滑关掉它，锁屏长按进图库查看"
+                        } else {
+                            InstallLog.shared.append("detail: 暗号也没叫动，靠通知自己刷新。")
+                            refreshNote = sent
+                                ? "海报没叫动，靠通知刷新，卡片一般立刻对上。没变化就重启手机再看。"
+                                : "海报没叫动，通知也没发出去（见安装日志）。重启手机后再看。"
+                        }
+                        refreshBusy = false
+                    }
+                }
+            } else {
+                refreshNote = sent
+                    ? "海报没叫动，靠通知刷新，卡片一般立刻对上。没变化就重启手机再看。"
+                    : "海报没叫动，通知也没发出去（见安装日志）。重启手机后再看。"
+                refreshBusy = false
+            }
         }
     }
 
