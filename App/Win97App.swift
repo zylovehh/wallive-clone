@@ -101,6 +101,9 @@ struct ContentView: View {
     @State private var phase: AppPhase = .hello
     /// 有新版时这里有值，弹更新提示框；没有新版是 nil。
     @State private var remoteVersion: RemoteVersion?
+    @Environment(\.scenePhase) private var scenePhase
+    /// 上次查更新没连上时记下来，回前台再试一次（只在失败后重试，弹过提示框的不再打扰）。
+    @State private var lastUpdateCheckFailed = false
 
     var body: some View {
         ZStack {
@@ -118,11 +121,35 @@ struct ContentView: View {
             withAnimation(.easeOut(duration: 0.5)) {
                 phase = .main
             }
+            // 等切页动画落稳了再查更新（动画没完就弹提示框，iPad 上可能弹不出来）。
+            try? await Task.sleep(nanoseconds: 600_000_000)
             // 进主界面后查一次更新：有新版就弹提示框，点“去下载”跳下载页。
-            // 没网、拉不到就当没新版，不打扰。
-            remoteVersion = await UpdateChecker.checkForUpdate()
+            // 没连上就记下来，回前台再试一次，不直接打扰。
+            switch await UpdateChecker.checkForUpdate() {
+            case .available(let remote):
+                remoteVersion = remote
+                lastUpdateCheckFailed = false
+            case .upToDate:
+                lastUpdateCheckFailed = false
+            case .failed:
+                lastUpdateCheckFailed = true
+            }
         }
         .updateAlert(remote: $remoteVersion)
+        .onChange(of: scenePhase) { newPhase in
+            guard newPhase == .active, phase == .main, lastUpdateCheckFailed else { return }
+            Task {
+                switch await UpdateChecker.checkForUpdate() {
+                case .available(let remote):
+                    remoteVersion = remote
+                    lastUpdateCheckFailed = false
+                case .upToDate:
+                    lastUpdateCheckFailed = false
+                case .failed:
+                    break
+                }
+            }
+        }
     }
 
     private var mainTabs: some View {
@@ -230,11 +257,26 @@ struct RemoteVersion: Decodable {
     let url: String
 }
 
+/// 查更新的结果：有新版 / 已是最新 / 没连上（几条线路都拉不到 version.json）。
+enum UpdateCheckResult {
+    case available(RemoteVersion)
+    case upToDate
+    case failed
+}
+
 enum UpdateChecker {
     /// 下载页上的 version.json 地址。
     static let versionURL = URL(string: "https://zylovehh.github.io/win97/version.json")!
     /// 点“去下载”跳去的下载页。
     static let downloadPageURL = URL(string: "https://zylovehh.github.io/win97/")!
+    /// version.json 的几个地址：下载页直链 → raw 直链 → Fastly → Gcore，
+    /// 一条通了就行（目录拉取也是这个顺序，单条线路挂了不影响查更新）。
+    static let versionURLs = [
+        "https://zylovehh.github.io/win97/version.json",
+        "https://raw.githubusercontent.com/zylovehh/win97/main/docs/version.json",
+        "https://fastly.jsdelivr.net/gh/zylovehh/win97@main/docs/version.json",
+        "https://gcore.jsdelivr.net/gh/zylovehh/win97@main/docs/version.json",
+    ]
 
     /// 从 BuildInfo.tag（比如 "V1.5 正式版"）里抠出版本号数字（1.5）。
     static func localVersionNumber() -> Double {
@@ -252,21 +294,23 @@ enum UpdateChecker {
         return Double(numStr) ?? 0
     }
 
-    /// 拉 version.json，比版本号。有新版就回传远端信息，没有新版回传 nil。
-    /// 拉不到（没网、文件没了）就当没新版，不报错、不打扰。
-    static func checkForUpdate() async -> RemoteVersion? {
-        guard let url = URL(string: "https://zylovehh.github.io/win97/version.json") else { return nil }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let remote = try JSONDecoder().decode(RemoteVersion.self, from: data)
-            let local = localVersionNumber()
-            if remote.number > local {
-                return remote
+    /// 拉 version.json，比版本号。几条线路都拉不到就报 failed（调用方决定要不要提示）。
+    static func checkForUpdate() async -> UpdateCheckResult {
+        let local = localVersionNumber()
+        for urlString in versionURLs {
+            guard let url = URL(string: urlString) else { continue }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                let remote = try JSONDecoder().decode(RemoteVersion.self, from: data)
+                if remote.number > local {
+                    return .available(remote)
+                }
+                return .upToDate
+            } catch {
+                continue
             }
-            return nil
-        } catch {
-            return nil
         }
+        return .failed
     }
 }
 

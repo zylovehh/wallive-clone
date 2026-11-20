@@ -120,6 +120,19 @@ final class CatalogStore: ObservableObject {
     @Published private(set) var downloadingIDs: Set<String> = []
     @Published var errorMessage = ""
     @Published private(set) var loading = false
+    /// 目录表里要求的最低 App 版本（没有就不拦；发新版时跟着版本号一起提）。
+    private(set) var minAppVersion: Double?
+
+    /// 从目录表原始数据里宽松地读最低版本号（数字或字符串都认）。
+    /// 读不到、读错了都不拦（当没有这个字段），绝不能因为这个字段坏了整表。
+    static func readMinAppVersion(from data: Data) -> Double? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = obj["minAppVersion"] else { return nil }
+        if let n = raw as? Double { return n }
+        if let n = raw as? Int { return Double(n) }
+        if let s = raw as? String { return Double(s) }
+        return nil
+    }
 
     private let downloadedDefaultsKey = "win97-downloaded"
 
@@ -168,6 +181,14 @@ final class CatalogStore: ObservableObject {
                     throw CatalogError.notFound
                 }
                 let doc = try JSONDecoder().decode(CatalogDocument.self, from: data)
+                // 目录只给最新版：表里写了最低版本，低于它的 App 不显示目录。
+                let min = Self.readMinAppVersion(from: data)
+                minAppVersion = min
+                if let min, UpdateChecker.localVersionNumber() < min {
+                    items = []
+                    errorMessage = "目录只给最新版：请先把 App 更新到 V\(min) 再看目录。"
+                    return
+                }
                 items = Self.sortedItems(doc.items)
                 errorMessage = ""
                 return
@@ -325,7 +346,7 @@ final class CatalogStore: ObservableObject {
     /// 推之前先拉仓库最新表合并一次：别人同时加的条目不丢，自己删的条目不回来；
     /// 这样仓库刚变了也不会报 409，基本一次就推上去，不用等几秒再点一次。
     func pushCatalog(_ newItems: [CatalogItem], token: String) async throws {
-        let (merged, knownSHA) = await mergedCatalog(newItems, token: token)
+        let (merged, knownSHA, serverMin) = await mergedCatalog(newItems, token: token)
         let dicts: [[String: Any]] = merged.map { item in
             var dict: [String: Any] =
                 ["id": item.id, "title": item.title, "tags": item.tags,
@@ -336,12 +357,16 @@ final class CatalogStore: ObservableObject {
             if let uuid = item.uuid { dict["uuid"] = uuid }
             return dict
         }
+        // 最低版本跟着一起推（没有就不写，绝不因为这个字段丢了整表）。
+        var top: [String: Any] = ["items": dicts]
+        if let min = serverMin ?? minAppVersion { top["minAppVersion"] = min }
         let data = try JSONSerialization.data(
-            withJSONObject: ["items": dicts], options: [.withoutEscapingSlashes])
+            withJSONObject: top, options: [.withoutEscapingSlashes])
         try await githubPut(
             path: Self.catalogPath, contentBase64: data.base64EncodedString(),
             message: "Update catalog via app", token: token, knownSHA: knownSHA)
         items = Self.sortedItems(merged)
+        minAppVersion = serverMin ?? minAppVersion
         errorMessage = ""
         // 清 CDN 缓存改后台悄悄清，不等它：推表成功就立刻放开按钮，
         // 缓存清不清只影响别人晚几秒看到新目录，不影响这次操作。
@@ -353,36 +378,36 @@ final class CatalogStore: ObservableObject {
     /// 本地原来有、这次没了的，是用户刚删的，不补回来。
     /// 拉不到最新表就直接用本地的，不挡推送。
     /// 顺带把拉表时拿到的版本标识（sha）一起带回来，推表时直接用，省一次单独查询。
-    private func mergedCatalog(_ newItems: [CatalogItem], token: String) async -> ([CatalogItem], String?) {
-        guard let (serverItems, sha) = try? await githubCatalogItems(token: token) else { return (newItems, nil) }
+    private func mergedCatalog(_ newItems: [CatalogItem], token: String) async -> ([CatalogItem], String?, Double?) {
+        guard let (serverItems, sha, serverMin) = try? await githubCatalogItems(token: token) else { return (newItems, nil, minAppVersion) }
         let baseIDs = Set(items.map { $0.id })
         let newIDs = Set(newItems.map { $0.id })
         let extras = serverItems.filter { !newIDs.contains($0.id) && !baseIDs.contains($0.id) }
-        guard !extras.isEmpty else { return (newItems, sha) }
+        guard !extras.isEmpty else { return (newItems, sha, serverMin) }
         var merged = newItems
         let insertAt = merged.firstIndex(where: { !$0.pinned }) ?? merged.endIndex
         merged.insert(contentsOf: extras, at: insertAt)
-        return (merged, sha)
+        return (merged, sha, serverMin)
     }
 
     /// 从 GitHub 接口拉当前目录表（带钥匙走 API 不走 CDN，拿到的就是最新版）。
     /// 404 当空表，不算错；其他错直接抛，让调用方决定。
     /// 顺带返回文件的版本标识（sha），推表时直接用，省一次单独查询。
-    private func githubCatalogItems(token: String) async throws -> ([CatalogItem], String?) {
+    private func githubCatalogItems(token: String) async throws -> ([CatalogItem], String?, Double?) {
         var request = URLRequest(url: githubContentsURL(path: Self.catalogPath))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("Win97", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if status == 404 { return ([], nil) }
+        if status == 404 { return ([], nil, nil) }
         guard status == 200 else { throw PushError.http(status) }
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let b64 = dict["content"] as? String,
               let raw = Data(base64Encoded: b64.replacingOccurrences(of: "\n", with: "")),
               let doc = try? JSONDecoder().decode(CatalogDocument.self, from: raw)
         else { throw PushError.http(status) }
-        return (doc.items, dict["sha"] as? String)
+        return (doc.items, dict["sha"] as? String, Self.readMinAppVersion(from: raw))
     }
 
     /// 上传一个壁纸文件到仓库 wallpapers/ 目录（已有同名就覆盖，重试不报错）。

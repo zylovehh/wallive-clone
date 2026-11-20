@@ -185,10 +185,14 @@ struct StatusView: View {
                     // 手动查更新：点一下拉 version.json，有新版弹提示框、点“去下载”跳下载页。
                     Button {
                         Task {
-                            if let remote = await UpdateChecker.checkForUpdate() {
+                            switch await UpdateChecker.checkForUpdate() {
+                            case .available(let remote):
+                                updateCheckMessage = nil
                                 remoteVersion = remote
-                            } else {
+                            case .upToDate:
                                 updateCheckMessage = "已经是最新版了。"
+                            case .failed:
+                                updateCheckMessage = "没连上，稍后再试。"
                             }
                         }
                     } label: {
