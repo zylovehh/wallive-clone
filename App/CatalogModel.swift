@@ -100,20 +100,20 @@ final class CatalogStore: ObservableObject {
     /// 大文件仍走 Fastly 加速，不跟目录表一起改直链。
     /// 改仓库名或分支要同步改这里。
     static let catalogHosts = [
-        "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main",
-        "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
-        "https://gcore.jsdelivr.net/gh/zylovehh/wallive-catalog@main",
+        "https://raw.githubusercontent.com/zylovehh/win97-catalog/main",
+        "https://fastly.jsdelivr.net/gh/zylovehh/win97-catalog@main",
+        "https://gcore.jsdelivr.net/gh/zylovehh/win97-catalog@main",
     ]
 
     /// 目录表地址（主线路；实际拉取在 fetch 里按 catalogHosts 顺序尝试）。
     static let catalogURLString = catalogHosts[0] + "/" + catalogPath
 
     /// 目录仓库（公开目录仓库，管理员改置顶、增删时推到这里）。
-    static let catalogRepo = "zylovehh/wallive-catalog"
+    static let catalogRepo = "zylovehh/win97-catalog"
     static let catalogPath = "catalog.json"
     static let wallpapersDir = "wallpapers"
     /// 新壁纸写进目录表的地址前缀（大文件走 Fastly 加速；下载实际按目录表里的地址走）。
-    static let wallpapersRawBase = "https://fastly.jsdelivr.net/gh/zylovehh/wallive-catalog@main/wallpapers/"
+    static let wallpapersRawBase = "https://fastly.jsdelivr.net/gh/zylovehh/win97-catalog@main/wallpapers/"
 
     @Published private(set) var items: [CatalogItem] = []
     @Published private(set) var downloaded: [DownloadedItem] = []
