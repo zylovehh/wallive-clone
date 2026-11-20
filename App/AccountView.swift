@@ -185,7 +185,7 @@ private struct AdminPage: View {
             Divider()
             VStack(alignment: .leading, spacing: 8) {
                 Text("GitHub 钥匙（改目录仓库时用）").font(.subheadline).bold()
-                Text("去 GitHub 拿：Settings → Developer settings → Personal access tokens → Fine-grained，只勾 wallive-catalog、Contents 选 Read and write，生成后贴进来，填一次就行，只存这台手机的钥匙串里。")
+                Text("去 GitHub 拿：Settings → Developer settings → Personal access tokens → Fine-grained，只勾 win97-catalog、Contents 选 Read and write，生成后贴进来，填一次就行，只存这台手机的钥匙串里。")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 SecureField("贴入钥匙", text: $token)

@@ -216,9 +216,9 @@ struct CachedCoverImage: View {
 
     /// jsDelivr 地址换成同一文件的 raw 直链（目录表和安装包同款地址）。
     private var fallbackURLString: String? {
-        let marker = "jsdelivr.net/gh/zylovehh/wallive-catalog@main/"
+        let marker = "jsdelivr.net/gh/zylovehh/win97-catalog@main/"
         guard let range = urlString.range(of: marker) else { return nil }
-        return "https://raw.githubusercontent.com/zylovehh/wallive-catalog/main/"
+        return "https://raw.githubusercontent.com/zylovehh/win97-catalog/main/"
             + String(urlString[range.upperBound...])
     }
 
